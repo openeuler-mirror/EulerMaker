@@ -155,7 +155,10 @@ func (c Config) fingerprint() string {
 	data, _ := json.Marshal(struct {
 		PublicBaseURL string
 		Provider      ProviderConfig
-	}{c.PublicBaseURL, c.Provider})
+	}{
+		c.PublicBaseURL,
+		c.Provider,
+	})
 	sum := sha256.Sum256(data)
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }

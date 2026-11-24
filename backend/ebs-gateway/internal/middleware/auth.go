@@ -20,7 +20,11 @@ type Auth struct {
 }
 
 func NewAuth(tokens *identity.Tokens, client *iam.Client, now func() time.Time) *Auth {
-	return &Auth{tokens: tokens, iam: client, now: now}
+	return &Auth{
+		tokens: tokens,
+		iam:    client,
+		now:    now,
+	}
 }
 
 const principalKey = "principal"
@@ -81,7 +85,10 @@ func (a *Auth) verifyBearer(c *gin.Context, header string) (identity.Principal, 
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return identity.Principal{}, false
 		}
-		who.ServiceGrants = &identity.ServiceGrants{Projects: account.Spec.Projects, Permissions: account.Spec.Permissions}
+		who.ServiceGrants = &identity.ServiceGrants{
+			Projects:    account.Spec.Projects,
+			Permissions: account.Spec.Permissions,
+		}
 	}
 	return who, true
 }

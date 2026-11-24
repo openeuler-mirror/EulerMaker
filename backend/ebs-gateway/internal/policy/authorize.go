@@ -31,9 +31,13 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Message }
 
-func deny(message string) error { return &Error{Status: http.StatusForbidden, Message: message} }
+func deny(message string) error {
+	return &Error{Status: http.StatusForbidden, Message: message}
+}
 
-type Authorizer struct{ upstream *upstream.Client }
+type Authorizer struct {
+	upstream *upstream.Client
+}
 
 func New(upstreamClient *upstream.Client) *Authorizer {
 	return &Authorizer{upstream: upstreamClient}
@@ -306,7 +310,10 @@ func isWrite(method string) bool {
 	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete
 }
 
-type access struct{ owner, member bool }
+type access struct {
+	owner  bool
+	member bool
+}
 
 func (a *Authorizer) projectAccess(ctx context.Context, project, subject string) (access, error) {
 	response, err := a.upstream.Do(ctx, http.MethodGet, "/apis/ebs/v1/projects/"+url.PathEscape(project), nil, nil)

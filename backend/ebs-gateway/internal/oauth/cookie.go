@@ -93,8 +93,16 @@ func (h *Handler) encodeCookie(state browserContext) (*http.Cookie, error) {
 	nonce := randBytes(aead.NonceSize())
 	sealed := aead.Seal(nonce, nonce, data, h.aad(state.Purpose))
 	value := "v1." + h.config.ContextKeys.ActiveKeyID + "." + base64.RawURLEncoding.EncodeToString(sealed)
-	cookie := &http.Cookie{Name: cookieName(state.Purpose), Value: value, Path: "/", Secure: true, HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, Expires: time.Unix(state.ExpiresAt, 0), MaxAge: int(time.Unix(state.ExpiresAt, 0).Sub(h.now()).Seconds())}
+	cookie := &http.Cookie{
+		Name:     cookieName(state.Purpose),
+		Value:    value,
+		Path:     "/",
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Unix(state.ExpiresAt, 0),
+		MaxAge:   int(time.Unix(state.ExpiresAt, 0).Sub(h.now()).Seconds()),
+	}
 	if len(cookie.String()) > 3800 {
 		if state.Profile != (profile{}) {
 			state.Profile = profile{}
@@ -151,6 +159,13 @@ func (h *Handler) readCookie(r *http.Request, purpose string) (browserContext, e
 }
 
 func clearCookie(w http.ResponseWriter, purpose string) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName(purpose), Path: "/", Secure: true, HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
+	http.SetCookie(w, &http.Cookie{
+		Name:     cookieName(purpose),
+		Path:     "/",
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(1, 0),
+	})
 }

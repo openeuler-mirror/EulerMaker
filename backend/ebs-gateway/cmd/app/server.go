@@ -5,8 +5,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"flag"
 	"fmt"
-	"log"
+	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,7 +17,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
+	"k8s.io/klog/v2"
 
 	"ebs-gateway/internal/handler"
 	"ebs-gateway/internal/identity"
@@ -36,8 +40,6 @@ type options struct {
 	maxBody         int64
 	rate            float64
 	burst           int
-	userCacheTTL    time.Duration
-	logLevel        string
 }
 
 func newCommand(start func(options) error) *cobra.Command {
@@ -53,6 +55,9 @@ func newCommand(start func(options) error) *cobra.Command {
 		},
 	}
 	flags := cmd.Flags()
+	loggingFlags := flag.NewFlagSet("logging", flag.ContinueOnError)
+	klog.InitFlags(loggingFlags)
+	flags.AddGoFlagSet(loggingFlags)
 	flags.IntVar(&opts.port, "port", 8080, "Gateway listen port")
 	flags.StringVar(&opts.apiServer, "apiserver-addr", "https://ebs-apiserver:8443", "API server URL")
 	flags.StringVar(&opts.secretFile, "jwt-secret-file", "", "base64 HMAC secret file")
@@ -64,8 +69,6 @@ func newCommand(start func(options) error) *cobra.Command {
 	flags.Int64Var(&opts.maxBody, "max-request-body-bytes", 1<<20, "maximum write request size")
 	flags.Float64Var(&opts.rate, "rate-limit-per-sec", 100, "authenticated requests per second")
 	flags.IntVar(&opts.burst, "rate-limit-burst", 200, "authenticated request burst")
-	flags.DurationVar(&opts.userCacheTTL, "user-cache-ttl", 30*time.Second, "maximum User cache lifetime; currently checked on every request")
-	flags.StringVar(&opts.logLevel, "log-level", "info", "log level")
 	return cmd
 }
 
@@ -73,80 +76,141 @@ func NewServerCommand() *cobra.Command {
 	return newCommand(run)
 }
 
-func run(opts options) error {
-	if opts.port < 1 || opts.port > 65535 || opts.secretFile == "" || opts.maxBody <= 0 || opts.rate <= 0 || opts.burst <= 0 || opts.userCacheTTL < 0 {
-		return fmt.Errorf("invalid Gateway configuration")
+func validateOptions(opts options) error {
+	if opts.port < 1 || opts.port > 65535 {
+		return fmt.Errorf("--port must be between 1 and 65535, got %d", opts.port)
+	}
+	if opts.secretFile == "" {
+		return fmt.Errorf("--jwt-secret-file is required")
+	}
+	if opts.maxBody <= 0 {
+		return fmt.Errorf("--max-request-body-bytes must be greater than 0, got %d", opts.maxBody)
+	}
+	if opts.rate <= 0 || math.IsNaN(opts.rate) || math.IsInf(opts.rate, 0) {
+		return fmt.Errorf("--rate-limit-per-sec must be a finite number greater than 0, got %g", opts.rate)
+	}
+	if opts.burst <= 0 {
+		return fmt.Errorf("--rate-limit-burst must be greater than 0, got %d", opts.burst)
 	}
 	if (opts.clientCertFile == "") != (opts.clientKeyFile == "") {
-		return fmt.Errorf("apiserver-client-cert and apiserver-client-key must be provided together")
+		return fmt.Errorf("--apiserver-client-cert and --apiserver-client-key must be provided together")
 	}
-	switch opts.logLevel {
-	case "debug", "info", "warn", "error":
-	default:
-		return fmt.Errorf("invalid log level %q", opts.logLevel)
+	return nil
+}
+
+func run(opts options) error {
+	if err := validateOptions(opts); err != nil {
+		return err
 	}
+	gin.SetMode(gin.ReleaseMode)
 	secret, err := os.ReadFile(opts.secretFile)
 	if err != nil {
-		return fmt.Errorf("read JWT secret: %w", err)
+		return fmt.Errorf("read --jwt-secret-file: %w", err)
 	}
 	tokens, err := identity.NewTokens(strings.TrimSpace(string(secret)))
 	if err != nil {
+		return fmt.Errorf("initialize JWT signing from --jwt-secret-file: %w", err)
+	}
+	transport, err := newUpstreamTransport(opts)
+	if err != nil {
 		return err
 	}
+	defer transport.CloseIdleConnections()
+	client, err := upstream.New(opts.apiServer, transport)
+	if err != nil {
+		return fmt.Errorf("initialize --apiserver-addr client: %w", err)
+	}
+	handlers, err := handler.New(handler.Dependencies{
+		Upstream:        client,
+		Tokens:          tokens,
+		Now:             time.Now,
+		Limits:          limit.New(opts.rate, opts.burst, time.Now),
+		BodyLimit:       opts.maxBody,
+		OAuthConfigFile: opts.oauthConfigFile,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize Gateway handlers: %w", err)
+	}
+	server := &http.Server{
+		Addr:              ":" + strconv.Itoa(opts.port),
+		Handler:           route.New(handlers),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen on --port=%d: %w", opts.port, err)
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	backgroundDone := make(chan struct{})
+	go func() {
+		defer close(backgroundDone)
+		handlers.OAuth.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-backgroundDone
+	}()
+	klog.InfoS("Gateway listening", "address", listener.Addr().String())
+	if err := serve(ctx, server, listener, 15*time.Second); err != nil {
+		return err
+	}
+	klog.InfoS("Gateway stopped")
+	return nil
+}
+
+func newUpstreamTransport(opts options) (*http.Transport, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: opts.insecureTLS} //nolint:gosec -- explicitly enabled for development
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: opts.insecureTLS, //nolint:gosec -- explicitly enabled for development
+	}
 	if opts.clientCertFile != "" {
 		certificate, err := tls.LoadX509KeyPair(opts.clientCertFile, opts.clientKeyFile)
 		if err != nil {
-			return fmt.Errorf("load API server client certificate: %w", err)
+			return nil, fmt.Errorf("load --apiserver-client-cert and --apiserver-client-key: %w", err)
 		}
 		transport.TLSClientConfig.Certificates = []tls.Certificate{certificate}
 	}
 	if opts.caFile != "" {
 		data, err := os.ReadFile(opts.caFile)
 		if err != nil {
-			return fmt.Errorf("read API server CA: %w", err)
+			return nil, fmt.Errorf("read --apiserver-ca: %w", err)
 		}
 		roots, err := x509.SystemCertPool()
 		if err != nil {
 			roots = x509.NewCertPool()
 		}
 		if !roots.AppendCertsFromPEM(data) {
-			return fmt.Errorf("invalid API server CA")
+			return nil, fmt.Errorf("--apiserver-ca must contain at least one valid PEM certificate")
 		}
 		transport.TLSClientConfig.RootCAs = roots
 	}
-	client, err := upstream.New(opts.apiServer, transport)
-	if err != nil {
-		return err
-	}
-	handlers, err := handler.New(handler.Dependencies{
-		Upstream: client, Tokens: tokens, Now: time.Now,
-		Limits: limit.New(opts.rate, opts.burst, time.Now), BodyLimit: opts.maxBody,
-		OAuthConfigFile: opts.oauthConfigFile,
-	})
-	if err != nil {
-		return err
-	}
-	server := &http.Server{
-		Addr: ":" + strconv.Itoa(opts.port), Handler: route.New(handlers),
-		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second,
-	}
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-	go handlers.OAuth.Run(ctx)
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+	return transport, nil
+}
+
+func serve(ctx context.Context, server *http.Server, listener net.Listener, shutdownTimeout time.Duration) error {
+	defer listener.Close()
+	defer server.Close()
+	result := make(chan error, 1)
+	go func() { result <- server.Serve(listener) }()
+	var serveErr error
+	select {
+	case serveErr = <-result:
+	case <-ctx.Done():
+		shutdownCtx, stop := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer stop()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("Gateway shutdown failed: %v", err)
+		shutdownErr := server.Shutdown(shutdownCtx)
+		if shutdownErr != nil {
+			shutdownErr = errors.Join(shutdownErr, server.Close())
 		}
-	}()
-	log.Printf("Gateway listening on %s", server.Addr)
-	err = server.ListenAndServe()
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+		serveErr = <-result
+		if shutdownErr != nil {
+			return fmt.Errorf("shutdown Gateway HTTP server: %w", shutdownErr)
+		}
 	}
-	return err
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		return fmt.Errorf("serve Gateway HTTP requests: %w", serveErr)
+	}
+	return nil
 }

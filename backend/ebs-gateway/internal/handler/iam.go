@@ -37,7 +37,11 @@ func (a *Handler) serveIAM(resource string) gin.HandlerFunc {
 			c.Status(http.StatusMethodNotAllowed)
 			return
 		}
-		route := policy.Route{Resource: resource, Name: name, Method: method}
+		route := policy.Route{
+			Resource: resource,
+			Name:     name,
+			Method:   method,
+		}
 		if err := a.policy.Authorize(c.Request.Context(), middleware.Principal(c), route); err != nil {
 			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return

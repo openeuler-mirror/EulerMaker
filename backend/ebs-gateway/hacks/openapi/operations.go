@@ -64,11 +64,16 @@ func operations() object {
 		name, kind       string
 		scoped, readOnly bool
 	}{
-		{"projects", "Project", false, false}, {"runners", "Runner", false, false},
-		{"configs", "Config", false, false}, {"scripts", "Script", false, false},
-		{"builds", "Build", true, false}, {"jobs", "Job", true, false},
-		{"snapshots", "Snapshot", true, true}, {"buildinfos", "BuildInfo", true, true},
-		{"buildgraphs", "BuildGraph", true, true}, {"rpmrepos", "RpmRepo", true, true},
+		{"projects", "Project", false, false},
+		{"runners", "Runner", false, false},
+		{"configs", "Config", false, false},
+		{"scripts", "Script", false, false},
+		{"builds", "Build", true, false},
+		{"jobs", "Job", true, false},
+		{"snapshots", "Snapshot", true, true},
+		{"buildinfos", "BuildInfo", true, true},
+		{"buildgraphs", "BuildGraph", true, true},
+		{"rpmrepos", "RpmRepo", true, true},
 		{"oldjobs", "Job", true, true},
 	} {
 		base := "/apis/ebs/v1/"
@@ -208,22 +213,33 @@ func operation(id, tag, summary, description string, security []object, schema o
 	for status := range errorResponses() {
 		responses[status] = object{"$ref": "#/components/responses/" + status}
 	}
-	return object{"operationId": id, "tags": []string{tag}, "summary": summary, "description": description,
-		"security": security, "responses": responses}
+	return object{
+		"operationId": id,
+		"tags":        []string{tag},
+		"summary":     summary,
+		"description": description,
+		"security":    security,
+		"responses":   responses,
+	}
 }
 
 func errorResponses() object {
 	responses := object{}
 	for _, item := range []struct{ code, description string }{
-		{"400", "Malformed request."}, {"401", "Missing, invalid or expired credentials."},
-		{"403", "Operation not permitted for this identity or object."}, {"404", "Resource not found."},
+		{"400", "Malformed request."},
+		{"401", "Missing, invalid or expired credentials."},
+		{"403", "Operation not permitted for this identity or object."},
+		{"404", "Resource not found."},
 		{"409", "Already exists or UID/resourceVersion/state conflict; read the latest object before retrying."},
 		{"410", "Expired continue token or watch resourceVersion; restart List."},
-		{"413", "Request body too large."}, {"422", "Resource validation failed."},
+		{"413", "Request body too large."},
+		{"422", "Resource validation failed."},
 		{"415", "Unsupported request content type."},
 		{"429", "Rate or watch connection limit exceeded; honor Retry-After when present."},
-		{"500", "Server failure; write outcome may be unknown."}, {"502", "Upstream failure; write outcome may be unknown."},
-		{"503", "Service temporarily unavailable."}, {"504", "Upstream timeout; write outcome may be unknown."},
+		{"500", "Server failure; write outcome may be unknown."},
+		{"502", "Upstream failure; write outcome may be unknown."},
+		{"503", "Service temporarily unavailable."},
+		{"504", "Upstream timeout; write outcome may be unknown."},
 	} {
 		responses[item.code] = object{"description": item.description + " Errors may have no body.",
 			"content": object{"application/json": object{"schema": object{"anyOf": []object{

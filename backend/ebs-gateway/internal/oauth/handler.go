@@ -38,8 +38,14 @@ func New(config Config, accounts accountClient, tokens *identity.Tokens, now fun
 	if now == nil {
 		now = time.Now
 	}
-	return &Handler{config: config, accounts: accounts, tokens: tokens, now: now,
-		provider: newProvider(config, now, nil), limits: rateLimits{entries: make(map[string]rateEntry)}}
+	return &Handler{
+		config:   config,
+		accounts: accounts,
+		tokens:   tokens,
+		now:      now,
+		provider: newProvider(config, now, nil),
+		limits:   rateLimits{entries: make(map[string]rateEntry)},
+	}
 }
 
 // Run warms discovery and retries temporary provider failures without blocking other routes.
@@ -68,8 +74,10 @@ type apiError struct {
 	code   string
 }
 
-func (e *apiError) Error() string           { return e.code }
-func failure(status int, code string) error { return &apiError{status, code} }
+func (e *apiError) Error() string { return e.code }
+func failure(status int, code string) error {
+	return &apiError{status, code}
+}
 
 func respondError(c *gin.Context, err error) {
 	status, code := 503, "OAuthUnavailable"
@@ -182,9 +190,17 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 	state, nonce, verifier := h.config.Provider.ID+"."+randomValue(), randomValue(), randomValue()
-	value := browserContext{Purpose: "login", Provider: h.config.Provider.ID, ConfigFingerprint: h.config.fingerprint(),
-		IssuedAt: h.now().Unix(), ExpiresAt: h.now().Add(contextTTL).Unix(), ReturnTo: returnTo,
-		StateHash: digest(state), NonceHash: digest(nonce), Verifier: verifier}
+	value := browserContext{
+		Purpose:           "login",
+		Provider:          h.config.Provider.ID,
+		ConfigFingerprint: h.config.fingerprint(),
+		IssuedAt:          h.now().Unix(),
+		ExpiresAt:         h.now().Add(contextTTL).Unix(),
+		ReturnTo:          returnTo,
+		StateHash:         digest(state),
+		NonceHash:         digest(nonce),
+		Verifier:          verifier,
+	}
 	cookie, err := h.encodeCookie(value)
 	if err != nil {
 		respondError(c, err)

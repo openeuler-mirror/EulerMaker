@@ -89,7 +89,7 @@ spec:
 - 管理员标记由受信任内部流程通过 apiserver User API 设置，gateway 不提供对外提升管理员的接口。
 - apiserver IAM 模块验证用户密码或 MachineAccount client secret，gateway 签发 JWT；IAM资源保存gateway鉴权需要的主体状态和token TTL。
 - 普通用户通过公开注册接口创建自己的 User 和初始密码。
-- gateway 可以短期缓存 User 查询结果，但 User API 是用户状态的权威来源。
+- gateway 每次 UserResolve 都读取 User API，不缓存用户状态。
 
 ### 3.2 业务资源归属
 
@@ -515,9 +515,9 @@ GET /apis/iam.ebs/v1/users/{jwt.sub}
 |------|------|
 | User 不存在 | 返回 403 |
 | `spec.enabled=false` | 返回 403 |
-| User API 不可用且无有效缓存 | 返回 503 |
+| User API 不可用 | 返回 503 |
 
-gateway 必须确认返回对象的 `metadata.name` 与 JWT `sub` 完全一致、`spec.enabled=true`，并且 `spec.scopes` 恰好包含一项且与 JWT 的唯一 scope 完全一致。角色被修改后，携带旧 scope 的 Token 在下一次 UserResolve 时返回 403。gateway 可以按用户名和 scope 缓存上述状态，缓存时间不超过 JWT 剩余有效期。
+gateway 必须确认返回对象的 `metadata.name` 与 JWT `sub` 完全一致、`spec.enabled=true`，并且 `spec.scopes` 恰好包含一项且与 JWT 的唯一 scope 完全一致。角色被修改后，携带旧 scope 的 Token 在下一次 UserResolve 时返回 403。
 
 User API 的内部查询不能使用正在校验的普通用户 token，避免递归鉴权和权限提升。gateway 应使用仅具备 User 读取权限的内部凭据，且不得将该凭据转发给客户端。
 
@@ -873,14 +873,19 @@ bash backend/ebs-gateway/hacks/update-openapi.sh --check
 | `--apiserver-addr` | `https://ebs-apiserver:8443` | 是 | 上游 apiserver 地址 |
 | `--jwt-secret-file` | 空 | 是 | 保存单个 base64 HMAC 密钥的文件路径，解码后至少 32 字节 |
 | `--oauth-config-file` | 空 | 否 | OAuth 配置文件；指定后关闭本地密码登录和注册，详见 10.8 |
-| `--user-cache-ttl` | `30s` | 否 | User 状态缓存时间，实际缓存不能超过 JWT 剩余有效期 |
 | `--max-request-body-bytes` | `1048576` | 否 | 登录和代理写请求的最大请求体，以及 PATCH 后候选对象的最大字节数 |
 | `--insecure-skip-verify` | `false` | 否 | 是否跳过 apiserver TLS 校验，仅测试环境使用 |
 | `--apiserver-ca` | 空 | 否 | apiserver CA 文件路径 |
 | `--apiserver-client-cert` / `--apiserver-client-key` | 空 | 否 | apiserver 客户端证书与私钥，启用内部证书认证时成对提供 |
-| `--rate-limit-per-sec` | `100` | 否 | 每秒令牌数 |
+| `--rate-limit-per-sec` | `100` | 否 | 每秒令牌数，必须是有限正数 |
 | `--rate-limit-burst` | `200` | 否 | 令牌桶容量 |
-| `--log-level` | `info` | 否 | 日志级别 |
+| `--v` | `0` | 否 | klog verbosity |
+| `--vmodule` | 空 | 否 | 按 Go 文件名模式配置 klog verbosity |
+| `--logtostderr` | `true` | 否 | klog 日志输出到 stderr |
+
+启动时逐项校验参数，错误包含参数名和具体约束；数值错误附上当前值，密钥内容不进入错误信息。日志统一接入 klog 标准参数，启动、正常退出及请求审计使用 `InfoS`，进程失败使用 `ErrorS`，正常及错误退出前均执行 `Flush`。verbosity 控制显式 `V(n)` 日志，不是最低严重级别过滤，默认保留请求审计，不记录 Token、请求正文或密钥。Gin 固定使用 release 模式。
+
+成功绑定监听端口后才记录启动成功。收到 SIGINT/SIGTERM 后停止接收新连接，最多等待 15 秒让在途请求排空，等待结束前主流程不退出；超时则强制关闭连接并返回错误。Watch 等持续请求也受此退出期限约束。退出前取消并等待 OAuth 后台任务结束，关闭上游空闲连接。
 
 配置 `--apiserver-client-cert` 和 `--apiserver-client-key` 后，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；启用 `--internal-client-ca-file` 的 apiserver 根据证书 URI SAN 识别 Gateway，不依赖转发的用户身份头。IAM 的 OAuth 分支仅允许 Gateway 身份调用，其余接口尚未实施完整的按组件授权规则；部署时仍须限制 apiserver 的网络访问。
 
@@ -982,7 +987,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | MachineAccount凭据泄漏 | 删除账号并使用新secret创建账号；每个Runner或受控站点使用独立账号和随机secret，secret只从受限文件读取且不写日志 |
 | MachineAccount提升权限 | 按已认证账号类型签发 Runner/Service Token；调用方不能在换 Token 时声明权限、主体或 TTL，service 逐请求核验账号、工程范围和显式操作权限 |
 | 已删除或禁用的用户访问 | UserResolve 返回 403，不进入业务鉴权 |
-| User API 不可用 | 仅使用仍有效的短期缓存；无有效缓存时返回 503，不默认放行 |
+| User API 不可用 | 返回 503，不默认放行 |
 | Admin 越权操作管理员 User | User list 过滤 `spec.scopes=["ebs:admin"]` 对象；单对象读取和写入先校验旧对象；PUT/PATCH 保护管理员角色 |
 | 客户端伪造 Project owner | 普通用户、Ops 和 Admin 创建 Project 时统一将 `metadata.labels["ebs.io/owner-user"]` 设置为 JWT `sub` |
 | 客户端越权修改 Project members | 仅 owner user 可以修改 member user labels，新增成员必须是已启用 User |
@@ -1008,7 +1013,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | PasswordLogin | User 根据唯一的 `spec.scopes` 获得 `ebs:user`、`ebs:ops` 或 `ebs:admin`、请求 scope 不产生提权、非法或多 scope 配置、密码错误、用户不存在、用户禁用、账号锁定、认证接口不可用和登录限流 |
 | MachineTokenExchange | 同一路径签发 Runner/Service Token、类型来自 IAM、service 禁止 runner 字段、主体使用账号名称、请求越权字段拒绝、错误凭据401、协议异常503、TTL与限流、no-store及脱敏 |
 | TokenCheck | 合法身份与 scopes 响应、service 实时账号核验、非法 Token 401、IAM 故障503、非空正文400及限流 |
-| UserResolve | User 不存在、名称与 JWT `sub` 不匹配、禁用、Token scope 与当前唯一 User scope 不一致、缓存命中和 User API 不可用；runner token 跳过 User 查询 |
+| UserResolve | User 不存在、名称与 JWT `sub` 不匹配、禁用、Token scope 与当前唯一 User scope 不一致、逐请求查询和 User API 不可用；runner token 跳过 User 查询 |
 | Header | 不向上游转发外部 Bearer Token，也不注入最终用户身份 |
 | ProjectAuthz | 普通用户和 Ops 按 owner/member 关系操作 Project 与子资源；公开读取不按 owner/member 过滤；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入 |
 | ServiceAuthz | 工程范围与 projects:update/builds:create/builds:abort 独立授权、空授权及跨工程拒绝、匿名读不继承、owner及元数据保护、门禁标签保护、JSON Patch版本冲突、Build中止复用原协议、账号删除及同名重建后按当前授权处理、IAM异常拒绝、不查询同名User |

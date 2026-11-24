@@ -70,7 +70,9 @@ type claims struct {
 	ID        string  `json:"jti"`
 }
 
-type Tokens struct{ secret []byte }
+type Tokens struct {
+	secret []byte
+}
 
 func NewTokens(base64Secret string) (*Tokens, error) {
 	secret, err := base64.StdEncoding.DecodeString(strings.TrimSpace(base64Secret))
@@ -93,9 +95,16 @@ func (t *Tokens) Issue(subject, runner string, kind Type, scope Scope, ttl time.
 		scopes = append(scopes, scope)
 	}
 	c := claims{
-		Type: kind, Subject: subject, Runner: runner, Scopes: scopes,
-		Issuer: issuer, Audience: audience, IssuedAt: now.Unix(),
-		NotBefore: now.Unix(), ExpiresAt: now.Add(ttl).Unix(), ID: hex.EncodeToString(random),
+		Type:      kind,
+		Subject:   subject,
+		Runner:    runner,
+		Scopes:    scopes,
+		Issuer:    issuer,
+		Audience:  audience,
+		IssuedAt:  now.Unix(),
+		NotBefore: now.Unix(),
+		ExpiresAt: now.Add(ttl).Unix(),
+		ID:        hex.EncodeToString(random),
 	}
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	payload, err := json.Marshal(c)
@@ -134,7 +143,13 @@ func (t *Tokens) Verify(token string, now time.Time) (Principal, error) {
 	if err := json.Unmarshal(payload, &c); err != nil || !validClaims(c, now) {
 		return Principal{}, errors.New("invalid token claims")
 	}
-	principal := Principal{Type: c.Type, Subject: c.Subject, Runner: c.Runner, ID: c.ID, ExpiresAt: time.Unix(c.ExpiresAt, 0)}
+	principal := Principal{
+		Type:      c.Type,
+		Subject:   c.Subject,
+		Runner:    c.Runner,
+		ID:        c.ID,
+		ExpiresAt: time.Unix(c.ExpiresAt, 0),
+	}
 	if len(c.Scopes) == 1 {
 		principal.Scope = c.Scopes[0]
 	}
