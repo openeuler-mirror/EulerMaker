@@ -11301,7 +11301,7 @@
     },
     "/apis/iam.ebs/v1/machineaccounts": {
       "get": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "getMachineAccountList",
         "parameters": [
           {
@@ -11418,7 +11418,7 @@
         ]
       },
       "head": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "headMachineAccountList",
         "parameters": [
           {
@@ -11530,7 +11530,7 @@
     },
     "/apis/iam.ebs/v1/machineaccounts/{name}": {
       "delete": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
         "operationId": "deleteMachineAccount",
         "parameters": [
           {
@@ -11624,7 +11624,7 @@
         ]
       },
       "get": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "getMachineAccount",
         "parameters": [
           {
@@ -11717,7 +11717,7 @@
         ]
       },
       "head": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "headMachineAccount",
         "parameters": [
           {
@@ -11801,11 +11801,216 @@
         "tags": [
           "IAM"
         ]
+      },
+      "patch": {
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
+        "operationId": "patchMachineAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json-patch+json": {
+              "schema": {
+                "items": {
+                  "properties": {
+                    "from": {
+                      "type": "string"
+                    },
+                    "op": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "value": {}
+                  },
+                  "required": [
+                    "op",
+                    "path"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "application/merge-patch+json": {
+              "example": {
+                "metadata": {
+                  "resourceVersion": "\u003ccurrent-version\u003e"
+                }
+              },
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "description": "Merge patch or JSON Patch. Include resourceVersion (or a JSON Patch test) for concurrent-write protection; ordinary updates cannot modify status.",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ebs-api.iam.v1.MachineAccount"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "404": {
+            "$ref": "#/components/responses/404"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          },
+          "410": {
+            "$ref": "#/components/responses/410"
+          },
+          "413": {
+            "$ref": "#/components/responses/413"
+          },
+          "415": {
+            "$ref": "#/components/responses/415"
+          },
+          "422": {
+            "$ref": "#/components/responses/422"
+          },
+          "429": {
+            "$ref": "#/components/responses/429"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          },
+          "502": {
+            "$ref": "#/components/responses/502"
+          },
+          "503": {
+            "$ref": "#/components/responses/503"
+          },
+          "504": {
+            "$ref": "#/components/responses/504"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "patch MachineAccount",
+        "tags": [
+          "IAM"
+        ]
+      },
+      "put": {
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "operationId": "putMachineAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ebs-api.iam.v1.MachineAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ebs-api.iam.v1.MachineAccount"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "404": {
+            "$ref": "#/components/responses/404"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          },
+          "410": {
+            "$ref": "#/components/responses/410"
+          },
+          "413": {
+            "$ref": "#/components/responses/413"
+          },
+          "415": {
+            "$ref": "#/components/responses/415"
+          },
+          "422": {
+            "$ref": "#/components/responses/422"
+          },
+          "429": {
+            "$ref": "#/components/responses/429"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          },
+          "502": {
+            "$ref": "#/components/responses/502"
+          },
+          "503": {
+            "$ref": "#/components/responses/503"
+          },
+          "504": {
+            "$ref": "#/components/responses/504"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "put MachineAccount",
+        "tags": [
+          "IAM"
+        ]
       }
     },
     "/apis/iam.ebs/v1/users": {
       "get": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "getUserList",
         "parameters": [
           {
@@ -11906,7 +12111,7 @@
         ]
       },
       "head": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "headUserList",
         "parameters": [
           {
@@ -12002,7 +12207,7 @@
     },
     "/apis/iam.ebs/v1/users/{name}": {
       "delete": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
         "operationId": "deleteUser",
         "parameters": [
           {
@@ -12096,7 +12301,7 @@
         ]
       },
       "get": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "getUser",
         "parameters": [
           {
@@ -12173,7 +12378,7 @@
         ]
       },
       "head": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "headUser",
         "parameters": [
           {
@@ -12243,7 +12448,7 @@
         ]
       },
       "patch": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "patchUser",
         "parameters": [
           {
@@ -12361,7 +12566,7 @@
         ]
       },
       "put": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "putUser",
         "parameters": [
           {

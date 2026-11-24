@@ -22,7 +22,7 @@ function setup() {
   const transport = { request: async () => ({ name: "worker" }) };
   const deps = {
     computed: Vue.computed, ref: Vue.ref, onMounted: () => {}, onBeforeUnmount: () => {},
-    useI18n: () => ({ t: key => key }), ApiError: class extends Error {},
+    useI18n: () => ({ t: key => key }), ApiError: class extends Error { constructor(status) { super("request failed"); this.status = status; } },
     errorTranslationKey: (_, fallback) => fallback,
     list: async () => ({ items: [], next: "" }),
     request: async (path, options) => {
@@ -32,9 +32,9 @@ function setup() {
   };
   const state = new Function(...Object.keys(deps), script + `
     return { t, accounts, loading, loadError, dialogError, success, page, nextToken, createOpen, name,
-      accountType, typeOptions, ttl, saving, secret, createdName, deleting, confirmName, openCreate,
+      accountType, typeOptions, projectNames, permissions, permissionOptions, ttl, saving, secret, createdName, deleting, confirmName, openCreate,
       closeCreate, closeSecret, openDelete, closeDelete, loadAccounts, reload, changePage,
-      createAccount, deleteAccount, formatDate };
+      createAccount, deleteAccount, formatDate, editing, openEdit, updateAccount };
   `)(...Object.values(deps));
   const html = async () => {
     const app = Vue.createSSRApp({ setup: () => state, render });
@@ -52,7 +52,7 @@ function setup() {
     }
     return renderToString(app);
   };
-  return { state, calls, transport, html };
+  return { state, calls, transport, html, ApiError: deps.ApiError };
 }
 
 test("machine account form defaults to Runner and resets when reopened", async () => {
@@ -62,11 +62,22 @@ test("machine account form defaults to Runner and resets when reopened", async (
   assert.deepEqual(state.typeOptions.value.map(option => option.value), ["runner", "service"]);
   assert.match(await html(), /value="runner" selected/);
   state.accountType.value = "service";
-  assert.match(await html(), /admin.serviceAccountHint/);
+  state.projectNames.value = "demo";
+  state.permissions.value = ["builds:abort"];
+  const serviceForm = await html();
+  assert.match(serviceForm, /admin.serviceAccountHint/);
+  assert.match(serviceForm, /admin.serviceProjects/);
+  assert.match(serviceForm, /admin.servicePermissions/);
+  for (const permission of ["projects:update", "builds:create", "builds:abort"]) {
+    assert.match(serviceForm, new RegExp(`type="checkbox" value="${permission}"`));
+  }
   state.closeCreate();
   state.openCreate();
   assert.equal(state.accountType.value, "runner");
+  assert.equal(state.projectNames.value, "");
+  assert.deepEqual(state.permissions.value, []);
   assert.doesNotMatch(await html(), /admin.serviceAccountHint/);
+  assert.doesNotMatch(await html(), /admin.serviceProjects|admin.servicePermissions/);
 });
 
 test("creation sends the selected account type with a one-time client secret", async () => {
@@ -81,6 +92,7 @@ test("creation sends the selected account type with a one-time client secret", a
     assert.equal(calls[0].method, "POST");
     assert.deepEqual(calls[0].body, {
       name: "worker", type, tokenTTLSeconds: 3600, clientSecret: state.secret.value,
+      ...(type === "service" ? { projects: [], permissions: [] } : {}),
     });
     assert.equal(Buffer.from(state.secret.value, "base64url").length, 32);
     assert.equal(state.createdName.value, "worker");
@@ -95,6 +107,8 @@ test("failed creation preserves the selected type for retry", async () => {
   state.openCreate();
   state.name.value = "service-account";
   state.accountType.value = "service";
+  state.projectNames.value = "demo, future-project";
+  state.permissions.value = ["projects:update"];
   transport.request = async () => { throw new Error("unavailable"); };
   await state.createAccount();
   assert.equal(state.accountType.value, "service");
@@ -102,6 +116,88 @@ test("failed creation preserves the selected type for retry", async () => {
   assert.equal(state.secret.value, "");
   assert.equal(state.dialogError.value, "admin.createMachineFailed");
   assert.equal(state.saving.value, false);
+  assert.equal(state.projectNames.value, "demo, future-project");
+  assert.deepEqual(state.permissions.value, ["projects:update"]);
+});
+
+test("Service creation submits exact projects and independent permissions", async () => {
+  for (const permissions of [["projects:update"], ["builds:create"], ["builds:abort"], ["projects:update", "builds:create", "builds:abort"]]) {
+    const { state, calls } = setup();
+    state.openCreate();
+    state.name.value = "automation";
+    state.accountType.value = "service";
+    state.projectNames.value = "  demo,\n future-project，other-project  ";
+    state.permissions.value = permissions;
+    await state.createAccount();
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].body.projects, ["demo", "future-project", "other-project"]);
+    assert.deepEqual(calls[0].body.permissions, permissions);
+  }
+});
+
+test("empty project or permission list is allowed without implicit grants", async () => {
+  for (const [projects, permissions] of [["", ["builds:create"]], ["demo", []]]) {
+    const { state, calls } = setup();
+    state.openCreate();
+    state.name.value = "automation";
+    state.accountType.value = "service";
+    state.projectNames.value = projects;
+    state.permissions.value = permissions;
+    await state.createAccount();
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].body.projects, projects ? [projects] : []);
+    assert.deepEqual(calls[0].body.permissions, permissions);
+  }
+});
+
+test("invalid or duplicate grants are rejected before registration", async () => {
+  const cases = [
+    ["*", [], "admin.invalidServiceProjects"],
+    ["Demo", [], "admin.invalidServiceProjects"],
+    ["demo/distro", [], "admin.invalidServiceProjects"],
+    ["a".repeat(64), [], "admin.invalidServiceProjects"],
+    ["demo, demo", [], "admin.invalidServiceProjects"],
+    ["demo", ["builds:delete"], "admin.invalidServicePermissions"],
+    ["demo", ["builds:abort", "builds:abort"], "admin.invalidServicePermissions"],
+  ];
+  for (const [projects, permissions, error] of cases) {
+    const { state, calls } = setup();
+    state.openCreate();
+    state.name.value = "automation";
+    state.accountType.value = "service";
+    state.projectNames.value = projects;
+    state.permissions.value = permissions;
+    await state.createAccount();
+    assert.equal(calls.length, 0);
+    assert.equal(state.dialogError.value, error);
+    assert.equal(state.secret.value, "");
+  }
+});
+
+test("switching to Runner omits Service grants from the request", async () => {
+  const { state, calls } = setup();
+  state.openCreate();
+  state.name.value = "worker";
+  state.accountType.value = "service";
+  state.projectNames.value = "demo";
+  state.permissions.value = ["builds:abort"];
+  state.accountType.value = "runner";
+  await state.createAccount();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.type, "runner");
+  assert.equal(Object.hasOwn(calls[0].body, "projects"), false);
+  assert.equal(Object.hasOwn(calls[0].body, "permissions"), false);
+});
+
+test("Service grant labels and hints are available in Chinese and English", () => {
+  for (const locale of ["zh-CN", "en-US"]) {
+    const source = readFileSync(new URL(`../src/i18n/messages/${locale}.ts`, import.meta.url), "utf8");
+    const admin = new Function(`return ({${source.match(/  admin: \{([\s\S]*?)\n  \},/)[1]}});`)();
+    for (const key of ["serviceAccountHint", "serviceProjects", "serviceProjectsPlaceholder", "serviceProjectsHint", "servicePermissions", "servicePermissionsHint", "permissionProjectsUpdate", "permissionBuildsCreate", "permissionBuildsAbort", "invalidServiceProjects", "invalidServicePermissions", "editMachineGrants", "machineGrantsEditHint", "savingMachineGrants", "machineGrantsSaved", "saveMachineGrantsFailed", "machineGrantsConflict"]) {
+      assert.equal(typeof admin[key], "string", `${locale}: ${key}`);
+      assert.ok(admin[key].length > 0, `${locale}: ${key}`);
+    }
+  }
 });
 
 test("account list displays Runner and Service types", async () => {
@@ -115,4 +211,68 @@ test("account list displays Runner and Service types", async () => {
   assert.match(result, /<th>admin.machineType<\/th>/);
   assert.match(result, /<td>runner<\/td>/);
   assert.match(result, /<td>service<\/td>/);
+  assert.equal((result.match(/admin.editMachineGrants/g) || []).length, 1);
+});
+
+const serviceAccount = () => ({
+  metadata: { name: "automation", uid: "original-id", resourceVersion: "v1:3:1" },
+  spec: { type: "service", tokenTTLSeconds: 3600, projects: ["demo"], permissions: ["projects:update"] },
+});
+
+test("editing Service grants submits only grants and concurrency guards without rotating credentials", async () => {
+  const { state, calls, html } = setup();
+  const account = serviceAccount();
+  state.openEdit(account);
+  assert.equal(state.projectNames.value, "demo");
+  assert.deepEqual(state.permissions.value, ["projects:update"]);
+  assert.match(await html(), /admin.machineGrantsEditHint/);
+  state.projectNames.value = "other-project";
+  state.permissions.value = ["builds:abort"];
+  await state.updateAccount();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/apis/iam.ebs/v1/machineaccounts/automation");
+  assert.equal(calls[0].method, "PATCH");
+  assert.equal(calls[0].headers["Content-Type"], "application/merge-patch+json");
+  assert.deepEqual(calls[0].body, {
+    metadata: { uid: "original-id", resourceVersion: "v1:3:1" },
+    spec: { projects: ["other-project"], permissions: ["builds:abort"] },
+  });
+  assert.deepEqual(account, serviceAccount());
+  assert.equal(state.createOpen.value, false);
+  assert.equal(state.secret.value, "");
+  assert.equal(state.success.value, "admin.machineGrantsSaved");
+});
+
+test("grant update failures retain the draft and do not retry with a newer version", async () => {
+  for (const status of [409, 404, 503]) {
+    const { state, calls, transport, ApiError } = setup();
+    state.openEdit(serviceAccount());
+    state.permissions.value = [];
+    transport.request = async () => { throw new ApiError(status); };
+    await state.updateAccount();
+    assert.equal(calls.length, 1);
+    assert.equal(state.createOpen.value, true);
+    assert.deepEqual(state.permissions.value, []);
+    assert.equal(state.editing.value.metadata.resourceVersion, "v1:3:1");
+    assert.equal(state.dialogError.value, status === 503 ? "admin.saveMachineGrantsFailed" : "admin.machineGrantsConflict");
+    assert.equal(state.saving.value, false);
+  }
+});
+
+test("edit validation and cancel preserve the list; create resets edit state", async () => {
+  const { state, calls } = setup();
+  state.openEdit({ spec: { type: "runner" } });
+  assert.equal(state.createOpen.value, false);
+  const account = serviceAccount();
+  state.openEdit(account);
+  state.projectNames.value = "*";
+  await state.updateAccount();
+  assert.equal(calls.length, 0);
+  assert.equal(state.dialogError.value, "admin.invalidServiceProjects");
+  state.closeCreate();
+  assert.deepEqual(account, serviceAccount());
+  state.openCreate();
+  assert.equal(state.editing.value, null);
+  assert.equal(state.projectNames.value, "");
+  assert.deepEqual(state.permissions.value, []);
 });

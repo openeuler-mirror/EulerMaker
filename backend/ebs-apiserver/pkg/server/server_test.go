@@ -326,8 +326,8 @@ func TestIAMStorageUsesESWithoutWatch(t *testing.T) {
 	if _, ok := machines.(rest.Creater); ok {
 		t.Fatal("machineaccounts unexpectedly implements create")
 	}
-	if _, ok := machines.(rest.Updater); ok {
-		t.Fatal("machineaccounts unexpectedly implements update")
+	if _, ok := machines.(rest.Patcher); !ok {
+		t.Fatal("machineaccounts must support update and patch")
 	}
 }
 

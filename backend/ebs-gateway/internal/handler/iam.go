@@ -24,8 +24,8 @@ func (a *Handler) serveIAM(resource string) gin.HandlerFunc {
 			c.Status(http.StatusForbidden)
 			return
 		}
-		if method == http.MethodPost || ((method == http.MethodPut || method == http.MethodPatch) && resource == "machineaccounts") {
-			c.Header("Allow", "GET, HEAD, DELETE")
+		if method == http.MethodPost {
+			c.Header("Allow", "GET, HEAD, PUT, PATCH, DELETE")
 			c.Status(http.StatusMethodNotAllowed)
 			return
 		}
