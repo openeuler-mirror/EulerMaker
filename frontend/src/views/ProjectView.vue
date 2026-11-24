@@ -239,6 +239,7 @@
             </div>
             <p v-if="!memberUsernames.length" class="config-empty user-empty">{{ t("project.noMembers") }}</p>
           </article>
+          <ProjectLabels v-if="projectIsFull" :key="project.metadata?.uid || name" :project="project" @saved="project = $event" />
         </div>
 
         <article class="content-panel payload-panel">
@@ -429,6 +430,7 @@ import ColumnMultiFilter from "@/components/ColumnMultiFilter.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import PackageReposYamlEditor from "@/components/PackageReposYamlEditor.vue";
 import ProjectReleaseRepoPicker from "@/components/ProjectReleaseRepoPicker.vue";
+import ProjectLabels from "@/components/ProjectLabels.vue";
 import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildTargetConfig } from "@/composables/useBuildTargetConfig";
 import StatusBadge from "@/components/StatusBadge.vue";

@@ -198,7 +198,9 @@ Spec 状态列表展示包的 Commit ID：从 `BuildInfo.status.specResults` 条
 
 Bootstrap repositories 同样仅向工程 owner 提供列表编辑能力。每项包含名称与仓库地址，允许新增、删除、修改或保存空列表以清除配置，并复用 Project PUT、`resourceVersion` 和冲突处理流程。
 
-工程配置采用左右分区：左侧依次展示基础配置、Build targets、Bootstrap repositories 和用户管理，右侧使用等高独立面板完整展示 `buildPayload`；Package repositories 位于工程详情 Tab。窄屏设备按左侧四个容器、Build payload 的顺序折叠为单列。
+工程配置采用左右分区：左侧依次展示基础配置、构建架构、Bootstrap repositories、用户管理和工程标签，右侧使用等高独立面板完整展示 `buildPayload`；Package repositories 位于工程详情 Tab。窄屏设备按左侧面板、Build payload 的顺序折叠为单列。
+
+工程标签支持 owner 新增、修改和删除，owner 标签始终只读；普通用户不能修改已有工程类型及构建用途，Ops owner 可修改工程类型和用途，Admin owner 仅可修改用途。标签键值与重复键在前端预检，最终权限由 Gateway 校验。保存前读取最新 Project 并核对 UID，仅对变更的标签发送携带 UID/resourceVersion 的 Merge Patch，删除使用 null；保留无关标签的并发修改，同一键冲突时保留草稿并提示。保存成功后使用返回的 Project 更新页面。
 
 具有工程编辑权限的用户可在 Build payload 面板内切换编辑状态。编辑时只读代码块替换为保留换行的多行文本框，并提供取消和保存操作；保存复用 Project PUT 与冲突处理，失败时保留草稿。
 

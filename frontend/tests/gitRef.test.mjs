@@ -112,7 +112,7 @@ function projectCreationActions(form, targets) {
     submitErrorKey: { value: "" },
     projectFromForm,
     canManageType: { value: false },
-    PROJECT_TYPE_LABEL: "project.ebs.io/type",
+    PROJECT_TYPE_LABEL: "ebs.io/project-type",
     submitProject: async project => { submitted.push(project); },
     setSubmitError: error => { state.submitErrorKey.value = error.translationKey; },
   };

@@ -1,4 +1,4 @@
-export const PROJECT_TYPE_LABEL = "project.ebs.io/type";
+export const PROJECT_TYPE_LABEL = "ebs.io/project-type";
 export type ProjectType = "community" | "personal";
 
 export function projectTypeSelector(type: ProjectType): string {

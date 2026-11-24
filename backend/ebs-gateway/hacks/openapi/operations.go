@@ -299,7 +299,7 @@ func permissions(resource, part, method string) ([]object, string) {
 	}
 	if resource == "projects" {
 		if method == "post" {
-			return bearer, "Authenticated user creation; Gateway sets the owner label to the caller. Only Ops/Admin may select community Project type."
+			return bearer, "Authenticated user creation; Gateway sets the owner label to the caller. Project type uses metadata.labels[ebs.io/project-type] with personal or community values. Only Ops/Admin may select community Project type."
 		}
 		if part == "object" && (method == "put" || method == "patch") {
 			return bearer, "Project owner with user or Ops scope, or service token with this Project in MachineAccount.spec.projects and projects:update in spec.permissions. Both grants are read on each request; missing grants return 403. Owner and server metadata remain protected; service cannot change build-purpose. Admin has no ordinary update override."

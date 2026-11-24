@@ -37,11 +37,11 @@ func TestProjectTypeDefault(t *testing.T) {
 		if value == "missing" {
 			want = ProjectTypePersonal
 		} else {
-			p.Labels = map[string]string{ProjectTypeLabel: value}
+			p.Labels = map[string]string{"ebs.io/project-type": value}
 		}
 		SetDefaults_Project(p)
-		if p.Labels[ProjectTypeLabel] != want {
-			t.Fatalf("%q defaulted to %q", value, p.Labels[ProjectTypeLabel])
+		if p.Labels["ebs.io/project-type"] != want {
+			t.Fatalf("%q defaulted to %q", value, p.Labels["ebs.io/project-type"])
 		}
 	}
 }
