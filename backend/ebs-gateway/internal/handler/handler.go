@@ -2,12 +2,10 @@ package handler
 
 import (
 	"fmt"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"k8s.io/klog/v2"
 
 	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
@@ -83,35 +81,7 @@ func New(deps Dependencies) (*Handler, error) {
 	}, nil
 }
 
-func (a *Handler) limitAuthenticated(c *gin.Context) {
-	user := middleware.Principal(c)
-	if !a.limits.Allow(user.Subject + "/" + c.ClientIP()) {
-		c.Header("Retry-After", "1")
-		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
-		return
-	}
-	c.Next()
-}
-
-func (a *Handler) audit(c *gin.Context) {
-	started := a.now()
-	method := c.Request.Method
-	path := c.Request.URL.Path
-	c.Next()
-	user := middleware.Principal(c)
-	subject := user.Subject
-	if subject == "" {
-		subject = "anonymous"
-	}
-	klog.InfoS("HTTP request", "method", method, "path", path, "status", c.Writer.Status(),
-		"response_bytes", c.Writer.Size(), "latency_ms", a.now().Sub(started).Milliseconds(),
-		"client_ip", c.ClientIP(), "user", subject, "request_id", c.Writer.Header().Get("X-Request-ID"),
-		"service_project", c.GetString("serviceProject"), "service_permission", c.GetString("servicePermission"),
-		"service_authorization", c.GetString("serviceAuthorization"))
-}
-
 // Middleware and Endpoints expose HTTP handlers for route registration.
-// Authorization decisions and request processing remain owned by Handler.
 type Middleware struct {
 	Authenticate       gin.HandlerFunc
 	ResolveUser        gin.HandlerFunc
@@ -122,11 +92,11 @@ type Middleware struct {
 
 func (a *Handler) Middleware() Middleware {
 	return Middleware{
-		a.auth.Authenticate,
-		a.auth.ResolveUser,
-		a.limitAuthenticated,
-		a.audit,
-		a.requireAdmin,
+		Authenticate:       a.auth.Authenticate,
+		ResolveUser:        a.auth.ResolveUser,
+		LimitAuthenticated: middleware.LimitAuthenticated(a.limits),
+		Audit:              middleware.Audit(a.now),
+		RequireAdmin:       middleware.RequireAdmin,
 	}
 }
 
@@ -137,19 +107,15 @@ type Endpoints struct {
 	CheckToken      gin.HandlerFunc
 	ChangePassword  gin.HandlerFunc
 	RegisterMachine gin.HandlerFunc
-	GetUser         gin.HandlerFunc
-	ListUsers       gin.HandlerFunc
 }
 
 func (a *Handler) Endpoints() Endpoints {
 	return Endpoints{
-		a.registerUser,
-		a.login,
-		a.machineToken,
-		a.checkToken,
-		a.changePassword,
-		a.registerMachine,
-		a.getOrdinaryUser,
-		a.listOrdinaryUsers,
+		RegisterUser:    a.registerUser,
+		Login:           a.login,
+		MachineToken:    a.machineToken,
+		CheckToken:      a.checkToken,
+		ChangePassword:  a.changePassword,
+		RegisterMachine: a.registerMachine,
 	}
 }

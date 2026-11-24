@@ -2,8 +2,6 @@ package policy
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -66,38 +64,6 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 	default:
 		return deny("resource is not exposed")
 	}
-}
-
-func (a *Authorizer) authorizeProject(ctx context.Context, who identity.Principal, route Route) error {
-	if route.Method == http.MethodDelete {
-		return deny("Project deletion is not available through Gateway")
-	}
-	if who.Type == identity.RunnerType {
-		return deny("Runner project access denied")
-	}
-	if route.Name != "" && isWrite(route.Method) {
-		adminUpdate := who.Scope == identity.AdminScope && route.Subresource == "" &&
-			(route.Method == http.MethodPut || route.Method == http.MethodPatch)
-		if who.Type != identity.UserType || (who.Scope != identity.UserScope && who.Scope != identity.OpsScope && !adminUpdate) {
-			return deny("only the Project owner can modify Project")
-		}
-		access, err := a.projectAccess(ctx, route.Name, who.Subject)
-		if err != nil {
-			return err
-		}
-		if !access.owner {
-			return deny("only the Project owner can modify Project")
-		}
-		return nil
-	}
-	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
-		return nil
-	}
-	if who.IsUser() && route.Name == "" && route.Method == http.MethodPost {
-		return nil // Creation injects the caller's owner label in the Project handler.
-	}
-	_, err := a.projectMembership(ctx, who, route.Name)
-	return err
 }
 
 func (a *Authorizer) authorizeBuild(ctx context.Context, who identity.Principal, route Route) error {
@@ -276,97 +242,8 @@ func authorizeScript(who identity.Principal, route Route) error {
 	return nil
 }
 
-func authorizeRunner(who identity.Principal, route Route) error {
-	if who.IsPrivileged() {
-		return nil
-	}
-	if who.Type != identity.RunnerType || who.Runner == "" || who.Subject != who.Runner {
-		return deny("Runner access denied")
-	}
-	if route.Name == "" {
-		if route.Method == http.MethodPost && route.Subresource == "" {
-			return nil
-		}
-		return deny("Runner collection access denied")
-	}
-	if route.Name != who.Runner {
-		return deny("Runner identity mismatch")
-	}
-	switch route.Subresource {
-	case "":
-		if route.Method == http.MethodGet || route.Method == http.MethodHead || route.Method == http.MethodPut || route.Method == http.MethodPatch {
-			return nil
-		}
-	case "status":
-		if route.Method == http.MethodPut || route.Method == http.MethodPatch {
-			return nil
-		}
-	case "jobs":
-		if route.Method == http.MethodGet {
-			return nil
-		}
-	}
-	return deny("Runner operation denied")
-}
-
-func (a *Authorizer) projectMembership(ctx context.Context, who identity.Principal, project string) (access, error) {
-	if who.Type == identity.RunnerType {
-		return access{}, deny("Runner project access denied")
-	}
-	if !who.IsUser() {
-		return access{}, deny("project access denied")
-	}
-	if project == "" {
-		return access{}, deny("project name required")
-	}
-	membership, err := a.projectAccess(ctx, project, who.Subject)
-	if err != nil {
-		return access{}, err
-	}
-	if !membership.owner && !membership.member {
-		return access{}, deny("project access denied")
-	}
-	return membership, nil
-}
-
 func isWrite(method string) bool {
 	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete
-}
-
-type access struct {
-	owner  bool
-	member bool
-}
-
-func (a *Authorizer) projectAccess(ctx context.Context, project, subject string) (access, error) {
-	path := "/apis/ebs/v1/projects/" + url.PathEscape(project) + "?includeFields=metadata.name,metadata.labels"
-	response, err := a.upstream.Do(ctx, http.MethodGet, path, nil, nil)
-	if err != nil {
-		return access{}, &Error{Status: http.StatusServiceUnavailable, Message: "Project lookup unavailable"}
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		if response.StatusCode == http.StatusNotFound {
-			return access{}, &Error{Status: http.StatusNotFound, Message: "Project not found"}
-		}
-		return access{}, &Error{Status: http.StatusServiceUnavailable, Message: "Project lookup unavailable"}
-	}
-	var object struct {
-		Metadata struct {
-			Name   string            `json:"name"`
-			Labels map[string]string `json:"labels"`
-		} `json:"metadata"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&object); err != nil {
-		return access{}, &Error{Status: http.StatusBadGateway, Message: "invalid Project response"}
-	}
-	if object.Metadata.Name != project {
-		return access{}, &Error{Status: http.StatusBadGateway, Message: "Project identity mismatch"}
-	}
-	return access{
-		owner:  object.Metadata.Labels[ebsv1.ProjectOwnerUserLabel] == subject,
-		member: object.Metadata.Labels[ebsv1.ProjectMemberUserLabelPrefix+subject] == "true",
-	}, nil
 }
 
 func IsPublicRead(route Route) bool {

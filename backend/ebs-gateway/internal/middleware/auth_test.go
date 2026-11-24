@@ -133,3 +133,28 @@ func TestPrincipalWithoutAuthentication(t *testing.T) {
 		t.Fatalf("anonymous principal = %+v", got)
 	}
 }
+
+func TestRequireAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, scope := range []identity.Scope{"", identity.UserScope, identity.OpsScope, identity.AdminScope} {
+		t.Run(string(scope), func(t *testing.T) {
+			router := gin.New()
+			called := false
+			router.GET("/", func(c *gin.Context) {
+				c.Set(principalKey, identity.Principal{Type: identity.UserType, Scope: scope})
+			}, RequireAdmin, func(c *gin.Context) {
+				called = true
+				c.Status(http.StatusNoContent)
+			})
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+			want := http.StatusForbidden
+			if scope == identity.AdminScope {
+				want = http.StatusNoContent
+			}
+			if response.Code != want || called != (scope == identity.AdminScope) {
+				t.Fatalf("status=%d handler called=%v", response.Code, called)
+			}
+		})
+	}
+}

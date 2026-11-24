@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
-	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/mutation"
 )
@@ -42,66 +40,4 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 		return nil, fmt.Errorf("encode object: %w", err)
 	}
 	return encoded, nil
-}
-
-func (a *Authorizer) prepareProjectCreate(ctx context.Context, who identity.Principal, object mutation.Object) error {
-	if who.Type == identity.RunnerType {
-		return deny("Runner cannot create Project")
-	}
-	meta := objectMap(object["metadata"])
-	if meta == nil {
-		return &Error{Status: http.StatusBadRequest, Message: "Project metadata is required"}
-	}
-	labels := objectMap(meta["labels"])
-	if labels == nil {
-		labels = make(map[string]any)
-	}
-	if _, exists := labels[ebsv1.BuildPurposeLabel]; exists && !who.IsPrivileged() {
-		return deny("Project build purpose requires Ops or Admin")
-	}
-	labels[ebsv1.ProjectOwnerUserLabel] = who.Subject
-	if who.Scope == identity.UserScope {
-		if value, exists := labels[ebsv1.ProjectTypeLabel]; exists && value != "personal" {
-			return deny("ordinary users can only create personal Projects")
-		}
-	}
-	for key, value := range labels {
-		if !strings.HasPrefix(key, ebsv1.ProjectMemberUserLabelPrefix) {
-			continue
-		}
-		if value != "true" || a.validateMember(ctx, strings.TrimPrefix(key, ebsv1.ProjectMemberUserLabelPrefix)) != nil {
-			return deny("invalid Project member")
-		}
-	}
-	meta["labels"] = labels
-	return nil
-}
-
-func validateRunnerCreate(object mutation.Object, runner string) error {
-	meta := objectMap(object["metadata"])
-	if meta == nil || meta["name"] != runner {
-		return deny("Runner name must match token")
-	}
-	for key := range meta {
-		if key != "name" && key != "labels" {
-			return deny("protected Runner metadata on create")
-		}
-	}
-	for name := range objectMap(meta["labels"]) {
-		if !runnerLabelWritable(name) {
-			return deny("unsupported Runner label")
-		}
-	}
-	for key := range objectMap(object["spec"]) {
-		if key != "instanceID" && key != "type" && key != "arch" && key != "taints" {
-			return deny("protected Runner spec on create")
-		}
-	}
-	if value, exists := object["status"]; exists {
-		status, ok := value.(map[string]any)
-		if !ok || len(status) != 0 {
-			return deny("Runner status must be empty on create")
-		}
-	}
-	return nil
 }
