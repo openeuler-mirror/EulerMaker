@@ -5,10 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"reflect"
-	"strings"
 
-	ebsv1 "ebs-api/ebs/v1"
-	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/mutation"
 )
@@ -95,31 +92,6 @@ func validateOrdinaryMetadata(route Route, old, candidate mutation.Object) error
 		return deny("protected metadata changed")
 	}
 	return nil
-}
-
-func (a *Authorizer) validateProjectUpdate(ctx context.Context, who identity.Principal, old, candidate mutation.Object) error {
-	oldMeta := objectMap(old["metadata"])
-	newMeta := objectMap(candidate["metadata"])
-	if who.Scope == identity.AdminScope {
-		// Admin owners may manage purpose, without gaining ordinary Project update privileges.
-		oldLabels := maps.Clone(objectMap(oldMeta["labels"]))
-		newLabels := maps.Clone(objectMap(newMeta["labels"]))
-		delete(oldLabels, ebsv1.BuildPurposeLabel)
-		delete(newLabels, ebsv1.BuildPurposeLabel)
-		if !reflect.DeepEqual(old["spec"], candidate["spec"]) ||
-			!reflect.DeepEqual(oldMeta["annotations"], newMeta["annotations"]) ||
-			!maps.EqualFunc(oldLabels, newLabels, reflect.DeepEqual) {
-			return deny("Admin Project updates may only change build purpose")
-		}
-	}
-	return a.validateProjectLabels(ctx, who, oldMeta, newMeta)
-}
-
-func validateRunnerUpdate(who identity.Principal, old, candidate mutation.Object) error {
-	if who.Type != identity.RunnerType {
-		return nil
-	}
-	return validateRunnerOrdinary(objectMap(old["metadata"]), objectMap(candidate["metadata"]), objectMap(old["spec"]), objectMap(candidate["spec"]))
 }
 
 func validateMachineAccountUpdate(who identity.Principal, old, candidate mutation.Object) error {
@@ -220,89 +192,6 @@ func validateStatusUpdate(who identity.Principal, route Route, old, candidate mu
 				return deny("protected status field added")
 			}
 		}
-	}
-	return nil
-}
-
-func validateRunnerOrdinary(oldMeta, newMeta, oldSpec, newSpec map[string]any) error {
-	if oldSpec == nil || newSpec == nil {
-		return deny("Runner spec cannot be removed")
-	}
-	for key := range oldSpec {
-		if key != "type" && key != "arch" && !reflect.DeepEqual(oldSpec[key], newSpec[key]) {
-			return deny("protected Runner spec changed")
-		}
-	}
-	for key := range newSpec {
-		if key != "type" && key != "arch" {
-			if _, exists := oldSpec[key]; !exists {
-				return deny("protected Runner spec added")
-			}
-		}
-	}
-	if !reflect.DeepEqual(oldMeta["annotations"], newMeta["annotations"]) {
-		return deny("Runner annotations cannot change")
-	}
-	oldLabels := objectMap(oldMeta["labels"])
-	newLabels := objectMap(newMeta["labels"])
-	for key, oldValue := range oldLabels {
-		if !runnerLabelWritable(key) && !reflect.DeepEqual(oldValue, newLabels[key]) {
-			return deny("protected Runner label changed")
-		}
-	}
-	for key := range newLabels {
-		if !runnerLabelWritable(key) {
-			if _, exists := oldLabels[key]; !exists {
-				return deny("protected Runner label added")
-			}
-		}
-	}
-	return nil
-}
-
-func runnerLabelWritable(name string) bool {
-	return name == "ebs.io/runner-type" || name == "ebs.io/runner-arch" || strings.HasPrefix(name, "ebs.io/runner-capability.")
-}
-
-func (a *Authorizer) validateProjectLabels(ctx context.Context, who identity.Principal, oldMeta, newMeta map[string]any) error {
-	oldLabels := objectMap(oldMeta["labels"])
-	newLabels := objectMap(newMeta["labels"])
-	oldPurpose, oldSet := oldLabels[ebsv1.BuildPurposeLabel]
-	newPurpose, newSet := newLabels[ebsv1.BuildPurposeLabel]
-	if (oldSet != newSet || !reflect.DeepEqual(oldPurpose, newPurpose)) &&
-		(!who.IsPrivileged() || oldLabels[ebsv1.ProjectOwnerUserLabel] != who.Subject) {
-		return deny("Project build purpose requires an Ops or Admin owner")
-	}
-	if who.Scope == identity.UserScope && !reflect.DeepEqual(oldLabels[ebsv1.ProjectTypeLabel], newLabels[ebsv1.ProjectTypeLabel]) {
-		if oldLabels[ebsv1.ProjectTypeLabel] != nil || newLabels[ebsv1.ProjectTypeLabel] != "personal" {
-			return deny("ordinary users cannot change Project type")
-		}
-	}
-	oldOwner := oldLabels[ebsv1.ProjectOwnerUserLabel]
-	newOwner := newLabels[ebsv1.ProjectOwnerUserLabel]
-	if !reflect.DeepEqual(oldOwner, newOwner) {
-		return deny("Project owner cannot be changed")
-	}
-	for name, value := range newLabels {
-		if !strings.HasPrefix(name, ebsv1.ProjectMemberUserLabelPrefix) || reflect.DeepEqual(oldLabels[name], value) {
-			continue
-		}
-		if value != "true" {
-			return deny("invalid Project member label")
-		}
-		if err := a.validateMember(ctx, strings.TrimPrefix(name, ebsv1.ProjectMemberUserLabelPrefix)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (a *Authorizer) validateMember(ctx context.Context, name string) error {
-	client := iam.New(a.upstream)
-	user, status, err := client.GetUser(ctx, name)
-	if err != nil || status != http.StatusOK || user.Name != name || !user.Enabled || len(user.Scopes) != 1 ||
-		(user.Scopes[0] != identity.UserScope && user.Scopes[0] != identity.OpsScope) {
-		return deny("Project user must exist, be enabled and have User or Ops scope")
 	}
 	return nil
 }

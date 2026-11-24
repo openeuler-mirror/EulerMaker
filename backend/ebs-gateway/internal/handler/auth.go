@@ -21,14 +21,6 @@ import (
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
-func (a *Handler) requireAdmin(c *gin.Context) {
-	if middleware.Principal(c).Scope != identity.AdminScope {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
-		return
-	}
-	c.Next()
-}
-
 func (a *Handler) readJSON(c *gin.Context, result any) error {
 	if media := strings.TrimSpace(strings.Split(c.GetHeader("Content-Type"), ";")[0]); media != "application/json" {
 		return fmt.Errorf("Content-Type must be application/json")

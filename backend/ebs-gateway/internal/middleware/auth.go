@@ -109,3 +109,12 @@ func (a *Auth) ConfirmUser(c *gin.Context, who identity.Principal) bool {
 	}
 	return true
 }
+
+// RequireAdmin restricts the route chain to administrators.
+func RequireAdmin(c *gin.Context) {
+	if Principal(c).Scope != identity.AdminScope {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	c.Next()
+}
