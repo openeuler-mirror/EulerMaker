@@ -168,7 +168,7 @@ spec:
   tokenTTLSeconds: 3600
 ```
 
-`metadata.name` 是 client ID，满足 DNS1123 label 且全局唯一。`tokenTTLSeconds` 在创建时设置，范围为 300～86400 秒，省略时默认为 3600 秒；客户端不能在交换请求中指定或扩大有效期。
+`metadata.name` 是 client ID，满足 DNS1123 label 且全局唯一。`tokenTTLSeconds` 范围为 300～86400 秒，创建时省略默认为 3600 秒，Admin 可后续更新；客户端不能在交换请求中指定或扩大有效期。有效期变更仅影响之后签发的 Token，已签发 Token 的到期时间不变。
 
 <a id="machineaccount-type"></a>
 
@@ -196,7 +196,7 @@ spec:
 | `service` | 自动化服务账号，统一用于软件包同步、门禁触发等服务，不按业务分别定义类型 |
 
 - 类型使用固定枚举；创建时省略 type 默认 `runner`，显式空值和未知值拒绝。已存储的无 type 账号按 runner 读取和认证，GET 不触发回写。
-- 类型在创建时确定，不开放类型修改；MachineAccount 的 PUT/PATCH 仅允许更新 service 账号的 `spec.projects` 和 `spec.permissions`，runner 账号不允许更新。
+- 类型在创建时确定，不开放类型修改；MachineAccount 的 PUT/PATCH 允许更新两类账号的 `spec.tokenTTLSeconds`，service 账号还允许更新 `spec.projects` 和 `spec.permissions`。
 - 内部注册请求接收 `type`、`tokenTTLSeconds`、`projects` 和 `permissions`，写入对应 spec 字段；对象与凭据仍单文档原子创建。
 - `projects` 是去重的精确 Project 名称列表，按 Project 名称规则校验，不支持通配符或全局授权。
   不要求注册时工程已存在；授权按名称绑定，同名工程重建后仍在范围内，写入仍须校验当轮 UID 和版本。
@@ -204,7 +204,7 @@ spec:
 - `projects:update` 授权更新完整 Project 主资源，不限制为软件包列表；仍遵守现有字段和并发版本校验。`builds:create` 授权创建 Build，`builds:abort` 授权调用已有 Build `/abort`，具体路由及检查顺序以 Gateway 设计为准。公开读取主动使用匿名请求，不增加读取权限，也不要求写权限依赖读取权限。
 - service 账号任一授权列表为空时没有资源访问权限，但可以换取 Token；runner 账号禁止配置非空服务授权列表。
   未知权限、重复条目或字段类型错误均在占用账号名称、写入凭据前返回 400。
-- 注册和授权更新仅由 Gateway 的 Admin 入口调用。更新沿用 `/apis/iam.ebs/v1/machineaccounts/{name}`，复用授权内容校验，保持类型、Token 有效期、元数据及凭据不变；存储保留私有凭据字段。PUT 需携带当前 resourceVersion，PATCH 可携带 resourceVersion 或 JSON Patch test；版本冲突返回 409，不自动覆盖。Gateway 按名称实时核验账号，更新授权不需更换 Token，对后续请求生效，不中止已受理操作。同名 service 账号重建后，
+- 注册和更新仅由 Gateway 的 Admin 入口调用。更新沿用 `/apis/iam.ebs/v1/machineaccounts/{name}`，复用有效期及授权内容校验，保持类型、元数据及凭据不变；存储保留私有凭据字段。PUT 需携带当前 resourceVersion，PATCH 可携带 resourceVersion 或 JSON Patch test；版本冲突返回 409，不自动覆盖。Gateway 按名称实时核验账号，更新授权不需更换 Token，对后续请求生效，不中止已受理操作。同名 service 账号重建后，
   未过期的旧 Token 恢复有效，并按当前授权配置处理请求。
 - 内部认证请求仍只接收 name、clientSecret，成功响应返回账号名称、有效 type 和有效期，不能由调用方声明或覆盖。
 - MachineAccount 的严格 ES mapping 定义 `data.spec.type`、`data.spec.projects`、`data.spec.permissions` 为 keyword；

@@ -31,7 +31,7 @@ function setup() {
     },
   };
   const state = new Function(...Object.keys(deps), script + `
-    return { t, accounts, loading, loadError, dialogError, success, page, nextToken, createOpen, name,
+    return { t, accounts, typeFilter, filteredAccounts, loading, loadError, dialogError, success, page, nextToken, createOpen, name,
       accountType, typeOptions, projectNames, permissions, permissionOptions, ttl, saving, secret, createdName, deleting, confirmName, openCreate,
       closeCreate, closeSecret, openDelete, closeDelete, loadAccounts, reload, changePage,
       createAccount, deleteAccount, formatDate, editing, openEdit, updateAccount };
@@ -47,6 +47,10 @@ function setup() {
       setup: props => () => Vue.h("select", props.options.map(option =>
         Vue.h("option", { value: option.value, selected: props.modelValue === option.value }, option.label))),
     });
+    app.component("ColumnMultiFilter", {
+      props: ["options", "modelValue", "label", "allLabel"],
+      setup: props => () => Vue.h("button", { "aria-label": props.label }, props.allLabel),
+    });
     for (const name of ["EmptyState", "ArrowLeft", "ArrowRight", "CircleCheckFilled", "Refresh", "WarningFilled"]) {
       app.component(name, { render: () => null });
     }
@@ -54,6 +58,39 @@ function setup() {
   };
   return { state, calls, transport, html, ApiError: deps.ApiError };
 }
+
+test("machine account type header filters current-page accounts and stays visible for empty results", async () => {
+  const { state, html, calls } = setup();
+  state.loading.value = false;
+  state.accounts.value = [
+    { metadata: { name: "worker" }, spec: { type: "runner" } },
+    { metadata: { name: "sync" }, spec: { type: "service" } },
+    { metadata: { name: "legacy" }, spec: {} },
+  ];
+  const names = () => state.filteredAccounts.value.map(account => account.metadata.name);
+  assert.deepEqual(names(), ["worker", "sync", "legacy"]);
+  state.typeFilter.value = ["runner"];
+  assert.deepEqual(names(), ["worker", "legacy"]);
+  state.typeFilter.value = ["service"];
+  assert.deepEqual(names(), ["sync"]);
+  const filtered = await html();
+  assert.match(filtered, /<th><button aria-label="admin.machineType"/);
+  assert.match(filtered, /admin.allMachineTypes/);
+  assert.doesNotMatch(filtered, /<strong>worker<\/strong>/);
+  state.typeFilter.value = ["runner", "service"];
+  assert.equal(names().length, 3);
+  state.accounts.value = [];
+  const empty = await html();
+  assert.match(empty, /<th><button aria-label="admin.machineType"/);
+  assert.match(empty, /<td colspan="5">/);
+  state.typeFilter.value = [];
+  assert.deepEqual(names(), []);
+  assert.equal(calls.length, 0);
+  for (const locale of ["zh-CN", "en-US"]) {
+    const messages = readFileSync(new URL(`../src/i18n/messages/${locale}.ts`, import.meta.url), "utf8");
+    assert.match(messages, /allMachineTypes: "[^"]+"/);
+  }
+});
 
 test("machine account form defaults to Runner and resets when reopened", async () => {
   const { state, html } = setup();
@@ -193,7 +230,7 @@ test("Service grant labels and hints are available in Chinese and English", () =
   for (const locale of ["zh-CN", "en-US"]) {
     const source = readFileSync(new URL(`../src/i18n/messages/${locale}.ts`, import.meta.url), "utf8");
     const admin = new Function(`return ({${source.match(/  admin: \{([\s\S]*?)\n  \},/)[1]}});`)();
-    for (const key of ["serviceAccountHint", "serviceProjects", "serviceProjectsPlaceholder", "serviceProjectsHint", "servicePermissions", "servicePermissionsHint", "permissionProjectsUpdate", "permissionBuildsCreate", "permissionBuildsAbort", "invalidServiceProjects", "invalidServicePermissions", "editMachineGrants", "machineGrantsEditHint", "savingMachineGrants", "machineGrantsSaved", "saveMachineGrantsFailed", "machineGrantsConflict"]) {
+    for (const key of ["serviceAccountHint", "serviceProjects", "serviceProjectsPlaceholder", "serviceProjectsHint", "servicePermissions", "servicePermissionsHint", "permissionProjectsUpdate", "permissionBuildsCreate", "permissionBuildsAbort", "invalidServiceProjects", "invalidServicePermissions", "editMachineGrants", "machineGrantsEditHint", "savingMachineGrants", "machineGrantsSaved", "saveMachineGrantsFailed", "machineGrantsConflict", "tokenTTLUpdateHint", "invalidTokenTTL"]) {
       assert.equal(typeof admin[key], "string", `${locale}: ${key}`);
       assert.ok(admin[key].length > 0, `${locale}: ${key}`);
     }
@@ -208,10 +245,10 @@ test("account list displays Runner and Service types", async () => {
     { metadata: { name: "service-account" }, spec: { type: "service" } },
   ];
   const result = await html();
-  assert.match(result, /<th>admin.machineType<\/th>/);
+  assert.match(result, /<th><button aria-label="admin.machineType"/);
   assert.match(result, /<td>runner<\/td>/);
   assert.match(result, /<td>service<\/td>/);
-  assert.equal((result.match(/admin.editMachineGrants/g) || []).length, 1);
+  assert.equal((result.match(/admin.editMachineGrants/g) || []).length, 2);
 });
 
 const serviceAccount = () => ({
@@ -219,7 +256,7 @@ const serviceAccount = () => ({
   spec: { type: "service", tokenTTLSeconds: 3600, projects: ["demo"], permissions: ["projects:update"] },
 });
 
-test("editing Service grants submits only grants and concurrency guards without rotating credentials", async () => {
+test("editing Service settings submits lifetime, grants and concurrency guards without rotating credentials", async () => {
   const { state, calls, html } = setup();
   const account = serviceAccount();
   state.openEdit(account);
@@ -228,6 +265,7 @@ test("editing Service grants submits only grants and concurrency guards without 
   assert.match(await html(), /admin.machineGrantsEditHint/);
   state.projectNames.value = "other-project";
   state.permissions.value = ["builds:abort"];
+  state.ttl.value = 7200;
   await state.updateAccount();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].path, "/apis/iam.ebs/v1/machineaccounts/automation");
@@ -235,7 +273,7 @@ test("editing Service grants submits only grants and concurrency guards without 
   assert.equal(calls[0].headers["Content-Type"], "application/merge-patch+json");
   assert.deepEqual(calls[0].body, {
     metadata: { uid: "original-id", resourceVersion: "v1:3:1" },
-    spec: { projects: ["other-project"], permissions: ["builds:abort"] },
+    spec: { tokenTTLSeconds: 7200, projects: ["other-project"], permissions: ["builds:abort"] },
   });
   assert.deepEqual(account, serviceAccount());
   assert.equal(state.createOpen.value, false);
@@ -261,8 +299,6 @@ test("grant update failures retain the draft and do not retry with a newer versi
 
 test("edit validation and cancel preserve the list; create resets edit state", async () => {
   const { state, calls } = setup();
-  state.openEdit({ spec: { type: "runner" } });
-  assert.equal(state.createOpen.value, false);
   const account = serviceAccount();
   state.openEdit(account);
   state.projectNames.value = "*";
@@ -275,4 +311,35 @@ test("edit validation and cancel preserve the list; create resets edit state", a
   assert.equal(state.editing.value, null);
   assert.equal(state.projectNames.value, "");
   assert.deepEqual(state.permissions.value, []);
+});
+
+test("Runner editing updates only lifetime and keeps service fields hidden", async () => {
+  const { state, calls, html } = setup();
+  state.openEdit({ metadata: { name: "worker", uid: "id", resourceVersion: "v1:1:1" }, spec: { type: "runner", tokenTTLSeconds: 3600 } });
+  assert.equal(state.accountType.value, "runner");
+  const form = await html();
+  assert.doesNotMatch(form, /admin.serviceProjects|admin.servicePermissions/);
+  assert.match(form, /admin.tokenTTLUpdateHint/);
+  assert.doesNotMatch(form, /type="number"[^>]*readonly/);
+  state.ttl.value = 300;
+  await state.updateAccount();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].body, { metadata: { uid: "id", resourceVersion: "v1:1:1" }, spec: { tokenTTLSeconds: 300 } });
+});
+
+test("lifetime updates validate integer bounds for Runner and Service accounts", async () => {
+  for (const type of ["runner", "service"]) {
+    for (const ttl of [0, 299, 300, 7200, 86400, 86401, 300.5, "300"]) {
+      const { state, calls } = setup();
+      state.openEdit({ metadata: serviceAccount().metadata, spec: { type, tokenTTLSeconds: 3600 } });
+      state.ttl.value = ttl;
+      await state.updateAccount();
+      const valid = Number.isInteger(ttl) && ttl >= 300 && ttl <= 86400;
+      assert.equal(calls.length, valid ? 1 : 0, `${type}: ${ttl}`);
+      if (!valid) {
+        assert.equal(state.dialogError.value, "admin.invalidTokenTTL");
+        assert.equal(state.createOpen.value, true);
+      }
+    }
+  }
 });

@@ -43,7 +43,7 @@ func TestMachineAccountTypeValidation(t *testing.T) {
 				return
 			}
 			updated := account.DeepCopy()
-			if errs := s.ValidateUpdate(context.Background(), updated, account); (len(errs) == 0) != (typ == iamv1.MachineAccountService) {
+			if errs := s.ValidateUpdate(context.Background(), updated, account); len(errs) != 0 {
 				t.Fatalf("type=%q update errors=%v", typ, errs)
 			}
 			updated.Spec.Type = iamv1.MachineAccountRunner
@@ -72,7 +72,7 @@ func TestServiceAccountUpdateBoundary(t *testing.T) {
 			a.Spec.Permissions = []iamv1.MachineAccountPermission{iamv1.MachinePermissionBuildsAbort}
 		}, true},
 		{"empty grants", func(a *iamv1.MachineAccount) {}, true},
-		{"TTL", func(a *iamv1.MachineAccount) { a.Spec.TokenTTLSeconds = 7200 }, false},
+		{"TTL", func(a *iamv1.MachineAccount) { a.Spec.TokenTTLSeconds = 7200 }, true},
 		{"labels", func(a *iamv1.MachineAccount) { a.Labels = map[string]string{"x": "y"} }, false},
 		{"annotations", func(a *iamv1.MachineAccount) { a.Annotations = map[string]string{"x": "y"} }, false},
 		{"finalizer", func(a *iamv1.MachineAccount) { a.Finalizers = []string{"example.com/keep"} }, false},
@@ -84,6 +84,31 @@ func TestServiceAccountUpdateBoundary(t *testing.T) {
 				t.Fatalf("errors=%v", errs)
 			}
 		})
+	}
+}
+
+func TestMachineAccountTokenLifetimeUpdate(t *testing.T) {
+	for _, typ := range []iamv1.MachineAccountType{iamv1.MachineAccountRunner, iamv1.MachineAccountService} {
+		previous := &iamv1.MachineAccount{
+			ObjectMeta: metav1.ObjectMeta{Name: "automation"},
+			Spec:       iamv1.MachineAccountSpec{Type: typ, TokenTTLSeconds: 3600},
+		}
+		for _, ttl := range []int64{0, 299, 300, 7200, 86400, 86401} {
+			next := previous.DeepCopy()
+			next.Spec.TokenTTLSeconds = ttl
+			errs := (&strategy{}).ValidateUpdate(context.Background(), next, previous)
+			if (len(errs) == 0) != (ttl >= 300 && ttl <= 86400) {
+				t.Fatalf("type=%s ttl=%d errors=%v", typ, ttl, errs)
+			}
+		}
+		if typ == iamv1.MachineAccountRunner {
+			next := previous.DeepCopy()
+			next.Spec.TokenTTLSeconds = 7200
+			next.Spec.Permissions = []iamv1.MachineAccountPermission{iamv1.MachinePermissionBuildsCreate}
+			if errs := (&strategy{}).ValidateUpdate(context.Background(), next, previous); len(errs) == 0 {
+				t.Fatal("Runner received service permissions")
+			}
+		}
 	}
 }
 

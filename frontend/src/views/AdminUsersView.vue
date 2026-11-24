@@ -2,11 +2,34 @@
   <section class="page-heading"><div><p>{{ t("admin.usersHint") }}</p></div><div class="page-actions"><button class="icon-button" type="button" :aria-label="t('common.refresh')" :disabled="loading" @click="reload"><Refresh /></button></div></section>
   <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
   <section class="content-panel">
-    <div class="list-toolbar"><label class="search-box"><Search /><input v-model.trim="search" type="search" :placeholder="t('admin.searchUsers')" /></label></div>
+    <div class="list-toolbar">
+      <label class="search-box"><Search /><input v-model.trim="search" type="search" :placeholder="t('admin.searchUsers')" /></label>
+    </div>
     <div v-if="loading" class="skeleton-list" :aria-label="t('admin.loadingUsers')"><span v-for="item in 5" :key="item"></span></div>
     <div v-else-if="loadError" class="inline-error" role="alert"><WarningFilled />{{ t(loadError) }}<button type="button" @click="loadUsers">{{ t("common.reload") }}</button></div>
-    <EmptyState v-else-if="!filtered.length" :title="t('admin.noUsers')" :description="t('admin.noUsersHint')" />
-    <div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("auth.username") }}</th><th>{{ t("admin.displayName") }}</th><th>{{ t("admin.role") }}</th><th>{{ t("admin.enabled") }}</th><th>{{ t("admin.email") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="user in filtered" :key="user.metadata?.name"><td><strong>{{ user.metadata?.name }}</strong></td><td>{{ user.spec?.displayName || t("common.emptyValue") }}</td><td>{{ roleLabel(user) }}</td><td><span :class="['boolean-status', { enabled: user.spec?.enabled !== false }]">{{ t(user.spec?.enabled === false ? 'admin.disabled' : 'admin.active') }}</span></td><td>{{ user.spec?.email || t("common.emptyValue") }}</td><td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(user)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" @click="openDelete(user)">{{ t("common.remove") }}</button></td></tr></tbody></table></div>
+    <div v-else class="project-table-wrap">
+      <table class="project-table admin-table">
+        <thead><tr>
+          <th>{{ t("auth.username") }}</th>
+          <th>{{ t("admin.displayName") }}</th>
+          <th><ColumnMultiFilter v-model="roleFilter" :options="roleOptions" :label="t('admin.role')" :all-label="t('admin.allRoles')" /></th>
+          <th><ColumnMultiFilter v-model="statusFilter" :options="statusOptions" :label="t('admin.enabled')" :all-label="t('admin.allStatuses')" /></th>
+          <th>{{ t("admin.email") }}</th>
+          <th>{{ t("admin.actions") }}</th>
+        </tr></thead>
+        <tbody>
+          <tr v-for="user in filtered" :key="user.metadata?.name">
+            <td><strong>{{ user.metadata?.name }}</strong></td>
+            <td>{{ user.spec?.displayName || t("common.emptyValue") }}</td>
+            <td>{{ roleLabel(user) }}</td>
+            <td><span :class="['boolean-status', { enabled: user.spec?.enabled !== false }]">{{ t(user.spec?.enabled === false ? 'admin.disabled' : 'admin.active') }}</span></td>
+            <td>{{ user.spec?.email || t("common.emptyValue") }}</td>
+            <td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(user)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" @click="openDelete(user)">{{ t("common.remove") }}</button></td>
+          </tr>
+          <tr v-if="!filtered.length"><td colspan="6"><EmptyState :title="t('admin.noUsers')" :description="t('admin.noUsersHint')" /></td></tr>
+        </tbody>
+      </table>
+    </div>
     <div v-if="!loading && !loadError" class="table-footer"><span>{{ t("common.count", { count: filtered.length }) }}</span><div class="pagination-row"><button class="page-button arrow-button" type="button" :disabled="page === 1" :aria-label="t('common.previous')" @click="changePage(-1)"><ArrowLeft /></button><strong>{{ page }}</strong><button class="page-button arrow-button" type="button" :disabled="!nextToken" :aria-label="t('common.next')" @click="changePage(1)"><ArrowRight /></button></div></div>
   </section>
 
@@ -31,6 +54,7 @@ import { useI18n } from "vue-i18n";
 import { errorTranslationKey, list, request } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
 import AppSelect from "@/components/AppSelect.vue";
+import ColumnMultiFilter from "@/components/ColumnMultiFilter.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import type { ManagedUser } from "@/types";
 
@@ -41,6 +65,16 @@ const loadError = ref("");
 const dialogError = ref("");
 const success = ref("");
 const search = ref("");
+const roleFilter = ref<string[]>([]);
+const statusFilter = ref<string[]>([]);
+const roleOptions = computed(() => [
+  { value: "ebs:user", label: t("admin.regularUser") },
+  { value: "ebs:ops", label: t("admin.opsUser") },
+]);
+const statusOptions = computed(() => [
+  { value: "true", label: t("admin.active") },
+  { value: "false", label: t("admin.disabled") },
+]);
 const page = ref(1);
 const tokens = ref([""]);
 const nextToken = ref("");
@@ -49,7 +83,12 @@ const deleting = ref<ManagedUser | null>(null);
 const confirmName = ref("");
 const saving = ref(false);
 const draft = reactive({ displayName: "", email: "", scope: "ebs:user", enabled: true });
-const filtered = computed(() => users.value.filter((user) => [user.metadata?.name, user.spec?.displayName, user.spec?.email].some((value) => value?.toLowerCase().includes(search.value.toLowerCase()))));
+const filtered = computed(() => users.value.filter((user) => {
+  if (roleFilter.value.length && !roleFilter.value.some(role => user.spec?.scopes?.includes(role))) return false;
+  if (statusFilter.value.length && !statusFilter.value.includes(String(user.spec?.enabled !== false))) return false;
+  return [user.metadata?.name, user.spec?.displayName, user.spec?.email]
+    .some((value) => value?.toLowerCase().includes(search.value.toLowerCase()));
+}));
 
 onMounted(() => { void loadUsers(); });
 

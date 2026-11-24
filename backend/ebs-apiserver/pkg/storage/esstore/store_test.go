@@ -145,6 +145,7 @@ func TestMachineAccountGrantUpdatePreservesCredential(t *testing.T) {
 	next := created.(*iamv1.MachineAccount).DeepCopy()
 	next.Spec.Projects = []string{"demo"}
 	next.Spec.Permissions = []iamv1.MachineAccountPermission{iamv1.MachinePermissionBuildsCreate}
+	next.Spec.TokenTTLSeconds = 7200
 	updated, _, err := store.Update(ctx, "automation", rest.DefaultUpdatedObjectInfo(next), nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +155,10 @@ func TestMachineAccountGrantUpdatePreservesCredential(t *testing.T) {
 	}
 	if updated.(*iamv1.MachineAccount).ResourceVersion != "v1:2:1" || updated.(*iamv1.MachineAccount).Spec.Projects[0] != "demo" {
 		t.Fatalf("unexpected result: %+v", updated)
+	}
+	var persisted iamv1.MachineAccount
+	if err := json.Unmarshal(stored.Data, &persisted); err != nil || persisted.Spec.TokenTTLSeconds != 7200 {
+		t.Fatalf("stored lifetime=%d err=%v", persisted.Spec.TokenTTLSeconds, err)
 	}
 	raw, _ := json.Marshal(updated)
 	if bytes.Contains(raw, []byte("private-hash")) {
