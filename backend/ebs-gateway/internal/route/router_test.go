@@ -280,6 +280,61 @@ func TestMachineTokenAccountType(t *testing.T) {
 	}
 }
 
+func TestMachineTokenLifetimeChangesAffectNewTokensOnly(t *testing.T) {
+	for _, typ := range []string{"runner", "service"} {
+		t.Run(typ, func(t *testing.T) {
+			ttl := 7200
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodPost || r.URL.Path != "/internal/iam/v1/machineaccounts/authenticate" {
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				body, _ := json.Marshal(map[string]any{"authenticated": true, "name": "worker", "type": typ, "tokenTTLSeconds": ttl})
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body))}, nil
+			}))
+			exchange := func() string {
+				body := `{}`
+				if typ == "runner" {
+					body = `{"runner":"runner-1"}`
+				}
+				req := httptest.NewRequest(http.MethodPost, "/auth/machine-token", strings.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				req.SetBasicAuth("worker", "secret")
+				res := httptest.NewRecorder()
+				api.Router().ServeHTTP(res, req)
+				var result struct {
+					AccessToken string
+					ExpiresIn   int
+				}
+				if err := json.Unmarshal(res.Body.Bytes(), &result); err != nil || res.Code != 200 || result.ExpiresIn != ttl {
+					t.Fatalf("status=%d body=%s err=%v", res.Code, res.Body, err)
+				}
+				return result.AccessToken
+			}
+			oldToken := exchange()
+			oldPrincipal, err := api.tokens.Verify(oldToken, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ttl = 300
+			newToken := exchange()
+			newPrincipal, err := api.tokens.Verify(newToken, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if oldPrincipal.ExpiresAt.Sub(newPrincipal.ExpiresAt) != 6900*time.Second {
+				t.Fatal("new token did not use the updated lifetime")
+			}
+			stillValid, err := api.tokens.Verify(oldToken, api.now().Add(600*time.Second))
+			if err != nil || !stillValid.ExpiresAt.Equal(oldPrincipal.ExpiresAt) {
+				t.Fatalf("old token expiry changed: %v", err)
+			}
+			if _, err := api.tokens.Verify(newToken, api.now().Add(600*time.Second)); err == nil {
+				t.Fatal("new token outlived its configured lifetime")
+			}
+		})
+	}
+}
+
 func TestServiceTokenChecksCurrentAccount(t *testing.T) {
 	status := http.StatusOK
 	account := `{"metadata":{"name":"service","uid":"uid-1"},"spec":{"type":"service"}}`
@@ -599,13 +654,14 @@ func TestMachineAccountGrantUpdates(t *testing.T) {
 		{"merge patch", "PATCH", "application/merge-patch+json", `{"metadata":{"uid":"id","resourceVersion":"v1:3:1"},"spec":{"projects":["other"],"permissions":["builds:abort"]}}`, identity.AdminScope, "service", 200},
 		{"put", "PUT", "application/json", strings.ReplaceAll(original, "projects:update", "builds:abort"), identity.AdminScope, "service", 200},
 		{"json patch", "PATCH", "application/json-patch+json", `[{"op":"test","path":"/metadata/resourceVersion","value":"v1:3:1"},{"op":"replace","path":"/spec/permissions","value":[]}]`, identity.AdminScope, "service", 200},
-		{"TTL", "PATCH", "application/merge-patch+json", `{"spec":{"tokenTTLSeconds":7200}}`, identity.AdminScope, "service", 403},
+		{"service TTL", "PATCH", "application/merge-patch+json", `{"spec":{"tokenTTLSeconds":7200}}`, identity.AdminScope, "service", 200},
 		{"type", "PATCH", "application/merge-patch+json", `{"spec":{"type":"runner"}}`, identity.AdminScope, "service", 403},
 		{"metadata", "PATCH", "application/merge-patch+json", `{"metadata":{"labels":{"x":"y"}}}`, identity.AdminScope, "service", 403},
 		{"credential", "PATCH", "application/merge-patch+json", `{"credential":{"secretHash":"changed"}}`, identity.AdminScope, "service", 403},
 		{"stale", "PATCH", "application/merge-patch+json", `{"metadata":{"resourceVersion":"v1:2:1"}}`, identity.AdminScope, "service", 409},
 		{"replaced", "PATCH", "application/merge-patch+json", `{"metadata":{"uid":"other"}}`, identity.AdminScope, "service", 409},
-		{"runner account", "PATCH", "application/merge-patch+json", `{}`, identity.AdminScope, "runner", 403},
+		{"runner TTL", "PATCH", "application/merge-patch+json", `{"spec":{"tokenTTLSeconds":7200}}`, identity.AdminScope, "runner", 200},
+		{"runner grants", "PATCH", "application/merge-patch+json", `{"spec":{"permissions":["builds:abort"]}}`, identity.AdminScope, "runner", 403},
 		{"ordinary user", "PATCH", "application/merge-patch+json", `{}`, identity.UserScope, "service", 403},
 		{"ops user", "PATCH", "application/merge-patch+json", `{}`, identity.OpsScope, "service", 403},
 	} {
@@ -624,7 +680,11 @@ func TestMachineAccountGrantUpdates(t *testing.T) {
 						t.Fatal(err)
 					}
 					body = string(raw)
-					if !strings.Contains(body, `"tokenTTLSeconds":3600`) || !strings.Contains(body, `"resourceVersion":"v1:3:1"`) {
+					wantTTL := `"tokenTTLSeconds":3600`
+					if strings.Contains(tc.name, "TTL") {
+						wantTTL = `"tokenTTLSeconds":7200`
+					}
+					if !strings.Contains(body, wantTTL) || !strings.Contains(body, `"resourceVersion":"v1:3:1"`) {
 						t.Fatalf("unexpected update: %s", body)
 					}
 				default:

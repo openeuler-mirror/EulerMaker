@@ -4,9 +4,8 @@
   <section class="content-panel">
     <div v-if="loading" class="skeleton-list" :aria-label="t('admin.loadingMachines')"><span v-for="item in 5" :key="item"></span></div>
     <div v-else-if="loadError" class="inline-error" role="alert"><WarningFilled />{{ t(loadError) }}<button type="button" @click="loadAccounts">{{ t("common.reload") }}</button></div>
-    <EmptyState v-else-if="!accounts.length" :title="t('admin.noMachines')" :description="t('admin.noMachinesHint')" />
-    <div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("admin.machineName") }}</th><th>{{ t("admin.machineType") }}</th><th>{{ t("admin.tokenTTL") }}</th><th>{{ t("projects.createdAt") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="account in accounts" :key="account.metadata?.name"><td><strong>{{ account.metadata?.name }}</strong></td><td>{{ account.spec?.type || "runner" }}</td><td>{{ account.spec?.tokenTTLSeconds || 3600 }} s</td><td>{{ formatDate(account.metadata?.creationTimestamp) }}</td><td><button v-if="account.spec?.type === 'service'" class="text-button" type="button" @click="openEdit(account)">{{ t("admin.editMachineGrants") }}</button><button class="text-button danger-link" type="button" @click="openDelete(account)">{{ t("common.remove") }}</button></td></tr></tbody></table></div>
-    <div v-if="!loading && !loadError" class="table-footer"><span>{{ t("common.count", { count: accounts.length }) }}</span><div class="pagination-row"><button class="page-button arrow-button" type="button" :disabled="page === 1" :aria-label="t('common.previous')" @click="changePage(-1)"><ArrowLeft /></button><strong>{{ page }}</strong><button class="page-button arrow-button" type="button" :disabled="!nextToken" :aria-label="t('common.next')" @click="changePage(1)"><ArrowRight /></button></div></div>
+    <div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("admin.machineName") }}</th><th><ColumnMultiFilter v-model="typeFilter" :options="typeOptions" :label="t('admin.machineType')" :all-label="t('admin.allMachineTypes')" /></th><th>{{ t("admin.tokenTTL") }}</th><th>{{ t("projects.createdAt") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="account in filteredAccounts" :key="account.metadata?.name"><td><strong>{{ account.metadata?.name }}</strong></td><td>{{ account.spec?.type || "runner" }}</td><td>{{ account.spec?.tokenTTLSeconds || 3600 }} s</td><td>{{ formatDate(account.metadata?.creationTimestamp) }}</td><td><button class="text-button" type="button" @click="openEdit(account)">{{ t("admin.editMachineGrants") }}</button><button class="text-button danger-link" type="button" @click="openDelete(account)">{{ t("common.remove") }}</button></td></tr><tr v-if="!filteredAccounts.length"><td colspan="5"><EmptyState :title="t('admin.noMachines')" :description="t('admin.noMachinesHint')" /></td></tr></tbody></table></div>
+    <div v-if="!loading && !loadError" class="table-footer"><span>{{ t("common.count", { count: filteredAccounts.length }) }}</span><div class="pagination-row"><button class="page-button arrow-button" type="button" :disabled="page === 1" :aria-label="t('common.previous')" @click="changePage(-1)"><ArrowLeft /></button><strong>{{ page }}</strong><button class="page-button arrow-button" type="button" :disabled="!nextToken" :aria-label="t('common.next')" @click="changePage(1)"><ArrowRight /></button></div></div>
   </section>
 
   <ModalDialog v-if="createOpen" title-id="create-machine-title" :title="t(editing ? 'admin.editMachineGrants' : 'admin.createMachine')" :close-label="t('common.close')" @close="closeCreate">
@@ -36,7 +35,7 @@
           <small id="service-permissions-hint" class="form-hint">{{ t("admin.servicePermissionsHint") }}</small>
         </fieldset>
       </template>
-      <label class="field required-field"><span>{{ t("admin.tokenTTL") }}</span><input v-model.number="ttl" type="number" min="300" max="86400" :readonly="!!editing" :disabled="saving" required /></label>
+      <label class="field required-field"><span>{{ t("admin.tokenTTL") }}</span><input v-model.number="ttl" type="number" min="300" max="86400" :disabled="saving" required /><small v-if="editing" class="form-hint">{{ t("admin.tokenTTLUpdateHint") }}</small></label>
       <div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div>
       <div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeCreate">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="saving">{{ t(editing ? (saving ? "admin.savingMachineGrants" : "common.save") : (saving ? "admin.creating" : "admin.createMachine")) }}</button></div>
     </form>
@@ -54,11 +53,15 @@ import { useI18n } from "vue-i18n";
 import { ApiError, errorTranslationKey, list, request } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
 import AppSelect from "@/components/AppSelect.vue";
+import ColumnMultiFilter from "@/components/ColumnMultiFilter.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import type { MachineAccount, MachineAccountPermission, MachineAccountType } from "@/types";
 
 const { t } = useI18n();
 const accounts = ref<MachineAccount[]>([]);
+const typeFilter = ref<string[]>([]);
+const filteredAccounts = computed(() => accounts.value.filter(account =>
+  !typeFilter.value.length || typeFilter.value.includes(account.spec?.type || "runner")));
 const loading = ref(true);
 const loadError = ref("");
 const dialogError = ref("");
@@ -117,14 +120,15 @@ function openCreate(): void {
   createOpen.value = true;
 }
 function openEdit(account: MachineAccount): void {
-  if (account.spec?.type !== "service") return;
+  const type = account.spec?.type || "runner";
+  if (type !== "service" && type !== "runner") return;
   openCreate();
   editing.value = JSON.parse(JSON.stringify(account)) as MachineAccount;
   name.value = account.metadata?.name || "";
-  accountType.value = "service";
-  ttl.value = account.spec.tokenTTLSeconds || 3600;
-  projectNames.value = (account.spec.projects || []).join("\n");
-  permissions.value = [...(account.spec.permissions || [])];
+  accountType.value = type;
+  ttl.value = account.spec?.tokenTTLSeconds || 3600;
+  projectNames.value = (account.spec?.projects || []).join("\n");
+  permissions.value = [...(account.spec?.permissions || [])];
 }
 function closeCreate(): void { if (!saving.value) createOpen.value = false; }
 function closeSecret(): void { secret.value = ""; createdName.value = ""; }
@@ -143,17 +147,18 @@ function serviceGrants(): { projects: string[]; permissions: MachineAccountPermi
   return { projects, permissions: [...permissions.value] };
 }
 async function updateAccount(): Promise<void> {
-  if (saving.value || editing.value?.spec?.type !== "service") return;
+  if (saving.value || !editing.value) return;
+  if (!Number.isInteger(ttl.value) || ttl.value < 300 || ttl.value > 86400) { dialogError.value = "admin.invalidTokenTTL"; return; }
   const metadata = editing.value.metadata;
   if (!metadata?.name || !metadata.uid || !metadata.resourceVersion) { dialogError.value = "admin.machineGrantsConflict"; return; }
-  const grants = serviceGrants();
+  const grants = editing.value.spec?.type === "service" ? serviceGrants() : {};
   if (!grants) return;
   saving.value = true;
   dialogError.value = "";
   try {
     await request<MachineAccount>(`/apis/iam.ebs/v1/machineaccounts/${encodeURIComponent(metadata.name)}`, {
       method: "PATCH", headers: { "Content-Type": "application/merge-patch+json" },
-      body: JSON.stringify({ metadata: { uid: metadata.uid, resourceVersion: metadata.resourceVersion }, spec: grants }),
+      body: JSON.stringify({ metadata: { uid: metadata.uid, resourceVersion: metadata.resourceVersion }, spec: { tokenTTLSeconds: ttl.value, ...grants } }),
     });
     success.value = t("admin.machineGrantsSaved", { name: metadata.name });
     createOpen.value = false;

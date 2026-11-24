@@ -96,15 +96,19 @@ func (a *Authorizer) ValidateUpdate(ctx context.Context, who identity.Principal,
 			return deny("machine account updates require Admin")
 		}
 		oldSpec, newSpec := maps.Clone(objectMap(old["spec"])), maps.Clone(objectMap(candidate["spec"]))
-		if oldSpec["type"] != "service" || newSpec["type"] != "service" {
-			return deny("only service account grants can be updated")
+		if (oldSpec["type"] != "service" && oldSpec["type"] != "runner") || newSpec["type"] != oldSpec["type"] {
+			return deny("machine account type is immutable")
 		}
-		for _, key := range []string{"projects", "permissions"} {
+		allowed := []string{"tokenTTLSeconds"}
+		if oldSpec["type"] == "service" {
+			allowed = append(allowed, "projects", "permissions")
+		}
+		for _, key := range allowed {
 			delete(oldSpec, key)
 			delete(newSpec, key)
 		}
 		if !reflect.DeepEqual(oldSpec, newSpec) || !reflect.DeepEqual(oldMeta, newMeta) || !reflect.DeepEqual(old["status"], candidate["status"]) {
-			return deny("only service account grants can be updated")
+			return deny("only token lifetime and service account grants can be updated")
 		}
 	}
 	return nil
