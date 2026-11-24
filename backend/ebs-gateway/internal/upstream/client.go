@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -51,8 +52,10 @@ func New(address string, transport http.RoundTripper) (*Client, error) {
 	}
 	return &Client{
 		endpoint: endpoint,
-		http:     &http.Client{Transport: transport},
-		proxy:    proxy,
+		// Internal lookups and mutations are bounded through response body reads.
+		// The streaming reverse proxy does not use this client's timeout.
+		http:  &http.Client{Transport: transport, Timeout: 30 * time.Second},
+		proxy: proxy,
 	}, nil
 }
 

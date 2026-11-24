@@ -544,6 +544,10 @@ gateway 按调用方和客户端地址限流：
 HTTP 429 Too Many Requests
 ```
 
+通用令牌桶按实例、按限流器最多保留 4096 个键；容量用尽时拒绝新键，已有键继续按原额度计算，不驱逐活跃记录。
+请求触发的过期扫描最多每分钟执行一次，清理空闲至少 10 分钟且额度已完全恢复的记录，避免清理导致额度提前重置。
+本地密码登录同时限制每个 IP 每分钟 20 次（桶容量 20）及每个用户名/IP 组合每分钟 5 次（桶容量 5），IP 限流在正文解析和 IAM 查询前执行。
+
 ### 4.7 上游请求头
 
 用户和 Runner 权限由 Gateway 在转发前校验；apiserver 后续仅通过 mTLS 识别组件身份，不信任请求头中的身份信息。转发时删除外部 `Authorization`、`Proxy-Authorization` 和代理来源头，避免把客户端凭据传给 apiserver。
@@ -607,7 +611,9 @@ Scheduler 不再向 Evicted Runner 分配新 Job，已有 Job 继续执行。Run
 
 Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称强制过滤 `status.runner`；gateway 校验该路径名称等于 token 的 `runner` claim。客户端传入的 `fieldSelector` 一律拒绝，不能依赖 Runner 客户端自行隐藏对象。单对象 Job `get` 和 `/status` 写入仍必须读取对象并校验 `status.runner` 等于 token 的 `runner` claim，不匹配时返回 403。Job 对象仍不得保存密码、访问令牌、私钥或其他明文敏感信息；执行所需凭据必须通过独立的受控凭据交付机制提供。
 
-如果 gateway 无法确认 Project 归属，应返回 403，不能放行。
+Project 归属查询通过 `includeFields=metadata.name,metadata.labels` 只读取授权所需字段，不读取软件包配置。
+Project 或 Runner Job 查询确认对象不存在时返回 404；连接失败、上游限流或其他非成功响应返回 503；响应解析失败或 Project 身份不匹配返回 502。
+只有已确认的 owner/member 或 Runner 归属不匹配才返回 403，查询失败时不放行，也不误报无权限。
 
 公开 `GET/HEAD` 不查询 Project owner/member。Config 具名读取按 `spec.visibility` 授权，仅 Ops/Admin 可读取 `OpsOnly` 对象并 list；其他身份仅可具名读取 `Public` 对象，不按 Project owner/member 关系授权。普通用户修改 Project 或其他 Project 子资源时，gateway 先读取 Project 并校验 owner/member 权限；需要区分 owner 与 member 的写操作继续按矩阵限制。
 
@@ -814,6 +820,7 @@ gateway 需要支持流式响应：
 
 - 不读取完整 upstream response 后再返回。
 - 不为 watch 请求设置过短超时。
+- Gateway 内部 `Do` 查询和操作使用 30 秒总超时，包含响应正文读取，并遵守调用方更早的取消或截止时间；该超时不施加到 Watch 反向代理。
 - 客户端断开时及时关闭 upstream 请求。
 - 审计日志记录连接建立和最终关闭状态。
 

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,35 @@ import (
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func TestLoginIPLimitAcrossUsernames(t *testing.T) {
+	calls := 0
+	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+	}))
+	router := api.Router()
+	for i := 0; i < 21; i++ {
+		request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(fmt.Sprintf(`{"username":"user-%d","password":"wrong"}`, i)))
+		request.Header.Set("Content-Type", "application/json")
+		request.RemoteAddr = "192.0.2.1:1234"
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		want := http.StatusUnauthorized
+		if i == 20 {
+			want = http.StatusTooManyRequests
+		}
+		if recorder.Code != want {
+			t.Fatalf("request %d: status=%d body=%s", i, recorder.Code, recorder.Body)
+		}
+		if i == 20 && recorder.Header().Get("Retry-After") == "" {
+			t.Fatal("missing Retry-After")
+		}
+	}
+	if calls != 20 {
+		t.Fatalf("throttled login reached IAM: calls=%d", calls)
+	}
+}
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 

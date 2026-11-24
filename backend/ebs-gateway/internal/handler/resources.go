@@ -310,7 +310,7 @@ func (a *Handler) releaseRunnerWatch(name string) {
 func (a *Handler) runnerOwnsJob(c *gin.Context, runner string) bool {
 	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet, c.Request.URL.Path, nil, nil)
 	if err != nil || response == nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Job assignment could not be confirmed"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Job lookup unavailable"})
 		return false
 	}
 	defer response.Body.Close()
@@ -324,7 +324,7 @@ func (a *Handler) runnerOwnsJob(c *gin.Context, runner string) bool {
 		return false
 	}
 	if response.StatusCode != http.StatusOK {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Job assignment could not be confirmed"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Job lookup unavailable"})
 		return false
 	}
 	var object struct {
@@ -332,7 +332,11 @@ func (a *Handler) runnerOwnsJob(c *gin.Context, runner string) bool {
 			Runner string `json:"runner"`
 		} `json:"status"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, a.bodyLimit+1)).Decode(&object); err != nil || object.Status.Runner != runner {
+	if err := json.NewDecoder(io.LimitReader(response.Body, a.bodyLimit+1)).Decode(&object); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid Job response"})
+		return false
+	}
+	if object.Status.Runner != runner {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Job is not assigned to Runner"})
 		return false
 	}

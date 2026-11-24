@@ -104,6 +104,11 @@ func (a *Handler) login(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "password login disabled"})
 		return
 	}
+	if !a.loginIP.Allow(c.ClientIP()) {
+		c.Header("Retry-After", "60")
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+		return
+	}
 	var input struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
