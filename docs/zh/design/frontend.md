@@ -276,6 +276,10 @@ User 只能通过 `/auth/register` 创建。前端不提供“管理员创建 Us
 
 MachineAccount 页面支持通过专用接口创建账号、列出和删除账号。创建时由浏览器 Web Crypto API 生成至少 32 字节随机值并编码为无填充 Base64URL client secret，再与账号配置一并提交。Gateway 成功响应不会回显 secret，因此页面只使用提交前的内存副本展示一次；离开结果页面后不再保留，不写入日志、Pinia、localStorage 或 sessionStorage。用户关闭一次性凭据页面前，界面必须明确提示其通过受保护渠道完成下发。
 
+创建 service 账号时可填写工程名称列表，并独立勾选 `projects:update`、`builds:create`、`builds:abort`，分别提交为 `projects` 和 `permissions`。工程名支持换行、空格或逗号分隔，允许工程尚未创建；提交前检查名称格式、重复条目及权限枚举。任一列表为空时允许创建，但提示该账号没有资源操作权限。runner 类型不展示或提交这些字段；创建失败保留表单供重试，重新打开创建窗口重置配置。授权校验由 Gateway 和 apiserver 兜底。
+
+Service 账号提供“编辑授权”操作，复用工程范围及权限表单，名称、类型和 Token 有效期只读。保存向具名 MachineAccount 发送 merge patch，仅包含授权字段和当前 UID/resourceVersion；不生成或显示新密钥。账号冲突、删除或请求失败时保留草稿，不自动用新版本重试，提示用户刷新列表重新编辑。空列表可撤销全部资源操作权限；保存成功后刷新列表，后续请求按最新授权判断。
+
 ### 5.9 配置与脚本管理
 
 运维页面提供集群级 `Config/build-resource` 的资源配置页签，解析和编辑其 `spec.content` 中的软件包、架构规则；另有 `Config/build-target` 的构建目标编辑和全局 Script 列表、名称搜索、刷新、创建、正文编辑及删除。Ops 和 Admin 可管理脚本，但默认 `rpmbuild` 不显示删除入口；其他脚本删除前需要确认，并携带 UID/resourceVersion 前置条件。脚本正文按原文保存，不在浏览器中执行，不应包含凭据。

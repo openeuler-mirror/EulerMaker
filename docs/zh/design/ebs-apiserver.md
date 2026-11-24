@@ -196,7 +196,7 @@ spec:
 | `service` | 自动化服务账号，统一用于软件包同步、门禁触发等服务，不按业务分别定义类型 |
 
 - 类型使用固定枚举；创建时省略 type 默认 `runner`，显式空值和未知值拒绝。已存储的无 type 账号按 runner 读取和认证，GET 不触发回写。
-- 类型在创建时确定，不开放类型修改；现有 MachineAccount 资源仍不提供普通更新接口。
+- 类型在创建时确定，不开放类型修改；MachineAccount 的 PUT/PATCH 仅允许更新 service 账号的 `spec.projects` 和 `spec.permissions`，runner 账号不允许更新。
 - 内部注册请求接收 `type`、`tokenTTLSeconds`、`projects` 和 `permissions`，写入对应 spec 字段；对象与凭据仍单文档原子创建。
 - `projects` 是去重的精确 Project 名称列表，按 Project 名称规则校验，不支持通配符或全局授权。
   不要求注册时工程已存在；授权按名称绑定，同名工程重建后仍在范围内，写入仍须校验当轮 UID 和版本。
@@ -204,15 +204,14 @@ spec:
 - `projects:update` 授权更新完整 Project 主资源，不限制为软件包列表；仍遵守现有字段和并发版本校验。`builds:create` 授权创建 Build，`builds:abort` 授权调用已有 Build `/abort`，具体路由及检查顺序以 Gateway 设计为准。公开读取主动使用匿名请求，不增加读取权限，也不要求写权限依赖读取权限。
 - service 账号任一授权列表为空时没有资源访问权限，但可以换取 Token；runner 账号禁止配置非空服务授权列表。
   未知权限、重复条目或字段类型错误均在占用账号名称、写入凭据前返回 400。
-- 注册仍仅由 Gateway 的 Admin 入口调用；首次授权随账号创建固化，暂不新增账号更新接口。
-  变更授权需删除并重新创建账号、分发新凭据。Gateway 按名称实时核验账号，同名 service 账号重建后，
+- 注册和授权更新仅由 Gateway 的 Admin 入口调用。更新沿用 `/apis/iam.ebs/v1/machineaccounts/{name}`，复用授权内容校验，保持类型、Token 有效期、元数据及凭据不变；存储保留私有凭据字段。PUT 需携带当前 resourceVersion，PATCH 可携带 resourceVersion 或 JSON Patch test；版本冲突返回 409，不自动覆盖。Gateway 按名称实时核验账号，更新授权不需更换 Token，对后续请求生效，不中止已受理操作。同名 service 账号重建后，
   未过期的旧 Token 恢复有效，并按当前授权配置处理请求。
 - 内部认证请求仍只接收 name、clientSecret，成功响应返回账号名称、有效 type 和有效期，不能由调用方声明或覆盖。
 - MachineAccount 的严格 ES mapping 定义 `data.spec.type`、`data.spec.projects`、`data.spec.permissions` 为 keyword；
   已部署索引通过 mapping 更新流程补齐。apiserver 校验授权内容，Gateway 执行面向外部调用方的权限判断。
 - 验收覆盖两种类型的注册、GET/List、凭据认证、默认类型、三个权限枚举、授权字段校验和认证响应；Gateway 验收工程范围、操作权限及现有字段保护，不因 service 类型自动授予 Build 创建或中止权限。
 
-公共 IAM 类型、DeepCopy、内部注册 DTO、ES 初始 mapping 和 apiserver OpenAPI 已支持授权字段。内部注册在生成凭据及写入 ES 前复用资源校验，拒绝未知权限与重复条目，不静默过滤非法授权；存储策略对创建和更新同样执行校验，但不新增外部更新入口。已部署索引先使用 mapping 检查/更新命令补齐 `data.spec.projects`、`data.spec.permissions` 的 keyword 定义。Gateway 注册入口转发授权字段，并在每次请求中执行授权校验；无授权字段的旧 service 账号按空列表处理，不保留全工程默认放行。首版没有在线授权编辑接口，账号替换时须向客户端下发对应凭据。
+公共 IAM 类型、DeepCopy、内部注册 DTO、ES 初始 mapping 和 apiserver OpenAPI 已支持授权字段。内部注册在生成凭据及写入 ES 前复用资源校验，拒绝未知权限与重复条目，不静默过滤非法授权；存储策略对创建和更新同样执行校验。已部署索引先使用 mapping 检查/更新命令补齐 `data.spec.projects`、`data.spec.permissions` 的 keyword 定义。Gateway 注册入口转发授权字段，并在每次请求中执行授权校验；无授权字段的旧 service 账号按空列表处理，不保留全工程默认放行。
 
 IAM 模块还注册仅供 gateway 使用的内部接口：
 

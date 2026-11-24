@@ -110,6 +110,61 @@ func TestMachineAccountTypeRead(t *testing.T) {
 	}
 }
 
+func TestMachineAccountGrantUpdatePreservesCredential(t *testing.T) {
+	var stored es.IAMDocument
+	seq := int64(0)
+	writes := 0
+	client := es.NewClientForTesting("http://elasticsearch", &http.Client{Transport: fakeRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/ebs-machineaccounts/_doc/automation" {
+			t.Fatalf("unexpected request: %s", req.URL)
+		}
+		if req.Method == http.MethodPut {
+			if seq > 0 && (req.URL.Query().Get("if_seq_no") != "1" || req.URL.Query().Get("if_primary_term") != "1") {
+				t.Fatal("update lost optimistic concurrency")
+			}
+			if err := json.NewDecoder(req.Body).Decode(&stored); err != nil {
+				t.Fatal(err)
+			}
+			seq++
+			writes++
+		} else if req.Method != http.MethodGet {
+			t.Fatalf("unexpected method: %s", req.Method)
+		}
+		return jsonResponse(http.StatusOK, map[string]any{"_source": stored, "_seq_no": seq, "_primary_term": 1}), nil
+	})})
+	store := New(client, "machineaccount", "MachineAccount", machinestore.NewStorage().MachineAccount.(*genericregistry.Store))
+	ctx := genericapirequest.WithNamespace(context.Background(), "")
+	credential := json.RawMessage(`{"secretHash":"private-hash"}`)
+	created, err := store.CreateWithCredential(ctx, &iamv1.MachineAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: "automation"},
+		Spec:       iamv1.MachineAccountSpec{Type: iamv1.MachineAccountService, TokenTTLSeconds: 3600},
+	}, credential, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := created.(*iamv1.MachineAccount).DeepCopy()
+	next.Spec.Projects = []string{"demo"}
+	next.Spec.Permissions = []iamv1.MachineAccountPermission{iamv1.MachinePermissionBuildsCreate}
+	updated, _, err := store.Update(ctx, "automation", rest.DefaultUpdatedObjectInfo(next), nil, nil, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stored.Credential, credential) {
+		t.Fatal("update changed credentials")
+	}
+	if updated.(*iamv1.MachineAccount).ResourceVersion != "v1:2:1" || updated.(*iamv1.MachineAccount).Spec.Projects[0] != "demo" {
+		t.Fatalf("unexpected result: %+v", updated)
+	}
+	raw, _ := json.Marshal(updated)
+	if bytes.Contains(raw, []byte("private-hash")) {
+		t.Fatal("credential exposed")
+	}
+	_, _, err = store.Update(ctx, "automation", rest.DefaultUpdatedObjectInfo(next), nil, nil, false, nil)
+	if !apierrors.IsConflict(err) || writes != 2 {
+		t.Fatalf("stale update: writes=%d err=%v", writes, err)
+	}
+}
+
 func TestUserExternalIdentityPersistence(t *testing.T) {
 	var stored es.IAMDocument
 	seq := int64(0)

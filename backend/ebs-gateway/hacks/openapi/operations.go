@@ -39,17 +39,14 @@ func operations() object {
 			methods := []string{"get", "head"}
 			if named {
 				path, kind = base+"/{name}", r.kind
-				methods = append(methods, "delete")
-				if r.name == "users" {
-					methods = append(methods, "put", "patch")
-				}
+				methods = append(methods, "delete", "put", "patch")
 			}
 			for _, method := range methods {
 				op := operation(method+r.kind+map[bool]string{false: "List", true: ""}[named], "IAM", method+" "+kind,
-					"Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Machine accounts are read/delete only.",
+					"Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Only service MachineAccount grants (spec.projects and spec.permissions) may be updated. Type, token lifetime, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
 					bearer, ref("ebs-api/iam/v1."+kind), "200")
 				setResourceRequest(op, method, ref("ebs-api/iam/v1."+r.kind), false)
-				if method == "put" {
+				if method == "put" && r.name == "users" {
 					op["requestBody"] = body(ref("UserUpdate"), true)
 				}
 				if (method == "get" || method == "head") && r.name != "users" {

@@ -45,23 +45,26 @@ import (
 	"ebs-apiserver/pkg/storage/esstore"
 )
 
-type readDeleteStorage struct{ store *esstore.Store }
+type machineAccountStorage struct{ store *esstore.Store }
 
-func (s *readDeleteStorage) New() runtime.Object     { return s.store.New() }
-func (s *readDeleteStorage) NewList() runtime.Object { return s.store.NewList() }
-func (s *readDeleteStorage) Destroy()                { s.store.Destroy() }
-func (s *readDeleteStorage) NamespaceScoped() bool   { return false }
-func (s *readDeleteStorage) GetSingularName() string { return s.store.GetSingularName() }
-func (s *readDeleteStorage) Get(ctx context.Context, name string, opts *metav1.GetOptions) (runtime.Object, error) {
+func (s *machineAccountStorage) New() runtime.Object     { return s.store.New() }
+func (s *machineAccountStorage) NewList() runtime.Object { return s.store.NewList() }
+func (s *machineAccountStorage) Destroy()                { s.store.Destroy() }
+func (s *machineAccountStorage) NamespaceScoped() bool   { return false }
+func (s *machineAccountStorage) GetSingularName() string { return s.store.GetSingularName() }
+func (s *machineAccountStorage) Get(ctx context.Context, name string, opts *metav1.GetOptions) (runtime.Object, error) {
 	return s.store.Get(ctx, name, opts)
 }
-func (s *readDeleteStorage) List(ctx context.Context, opts *internalversion.ListOptions) (runtime.Object, error) {
+func (s *machineAccountStorage) List(ctx context.Context, opts *internalversion.ListOptions) (runtime.Object, error) {
 	return s.store.List(ctx, opts)
 }
-func (s *readDeleteStorage) Delete(ctx context.Context, name string, validate rest.ValidateObjectFunc, opts *metav1.DeleteOptions) (runtime.Object, bool, error) {
+func (s *machineAccountStorage) Delete(ctx context.Context, name string, validate rest.ValidateObjectFunc, opts *metav1.DeleteOptions) (runtime.Object, bool, error) {
 	return s.store.Delete(ctx, name, validate, opts)
 }
-func (s *readDeleteStorage) ConvertToTable(ctx context.Context, obj runtime.Object, opts runtime.Object) (*metav1.Table, error) {
+func (s *machineAccountStorage) Update(ctx context.Context, name string, info rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, opts *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	return s.store.Update(ctx, name, info, createValidation, updateValidation, false, opts)
+}
+func (s *machineAccountStorage) ConvertToTable(ctx context.Context, obj runtime.Object, opts runtime.Object) (*metav1.Table, error) {
 	return s.store.ConvertToTable(ctx, obj, opts)
 }
 
@@ -329,7 +332,7 @@ func CreateIAMAPIGroupInfo(esClient *es.Client) (*genericapiserver.APIGroupInfo,
 	userES := esstore.New(esClient, "user", "User", storage.User.(*genericregistry.Store))
 	machineStorage := machineaccountstore.NewStorage()
 	machineES := esstore.New(esClient, "machineaccount", "MachineAccount", machineStorage.MachineAccount.(*genericregistry.Store))
-	apiGroupInfo.VersionedResourcesStorageMap["v1"] = map[string]rest.Storage{"users": userES, "machineaccounts": &readDeleteStorage{store: machineES}}
+	apiGroupInfo.VersionedResourcesStorageMap["v1"] = map[string]rest.Storage{"users": userES, "machineaccounts": &machineAccountStorage{store: machineES}}
 	return &apiGroupInfo, userES, machineES
 }
 

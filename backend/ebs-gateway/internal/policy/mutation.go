@@ -48,6 +48,9 @@ func (a *Authorizer) ValidateUpdate(ctx context.Context, who identity.Principal,
 	if !reflect.DeepEqual(oldMeta["name"], newMeta["name"]) || !reflect.DeepEqual(oldMeta["namespace"], newMeta["namespace"]) {
 		return deny("resource identity cannot change")
 	}
+	if route.Resource == "machineaccounts" && (!reflect.DeepEqual(oldMeta["uid"], newMeta["uid"]) || !reflect.DeepEqual(oldMeta["resourceVersion"], newMeta["resourceVersion"])) {
+		return &Error{Status: http.StatusConflict, Message: "machine account changed; reload before updating grants"}
+	}
 	for _, name := range protectedMetadata {
 		if !reflect.DeepEqual(oldMeta[name], newMeta[name]) {
 			return deny("server metadata cannot change")
@@ -87,6 +90,22 @@ func (a *Authorizer) ValidateUpdate(ctx context.Context, who identity.Principal,
 	}
 	if route.Resource == "users" {
 		return validateAdminUser(old, candidate)
+	}
+	if route.Resource == "machineaccounts" {
+		if who.Type != identity.UserType || who.Scope != identity.AdminScope {
+			return deny("machine account updates require Admin")
+		}
+		oldSpec, newSpec := maps.Clone(objectMap(old["spec"])), maps.Clone(objectMap(candidate["spec"]))
+		if oldSpec["type"] != "service" || newSpec["type"] != "service" {
+			return deny("only service account grants can be updated")
+		}
+		for _, key := range []string{"projects", "permissions"} {
+			delete(oldSpec, key)
+			delete(newSpec, key)
+		}
+		if !reflect.DeepEqual(oldSpec, newSpec) || !reflect.DeepEqual(oldMeta, newMeta) || !reflect.DeepEqual(old["status"], candidate["status"]) {
+			return deny("only service account grants can be updated")
+		}
 	}
 	return nil
 }

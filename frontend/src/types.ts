@@ -151,10 +151,16 @@ export interface ManagedUser {
 }
 
 export type MachineAccountType = "runner" | "service";
+export type MachineAccountPermission = "projects:update" | "builds:create" | "builds:abort";
 
 export interface MachineAccount {
   metadata?: ObjectMeta;
-  spec?: { type?: MachineAccountType; tokenTTLSeconds?: number };
+  spec?: {
+    type?: MachineAccountType;
+    tokenTTLSeconds?: number;
+    projects?: string[];
+    permissions?: MachineAccountPermission[];
+  };
 }
 
 export interface Runner {

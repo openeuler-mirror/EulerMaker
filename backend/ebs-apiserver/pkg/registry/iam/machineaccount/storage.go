@@ -3,6 +3,7 @@ package machineaccount
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -47,12 +48,25 @@ func (*strategy) Validate(_ context.Context, obj runtime.Object) field.ErrorList
 }
 func (s *strategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
 	errs := s.Validate(ctx, obj)
-	oldType := old.(*iamv1.MachineAccount).Spec.Type
+	account, previous := obj.(*iamv1.MachineAccount), old.(*iamv1.MachineAccount)
+	oldType := previous.Spec.Type
 	if oldType == "" {
 		oldType = iamv1.MachineAccountRunner
 	}
-	if obj.(*iamv1.MachineAccount).Spec.Type != oldType {
+	if oldType != iamv1.MachineAccountService {
+		errs = append(errs, field.Forbidden(field.NewPath("spec"), "only service account grants can be updated"))
+	}
+	if account.Spec.Type != oldType {
 		errs = append(errs, field.Forbidden(field.NewPath("spec", "type"), "type is immutable"))
+	}
+	if account.Spec.TokenTTLSeconds != previous.Spec.TokenTTLSeconds {
+		errs = append(errs, field.Forbidden(field.NewPath("spec", "tokenTTLSeconds"), "token lifetime is immutable"))
+	}
+	nextMeta := account.ObjectMeta.DeepCopy()
+	nextMeta.ResourceVersion = previous.ResourceVersion
+	nextMeta.ManagedFields = previous.ManagedFields
+	if !equality.Semantic.DeepEqual(*nextMeta, previous.ObjectMeta) {
+		errs = append(errs, field.Forbidden(field.NewPath("metadata"), "only service account grants can be updated"))
 	}
 	return errs
 }

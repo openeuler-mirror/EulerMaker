@@ -43,9 +43,8 @@ func TestMachineAccountTypeValidation(t *testing.T) {
 				return
 			}
 			updated := account.DeepCopy()
-			updated.Spec.TokenTTLSeconds = 7200
-			if errs := s.ValidateUpdate(context.Background(), updated, account); len(errs) != 0 {
-				t.Fatalf("unchanged type rejected: %v", errs)
+			if errs := s.ValidateUpdate(context.Background(), updated, account); (len(errs) == 0) != (typ == iamv1.MachineAccountService) {
+				t.Fatalf("type=%q update errors=%v", typ, errs)
 			}
 			updated.Spec.Type = iamv1.MachineAccountRunner
 			if typ == iamv1.MachineAccountRunner {
@@ -53,6 +52,36 @@ func TestMachineAccountTypeValidation(t *testing.T) {
 			}
 			if errs := s.ValidateUpdate(context.Background(), updated, account); len(errs) == 0 {
 				t.Fatal("type change accepted")
+			}
+		})
+	}
+}
+
+func TestServiceAccountUpdateBoundary(t *testing.T) {
+	previous := &iamv1.MachineAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: "automation", UID: "id", ResourceVersion: "v1:1:1"},
+		Spec:       iamv1.MachineAccountSpec{Type: iamv1.MachineAccountService, TokenTTLSeconds: 3600},
+	}
+	for _, tc := range []struct {
+		name    string
+		change  func(*iamv1.MachineAccount)
+		allowed bool
+	}{
+		{"grants", func(a *iamv1.MachineAccount) {
+			a.Spec.Projects = []string{"demo"}
+			a.Spec.Permissions = []iamv1.MachineAccountPermission{iamv1.MachinePermissionBuildsAbort}
+		}, true},
+		{"empty grants", func(a *iamv1.MachineAccount) {}, true},
+		{"TTL", func(a *iamv1.MachineAccount) { a.Spec.TokenTTLSeconds = 7200 }, false},
+		{"labels", func(a *iamv1.MachineAccount) { a.Labels = map[string]string{"x": "y"} }, false},
+		{"annotations", func(a *iamv1.MachineAccount) { a.Annotations = map[string]string{"x": "y"} }, false},
+		{"finalizer", func(a *iamv1.MachineAccount) { a.Finalizers = []string{"example.com/keep"} }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := previous.DeepCopy()
+			tc.change(next)
+			if errs := (&strategy{}).ValidateUpdate(context.Background(), next, previous); (len(errs) == 0) != tc.allowed {
+				t.Fatalf("errors=%v", errs)
 			}
 		})
 	}
