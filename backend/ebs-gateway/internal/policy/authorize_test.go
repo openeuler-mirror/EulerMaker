@@ -136,6 +136,52 @@ func TestProjectAuthorizationMatrix(t *testing.T) {
 	}
 }
 
+func TestAuthorizationLookupBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		who    identity.Principal
+		route  Route
+		lookup bool
+		status int
+	}{
+		{"admin creates Build", identity.Principal{Type: identity.UserType, Scope: identity.AdminScope}, Route{Resource: "builds", Project: "team", Method: http.MethodPost}, false, 0},
+		{"admin deletes Build", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete}, true, 503},
+		{"admin updates Project", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true, 503},
+		{"user creates Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "projects", Method: http.MethodPost}, false, 0},
+		{"admin aborts Job", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, true, 503},
+		{"admin updates Job status", identity.Principal{Type: identity.UserType, Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "status", Method: http.MethodPatch}, false, 403},
+		{"runner reads Job", identity.Principal{Type: identity.RunnerType}, Route{Resource: "jobs", Project: "team", Name: "j", Method: http.MethodGet}, false, 0},
+		{"runner updates Job status", identity.Principal{Type: identity.RunnerType}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "status", Method: http.MethodPatch}, false, 0},
+		{"runner deletes Job", identity.Principal{Type: identity.RunnerType}, Route{Resource: "jobs", Project: "team", Name: "j", Method: http.MethodDelete}, false, 403},
+		{"runner reads Snapshot", identity.Principal{Type: identity.RunnerType}, Route{Resource: "snapshots", Project: "team", Name: "s", Method: http.MethodGet}, false, 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lookups := 0
+			client, err := upstream.New("https://api.example", roundTripFunc(func(*http.Request) (*http.Response, error) {
+				lookups++
+				return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(""))}, nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = New(client).Authorize(context.Background(), tc.who, tc.route)
+			if (lookups == 1) != tc.lookup || lookups > 1 {
+				t.Fatalf("lookups=%d, want lookup=%v", lookups, tc.lookup)
+			}
+			if tc.status == 0 {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			var classified *Error
+			if !errors.As(err, &classified) || classified.Status != tc.status {
+				t.Fatalf("error=%v, want status %d", err, tc.status)
+			}
+		})
+	}
+}
+
 func TestReadOnlyResourceAuthorization(t *testing.T) {
 	a := projectAuthorizer(t)
 	owner := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}

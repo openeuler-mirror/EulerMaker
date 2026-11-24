@@ -22,7 +22,6 @@ import (
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/oauth"
-	"ebs-gateway/internal/policy"
 	"ebs-gateway/internal/upstream"
 )
 
@@ -181,14 +180,7 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 				if parameter.Name != "watch" {
 					continue
 				}
-				route := policy.Route{Method: strings.ToUpper(method)}
-				if path == "/apis/ebs/v1/projects/{project}/jobs" {
-					route.Resource, route.Project = "jobs", "example"
-				}
-				if path == "/apis/ebs/v1/runners/{runner}/jobs" {
-					route.Resource, route.Name, route.Subresource = "runners", "example", "jobs"
-				}
-				if !policy.SupportsWatch(route) {
+				if method != "get" || (path != "/apis/ebs/v1/projects/{project}/jobs" && path != "/apis/ebs/v1/runners/{runner}/jobs") {
 					t.Fatalf("unsupported documented watch: %s %s", method, path)
 				}
 			}
