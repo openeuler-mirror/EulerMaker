@@ -154,7 +154,9 @@ spec:
   email: alice@example.com
 ```
 
-MachineAccount 保存账号用途和 Token 有效期配置：
+MachineAccount 保存账号用途、Token 有效期及 service 账号的最小授权配置。
+认证响应返回账号名称、类型及有效期；apiserver 校验、存储授权字段，Gateway 的工程范围和权限检查另行接入。以下描述目标授权契约，统一交换入口及授权规则见
+[Gateway 机器账号认证](ebs-gateway.md#machine-token)。
 
 ```yaml
 apiVersion: iam.ebs/v1
@@ -182,21 +184,35 @@ metadata:
 spec:
   type: service
   tokenTTLSeconds: 3600
+  projects:
+    - openeuler-24-03-lts-next
+  permissions:
+    - projects:update
 ```
 
 | type | 用途 |
 |------|------|
-| `runner` | Runner 接入，沿用现有 Runner Token 交换流程 |
+| `runner` | Runner 接入，通过统一机器账号交换入口取得 Runner Token |
 | `service` | 自动化服务账号，统一用于软件包同步、门禁触发等服务，不按业务分别定义类型 |
 
 - 类型使用固定枚举；创建时省略 type 默认 `runner`，显式空值和未知值拒绝。已存储的无 type 账号按 runner 读取和认证，GET 不触发回写。
 - 类型在创建时确定，不开放类型修改；现有 MachineAccount 资源仍不提供普通更新接口。
-- 内部注册请求增加可选 `type`，写入 `MachineAccount.spec.type`；对象与凭据仍单文档原子创建。
-- 内部认证请求仍只接收 name、clientSecret，成功响应返回账号名称、有效 type 和有效期，由服务端读取，不能由调用方声明或覆盖。
-- MachineAccount 的严格 ES mapping 同步增加 `data.spec.type` 的 keyword 定义；已部署索引通过现有 mapping 更新流程补齐。
-- Gateway 根据账号类型签发 Runner/Service Token；Service Token 按账号名称逐请求核验当前账号，同名 service 账号视为同一身份。
-  当前只提供 Token 换取及身份校验，不授予 service 修改 Project 或创建 Build 的权限。
-- 验收覆盖两种类型的注册、GET/List、凭据认证，省略类型的默认行为，以及空值/未知类型拒绝；Gateway 还须覆盖 service 不能换取 Runner Token。
+- 内部注册请求接收 `type`、`tokenTTLSeconds`、`projects` 和 `permissions`，写入对应 spec 字段；对象与凭据仍单文档原子创建。
+- `projects` 是去重的精确 Project 名称列表，按 Project 名称规则校验，不支持通配符或全局授权。
+  不要求注册时工程已存在；授权按名称绑定，同名工程重建后仍在范围内，写入仍须校验当轮 UID 和版本。
+- `permissions` 仅支持 `projects:update`、`builds:create`、`builds:abort`，三个权限相互独立，无隐含继承；权限适用于 `projects` 内每个工程，不增加独立 RBAC 对象或逐工程权限映射。需要不同工程权限组合时使用不同账号。
+- `projects:update` 授权更新完整 Project 主资源，不限制为软件包列表；仍遵守现有字段和并发版本校验。`builds:create` 授权创建 Build，`builds:abort` 授权调用已有 Build `/abort`，具体路由及检查顺序以 Gateway 设计为准。公开读取主动使用匿名请求，不增加读取权限，也不要求写权限依赖读取权限。
+- service 账号任一授权列表为空时没有资源访问权限，但可以换取 Token；runner 账号禁止配置非空服务授权列表。
+  未知权限、重复条目或字段类型错误均在占用账号名称、写入凭据前返回 400。
+- 注册仍仅由 Gateway 的 Admin 入口调用；首次授权随账号创建固化，暂不新增账号更新接口。
+  变更授权需删除并重新创建账号、分发新凭据。Gateway 按名称实时核验账号，同名 service 账号重建后，
+  未过期的旧 Token 恢复有效，并按当前授权配置处理请求。
+- 内部认证请求仍只接收 name、clientSecret，成功响应返回账号名称、有效 type 和有效期，不能由调用方声明或覆盖。
+- MachineAccount 的严格 ES mapping 定义 `data.spec.type`、`data.spec.projects`、`data.spec.permissions` 为 keyword；
+  已部署索引通过 mapping 更新流程补齐。apiserver 校验授权内容，Gateway 执行面向外部调用方的权限判断。
+- 验收覆盖两种类型的注册、GET/List、凭据认证、默认类型、三个权限枚举、授权字段校验和认证响应；Gateway 验收工程范围、操作权限及现有字段保护，不因 service 类型自动授予 Build 创建或中止权限。
+
+公共 IAM 类型、DeepCopy、内部注册 DTO、ES 初始 mapping 和 apiserver OpenAPI 已支持授权字段。内部注册在生成凭据及写入 ES 前复用资源校验，拒绝未知权限与重复条目，不静默过滤非法授权；存储策略对创建和更新同样执行校验，但不新增外部更新入口。已部署索引先使用 mapping 检查/更新命令补齐 `data.spec.projects`、`data.spec.permissions` 的 keyword 定义。Gateway 注册字段转发和逐请求授权校验另行接入，单独升级 apiserver 不改变 Gateway 现有放行规则；接入后，无授权字段的旧 service 账号按空列表处理，不保留全工程默认放行。首版没有在线授权编辑接口，账号替换时须向客户端下发对应凭据。
 
 IAM 模块还注册仅供 gateway 使用的内部接口：
 
@@ -239,6 +255,9 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 ```
 
 接口以201返回`{"name":"runner-site-a"}`，不回显secret。`name`满足DNS1123 label；client secret由管理端使用密码学安全随机源生成，采用无`:`的base64url编码，原始熵不少于32字节且编码长度不超过256字符；`tokenTTLSeconds`范围为300～86400，省略时默认为3600。apiserver将MachineAccount对象和Argon2id凭据哈希通过一次create-only请求写入同一ES文档；名称已存在返回409，非法请求返回400。
+
+注册 service 账号时，在注册请求中设置 `type=service`，并增加与 spec 同名的 `projects`、`permissions`。
+普通资源读取只返回账号及授权配置，不返回凭据哈希；认证响应不复制授权列表。
 
 机机认证请求为：
 

@@ -42,7 +42,10 @@ func TestUserRoundTripAndDeepCopy(t *testing.T) {
 func TestMachineAccountRoundTripAndDeepCopy(t *testing.T) {
 	original := &MachineAccountList{Items: []MachineAccount{{
 		ObjectMeta: metav1.ObjectMeta{Name: "worker", Labels: map[string]string{"team": "build"}},
-		Spec:       MachineAccountSpec{Type: MachineAccountService, TokenTTLSeconds: 3600},
+		Spec: MachineAccountSpec{
+			Type: MachineAccountService, TokenTTLSeconds: 3600,
+			Projects: []string{"demo"}, Permissions: []MachineAccountPermission{MachinePermissionProjectsUpdate},
+		},
 	}}}
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -58,6 +61,8 @@ func TestMachineAccountRoundTripAndDeepCopy(t *testing.T) {
 	copied := original.DeepCopy()
 	copied.Items[0].Spec.TokenTTLSeconds = 7200
 	copied.Items[0].Spec.Type = MachineAccountRunner
+	copied.Items[0].Spec.Projects[0] = "other"
+	copied.Items[0].Spec.Permissions[0] = MachinePermissionBuildsAbort
 	copied.Items[0].Labels["team"] = "other"
 	if !reflect.DeepEqual(original, &decoded) {
 		t.Fatal("copy modified original machine account")

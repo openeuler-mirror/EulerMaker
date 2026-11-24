@@ -2895,6 +2895,34 @@ func schema_ebs_api_iam_v1_MachineAccountSpec(ref common.ReferenceCallback) comm
 							Format: "int64",
 						},
 					},
+					"projects": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Projects and Permissions apply only to service accounts; either empty list grants no resource access.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+									},
+								},
+							},
+						},
+					},
+					"permissions": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Type:   []string{"string"},
+										Format: "",
+										Enum:   []interface{}{"builds:abort", "builds:create", "projects:update"},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},

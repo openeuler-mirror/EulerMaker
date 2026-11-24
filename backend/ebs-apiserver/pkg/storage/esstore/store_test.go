@@ -47,7 +47,7 @@ func TestMachineAccountTypeRead(t *testing.T) {
 	}{
 		{"legacy", "", iamv1.MachineAccountRunner},
 		{"runner", `,"type":"runner"`, iamv1.MachineAccountRunner},
-		{"service", `,"type":"service"`, iamv1.MachineAccountService},
+		{"service", `,"type":"service","projects":["demo"],"permissions":["projects:update","builds:create","builds:abort"]`, iamv1.MachineAccountService},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hit := map[string]any{
@@ -81,6 +81,13 @@ func TestMachineAccountTypeRead(t *testing.T) {
 			if got := obj.(*iamv1.MachineAccount).Spec.Type; got != tc.want {
 				t.Fatalf("GET type=%q", got)
 			}
+			getSpec := obj.(*iamv1.MachineAccount).Spec
+			if tc.want == iamv1.MachineAccountService && (!slices.Equal(getSpec.Projects, []string{"demo"}) ||
+				!slices.Equal(getSpec.Permissions, []iamv1.MachineAccountPermission{
+					iamv1.MachinePermissionProjectsUpdate, iamv1.MachinePermissionBuildsCreate, iamv1.MachinePermissionBuildsAbort,
+				})) {
+				t.Fatalf("GET lost grants: %+v", getSpec)
+			}
 			obj, err = store.List(context.Background(), &internalversion.ListOptions{Limit: 10})
 			if err != nil {
 				t.Fatal(err)
@@ -88,6 +95,9 @@ func TestMachineAccountTypeRead(t *testing.T) {
 			items := obj.(*iamv1.MachineAccountList).Items
 			if len(items) != 1 || items[0].Spec.Type != tc.want {
 				t.Fatalf("LIST items=%+v", items)
+			}
+			if !reflect.DeepEqual(items[0].Spec, getSpec) {
+				t.Fatalf("LIST grants differ from GET: %+v", items[0].Spec)
 			}
 			data, err := json.Marshal(obj)
 			if err != nil {

@@ -5,12 +5,12 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 
 	iamv1 "ebs-api/iam/v1"
+	"ebs-apiserver/pkg/apis/iam/validation"
 )
 
 type Storage struct{ MachineAccount rest.StandardStorage }
@@ -43,20 +43,7 @@ func (*strategy) PrepareForCreate(_ context.Context, obj runtime.Object) {
 }
 func (*strategy) PrepareForUpdate(context.Context, runtime.Object, runtime.Object) {}
 func (*strategy) Validate(_ context.Context, obj runtime.Object) field.ErrorList {
-	account := obj.(*iamv1.MachineAccount)
-	var errs field.ErrorList
-	if !account.Spec.Type.IsValid() {
-		errs = append(errs, field.NotSupported(field.NewPath("spec", "type"), account.Spec.Type, []string{"runner", "service"}))
-	}
-	if account.Name == "" {
-		errs = append(errs, field.Required(field.NewPath("metadata", "name"), "name is required"))
-	} else if messages := utilvalidation.IsDNS1123Label(account.Name); len(messages) > 0 {
-		errs = append(errs, field.Invalid(field.NewPath("metadata", "name"), account.Name, messages[0]))
-	}
-	if account.Spec.TokenTTLSeconds < 300 || account.Spec.TokenTTLSeconds > 86400 {
-		errs = append(errs, field.Invalid(field.NewPath("spec", "tokenTTLSeconds"), account.Spec.TokenTTLSeconds, "must be between 300 and 86400"))
-	}
-	return errs
+	return validation.ValidateMachineAccount(obj.(*iamv1.MachineAccount))
 }
 func (s *strategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
 	errs := s.Validate(ctx, obj)

@@ -149,7 +149,11 @@ const machineAccountIndexMapping = `{
       }}
     }},
     "data":{"type":"object","dynamic":false,"properties":{
-      "spec":{"type":"object","dynamic":false,"properties":{"type":{"type":"keyword"}}}
+      "spec":{"type":"object","dynamic":false,"properties":{
+        "type":{"type":"keyword"},
+        "projects":{"type":"keyword"},
+        "permissions":{"type":"keyword"}
+      }}
     }},
     "credential":{"type":"object","enabled":false}
   }}
