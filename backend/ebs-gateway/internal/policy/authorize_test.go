@@ -75,6 +75,35 @@ func TestProjectAuthorizationMatrix(t *testing.T) {
 	}
 }
 
+func TestReadOnlyResourceAuthorization(t *testing.T) {
+	a := projectAuthorizer(t)
+	owner := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
+	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos", "oldjobs"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+			t.Run(resource+"/"+method, func(t *testing.T) {
+				route := Route{Resource: resource, Project: "team", Name: "item", Method: method}
+				if err := a.Authorize(context.Background(), owner, route); (err == nil) != (method == http.MethodGet) {
+					t.Fatalf("Authorize() error=%v, want allow=%v", err, method == http.MethodGet)
+				}
+			})
+		}
+	}
+}
+
+func TestIAMAuthorization(t *testing.T) {
+	a := &Authorizer{}
+	for _, resource := range []string{"users", "machineaccounts"} {
+		for _, scope := range []identity.Scope{identity.UserScope, identity.OpsScope, identity.AdminScope} {
+			t.Run(resource+"/"+string(scope), func(t *testing.T) {
+				who := identity.Principal{Type: identity.UserType, Subject: "operator", Scope: scope}
+				if err := a.Authorize(context.Background(), who, Route{Resource: resource, Method: http.MethodGet}); (err == nil) != (scope == identity.AdminScope) {
+					t.Fatalf("Authorize() error=%v, want allow=%v", err, scope == identity.AdminScope)
+				}
+			})
+		}
+	}
+}
+
 func TestBuildDeletionRequiresProjectOwner(t *testing.T) {
 	a := projectAuthorizer(t)
 	route := Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete}

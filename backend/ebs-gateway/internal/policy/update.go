@@ -19,6 +19,30 @@ var protectedMetadata = []string{
 }
 
 func (a *Authorizer) ValidateUpdate(ctx context.Context, who identity.Principal, route Route, old, candidate mutation.Object) error {
+	if err := validateUpdateIdentity(route, old, candidate); err != nil {
+		return err
+	}
+	if route.Subresource == "status" {
+		return validateStatusUpdate(who, route, old, candidate)
+	}
+	if err := validateOrdinaryMetadata(route, old, candidate); err != nil {
+		return err
+	}
+	switch route.Resource {
+	case "projects":
+		return a.validateProjectUpdate(ctx, who, old, candidate)
+	case "runners":
+		return validateRunnerUpdate(who, old, candidate)
+	case "users":
+		return validateAdminUser(old, candidate)
+	case "machineaccounts":
+		return validateMachineAccountUpdate(who, old, candidate)
+	default:
+		return nil
+	}
+}
+
+func validateUpdateIdentity(route Route, old, candidate mutation.Object) error {
 	if route.Name == "" {
 		return &Error{Status: http.StatusBadRequest, Message: "object name required"}
 	}
@@ -59,57 +83,63 @@ func (a *Authorizer) ValidateUpdate(ctx context.Context, who identity.Principal,
 	if route.Resource != "runners" && !reflect.DeepEqual(oldMeta["resourceVersion"], newMeta["resourceVersion"]) {
 		return deny("resourceVersion cannot be changed by Gateway caller")
 	}
-	if route.Subresource == "status" {
-		if !reflect.DeepEqual(old["spec"], candidate["spec"]) || !reflect.DeepEqual(old["metadata"], candidate["metadata"]) && !(route.Resource == "runners" && equalMetadataExceptVersion(oldMeta, newMeta)) {
-			return deny("status update cannot modify metadata or spec")
-		}
-		return validateStatusUpdate(who, route, old, candidate)
-	}
+	return nil
+}
+
+func validateOrdinaryMetadata(route Route, old, candidate mutation.Object) error {
 	// The apiserver preserves stored status on ordinary updates, including
 	// when callers omit status or send a stale copy.
+	oldMeta := objectMap(old["metadata"])
+	newMeta := objectMap(candidate["metadata"])
 	if !equalMetadataExceptUserFields(oldMeta, newMeta, route.Resource == "runners") {
 		return deny("protected metadata changed")
 	}
-	if route.Resource == "runners" && who.Type == identity.RunnerType {
-		return validateRunnerOrdinary(oldMeta, newMeta, objectMap(old["spec"]), objectMap(candidate["spec"]))
+	return nil
+}
+
+func (a *Authorizer) validateProjectUpdate(ctx context.Context, who identity.Principal, old, candidate mutation.Object) error {
+	oldMeta := objectMap(old["metadata"])
+	newMeta := objectMap(candidate["metadata"])
+	if who.Scope == identity.AdminScope {
+		// Admin owners may manage purpose, without gaining ordinary Project update privileges.
+		oldLabels := maps.Clone(objectMap(oldMeta["labels"]))
+		newLabels := maps.Clone(objectMap(newMeta["labels"]))
+		delete(oldLabels, ebsv1.BuildPurposeLabel)
+		delete(newLabels, ebsv1.BuildPurposeLabel)
+		if !reflect.DeepEqual(old["spec"], candidate["spec"]) ||
+			!reflect.DeepEqual(oldMeta["annotations"], newMeta["annotations"]) ||
+			!maps.EqualFunc(oldLabels, newLabels, reflect.DeepEqual) {
+			return deny("Admin Project updates may only change build purpose")
+		}
 	}
-	if route.Resource == "projects" {
-		if who.Scope == identity.AdminScope {
-			// Admin owners may manage purpose, without gaining ordinary Project update privileges.
-			oldLabels := maps.Clone(objectMap(oldMeta["labels"]))
-			newLabels := maps.Clone(objectMap(newMeta["labels"]))
-			delete(oldLabels, ebsv1.BuildPurposeLabel)
-			delete(newLabels, ebsv1.BuildPurposeLabel)
-			if !reflect.DeepEqual(old["spec"], candidate["spec"]) ||
-				!reflect.DeepEqual(oldMeta["annotations"], newMeta["annotations"]) ||
-				!maps.EqualFunc(oldLabels, newLabels, reflect.DeepEqual) {
-				return deny("Admin Project updates may only change build purpose")
-			}
-		}
-		return a.validateProjectLabels(ctx, who, oldMeta, newMeta)
+	return a.validateProjectLabels(ctx, who, oldMeta, newMeta)
+}
+
+func validateRunnerUpdate(who identity.Principal, old, candidate mutation.Object) error {
+	if who.Type != identity.RunnerType {
+		return nil
 	}
-	if route.Resource == "users" {
-		return validateAdminUser(old, candidate)
+	return validateRunnerOrdinary(objectMap(old["metadata"]), objectMap(candidate["metadata"]), objectMap(old["spec"]), objectMap(candidate["spec"]))
+}
+
+func validateMachineAccountUpdate(who identity.Principal, old, candidate mutation.Object) error {
+	if who.Type != identity.UserType || who.Scope != identity.AdminScope {
+		return deny("machine account updates require Admin")
 	}
-	if route.Resource == "machineaccounts" {
-		if who.Type != identity.UserType || who.Scope != identity.AdminScope {
-			return deny("machine account updates require Admin")
-		}
-		oldSpec, newSpec := maps.Clone(objectMap(old["spec"])), maps.Clone(objectMap(candidate["spec"]))
-		if (oldSpec["type"] != "service" && oldSpec["type"] != "runner") || newSpec["type"] != oldSpec["type"] {
-			return deny("machine account type is immutable")
-		}
-		allowed := []string{"tokenTTLSeconds"}
-		if oldSpec["type"] == "service" {
-			allowed = append(allowed, "projects", "permissions")
-		}
-		for _, key := range allowed {
-			delete(oldSpec, key)
-			delete(newSpec, key)
-		}
-		if !reflect.DeepEqual(oldSpec, newSpec) || !reflect.DeepEqual(oldMeta, newMeta) || !reflect.DeepEqual(old["status"], candidate["status"]) {
-			return deny("only token lifetime and service account grants can be updated")
-		}
+	oldSpec, newSpec := maps.Clone(objectMap(old["spec"])), maps.Clone(objectMap(candidate["spec"]))
+	if (oldSpec["type"] != "service" && oldSpec["type"] != "runner") || newSpec["type"] != oldSpec["type"] {
+		return deny("machine account type is immutable")
+	}
+	allowed := []string{"tokenTTLSeconds"}
+	if oldSpec["type"] == "service" {
+		allowed = append(allowed, "projects", "permissions")
+	}
+	for _, key := range allowed {
+		delete(oldSpec, key)
+		delete(newSpec, key)
+	}
+	if !reflect.DeepEqual(oldSpec, newSpec) || !reflect.DeepEqual(old["metadata"], candidate["metadata"]) || !reflect.DeepEqual(old["status"], candidate["status"]) {
+		return deny("only token lifetime and service account grants can be updated")
 	}
 	return nil
 }
@@ -152,6 +182,13 @@ func equalMetadataExceptUserFields(old, next map[string]any, allowVersion bool) 
 }
 
 func validateStatusUpdate(who identity.Principal, route Route, old, candidate mutation.Object) error {
+	metadataEqual := reflect.DeepEqual(old["metadata"], candidate["metadata"])
+	if route.Resource == "runners" {
+		metadataEqual = metadataEqual || equalMetadataExceptVersion(objectMap(old["metadata"]), objectMap(candidate["metadata"]))
+	}
+	if !reflect.DeepEqual(old["spec"], candidate["spec"]) || !metadataEqual {
+		return deny("status update cannot modify metadata or spec")
+	}
 	if route.Resource == "jobs" && who.Type != identity.RunnerType {
 		return deny("Job status is not user-writable")
 	}
@@ -233,27 +270,27 @@ func (a *Authorizer) validateProjectLabels(ctx context.Context, who identity.Pri
 	oldPurpose, oldSet := oldLabels[ebsv1.BuildPurposeLabel]
 	newPurpose, newSet := newLabels[ebsv1.BuildPurposeLabel]
 	if (oldSet != newSet || !reflect.DeepEqual(oldPurpose, newPurpose)) &&
-		(!who.IsPrivileged() || oldLabels["ebs.io/owner-user"] != who.Subject) {
+		(!who.IsPrivileged() || oldLabels[ebsv1.ProjectOwnerUserLabel] != who.Subject) {
 		return deny("Project build purpose requires an Ops or Admin owner")
 	}
-	if who.Scope == identity.UserScope && !reflect.DeepEqual(oldLabels["project.ebs.io/type"], newLabels["project.ebs.io/type"]) {
-		if oldLabels["project.ebs.io/type"] != nil || newLabels["project.ebs.io/type"] != "personal" {
+	if who.Scope == identity.UserScope && !reflect.DeepEqual(oldLabels[ebsv1.ProjectTypeLabel], newLabels[ebsv1.ProjectTypeLabel]) {
+		if oldLabels[ebsv1.ProjectTypeLabel] != nil || newLabels[ebsv1.ProjectTypeLabel] != "personal" {
 			return deny("ordinary users cannot change Project type")
 		}
 	}
-	oldOwner := oldLabels["ebs.io/owner-user"]
-	newOwner := newLabels["ebs.io/owner-user"]
+	oldOwner := oldLabels[ebsv1.ProjectOwnerUserLabel]
+	newOwner := newLabels[ebsv1.ProjectOwnerUserLabel]
 	if !reflect.DeepEqual(oldOwner, newOwner) {
 		return deny("Project owner cannot be changed")
 	}
 	for name, value := range newLabels {
-		if !strings.HasPrefix(name, "ebs.io/member-user.") || reflect.DeepEqual(oldLabels[name], value) {
+		if !strings.HasPrefix(name, ebsv1.ProjectMemberUserLabelPrefix) || reflect.DeepEqual(oldLabels[name], value) {
 			continue
 		}
 		if value != "true" {
 			return deny("invalid Project member label")
 		}
-		if err := a.validateMember(ctx, strings.TrimPrefix(name, "ebs.io/member-user.")); err != nil {
+		if err := a.validateMember(ctx, strings.TrimPrefix(name, ebsv1.ProjectMemberUserLabelPrefix)); err != nil {
 			return err
 		}
 	}

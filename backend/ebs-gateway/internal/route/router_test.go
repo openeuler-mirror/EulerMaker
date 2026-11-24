@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/handler"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
@@ -482,7 +483,7 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 						t.Fatal(err)
 					}
 					if obj.Spec.Description != "new" || obj.Metadata.UID != "project-uid" ||
-						obj.Metadata.ResourceVersion != "v1:1:1" || obj.Metadata.Labels["ebs.io/owner-user"] != "owner" {
+						obj.Metadata.ResourceVersion != "v1:1:1" || obj.Metadata.Labels[ebsv1.ProjectOwnerUserLabel] != "owner" {
 						t.Fatalf("forwarded project = %+v", obj)
 					}
 				case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/team/builds":
