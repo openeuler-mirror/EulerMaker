@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -56,95 +57,248 @@ func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
 		if policy.HasWatch(c.Request.URL.Query()) {
 			public = false
 		}
-		header := c.GetHeader("Authorization")
-		var who identity.Principal
-		if header == "" && public {
-			c.Set("anonymous", true)
-		} else {
-			if !a.auth.Verify(c) {
-				return
-			}
-			who = middleware.Principal(c)
-			if !a.auth.ConfirmUser(c, who) {
-				return
-			}
+		if !a.authenticateResource(c, public) {
+			return
 		}
+		who := middleware.Principal(c)
 		if who.Type == identity.ServiceType || (who.Type == identity.RunnerType && resolved.Resource != "configs") {
 			public = false
 		}
 		if who.Type == identity.ServiceType {
-			project, permission := policy.ServiceOperation(resolved)
-			if project == "" {
-				project = resolved.Project
-				if resolved.Resource == "projects" {
-					project = resolved.Name
-				}
-			}
-			c.Set("serviceProject", project)
-			c.Set("servicePermission", string(permission))
-			c.Set("serviceAuthorization", "denied")
+			prepareServiceAudit(c, resolved)
 		}
-		if !allowedResourceMethod(resolved) {
-			c.Header("Allow", allowedResourceVerbs(resolved))
-			c.AbortWithStatus(http.StatusMethodNotAllowed)
-			return
-		}
-		if policy.HasWatch(c.Request.URL.Query()) && !policy.SupportsWatch(resolved) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "watch is not supported for this route"})
+		if !validateResourceRoute(c, resolved) {
 			return
 		}
 		if public {
-			if !a.publicLimit.Allow(c.ClientIP()) {
-				c.Header("Retry-After", "1")
-				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+			if !a.preparePublicRead(c, resolved) {
 				return
 			}
-			if resolved.Name == "" && resolved.Subresource == "" {
-				query := c.Request.URL.Query()
-				limit, err := strconv.Atoi(query.Get("limit"))
-				if err != nil || limit < 1 || limit > 100 || len(query["limit"]) != 1 {
-					query.Set("limit", "100")
-					c.Request.URL.RawQuery = query.Encode()
-				}
-			}
-			c.Set("public", true)
-		} else {
-			if !a.limits.Allow(who.Subject + "/" + c.ClientIP()) {
-				c.Header("Retry-After", "1")
-				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
-				return
-			}
-			if err := a.policy.Authorize(c.Request.Context(), who, resolved); err != nil {
-				status := http.StatusForbidden
-				if classified, ok := err.(*policy.Error); ok {
-					status = classified.Status
-				}
-				c.AbortWithStatusJSON(status, gin.H{"error": err.Error()})
-				return
-			}
-			if who.Type == identity.ServiceType {
-				c.Set("serviceAuthorization", "allowed")
-			}
-			if who.Type == identity.RunnerType && resolved.Resource == "runners" && resolved.Subresource == "jobs" {
-				if !validRunnerJobsQuery(c.Request.URL.Query()) {
-					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unsupported Runner Jobs query"})
-					return
-				}
-			}
+		} else if !a.authorizeResource(c, who, resolved) {
+			return
 		}
 		c.Next()
 	}
 }
 
+func (a *Handler) authenticateResource(c *gin.Context, public bool) bool {
+	if c.GetHeader("Authorization") == "" && public {
+		c.Set("anonymous", true)
+		return true
+	}
+	if !a.auth.Verify(c) {
+		return false
+	}
+	return a.auth.ConfirmUser(c, middleware.Principal(c))
+}
+
+func prepareServiceAudit(c *gin.Context, route policy.Route) {
+	project, permission := policy.ServiceOperation(route)
+	if project == "" {
+		project = route.Project
+		if route.Resource == "projects" {
+			project = route.Name
+		}
+	}
+	c.Set("serviceProject", project)
+	c.Set("servicePermission", string(permission))
+	c.Set("serviceAuthorization", "denied")
+}
+
+func validateResourceRoute(c *gin.Context, route policy.Route) bool {
+	switch route.Resource {
+	case "projects":
+		return validateProjectRoute(c, route)
+	case "runners":
+		return validateRunnerRoute(c, route)
+	case "builds":
+		return validateBuildRoute(c, route)
+	case "jobs":
+		return validateJobRoute(c, route)
+	case "configs":
+		return validateConfigRoute(c, route)
+	case "scripts":
+		return validateScriptRoute(c, route)
+	case "snapshots", "buildinfos", "buildgraphs", "rpmrepos":
+		return validateReadOnlyRoute(c, route)
+	case "oldjobs":
+		return validateOldJobRoute(c, route)
+	default:
+		return validateRouteMethods(c, route, false)
+	}
+}
+
+func validateProjectRoute(c *gin.Context, route policy.Route) bool {
+	switch {
+	case route.Name == "" && route.Subresource == "":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPost)
+	case route.Name != "" && (route.Subresource == "" || route.Subresource == "status"):
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch)
+	default:
+		return validateRouteMethods(c, route, false)
+	}
+}
+
+func validateRunnerRoute(c *gin.Context, route policy.Route) bool {
+	switch {
+	case route.Name == "" && route.Subresource == "":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPost)
+	case route.Name != "" && route.Subresource == "":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete)
+	case route.Name != "" && route.Subresource == "status":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch)
+	case route.Name != "" && route.Subresource == "jobs":
+		return validateRouteMethods(c, route, route.Project == "", http.MethodGet)
+	default:
+		return validateRouteMethods(c, route, false)
+	}
+}
+
+func validateBuildRoute(c *gin.Context, route policy.Route) bool {
+	switch {
+	case route.Name == "" && route.Subresource == "":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPost)
+	case route.Name != "" && route.Subresource == "":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete)
+	case route.Name != "" && route.Subresource == "status":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch)
+	case route.Name != "" && route.Subresource == "abort":
+		return validateRouteMethods(c, route, false, http.MethodPost)
+	default:
+		return validateRouteMethods(c, route, false)
+	}
+}
+
+func validateJobRoute(c *gin.Context, route policy.Route) bool {
+	switch {
+	case route.Name == "" && route.Subresource == "":
+		return validateRouteMethods(c, route, route.Project != "" && route.Method == http.MethodGet,
+			http.MethodGet, http.MethodHead, http.MethodPost)
+	case route.Name != "" && route.Subresource == "":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete)
+	case route.Name != "" && route.Subresource == "status":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch)
+	case route.Name != "" && route.Subresource == "abort":
+		return validateRouteMethods(c, route, false, http.MethodPost)
+	default:
+		return validateRouteMethods(c, route, false)
+	}
+}
+
+func validateConfigRoute(c *gin.Context, route policy.Route) bool {
+	switch {
+	case route.Subresource != "":
+		return validateRouteMethods(c, route, false)
+	case route.Name == "":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPost)
+	default:
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete)
+	}
+}
+
+func validateScriptRoute(c *gin.Context, route policy.Route) bool {
+	switch {
+	case route.Subresource != "":
+		return validateRouteMethods(c, route, false)
+	case route.Name == "":
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodPost)
+	default:
+		return validateRouteMethods(c, route, false, http.MethodGet, http.MethodPut, http.MethodPatch, http.MethodDelete)
+	}
+}
+
+func validateReadOnlyRoute(c *gin.Context, route policy.Route) bool {
+	if route.Subresource == "" || (route.Name != "" && route.Subresource == "status") {
+		return validateRouteMethods(c, route, false, http.MethodGet)
+	}
+	return validateRouteMethods(c, route, false)
+}
+
+func validateOldJobRoute(c *gin.Context, route policy.Route) bool {
+	if route.Subresource == "" {
+		return validateRouteMethods(c, route, false, http.MethodGet)
+	}
+	return validateRouteMethods(c, route, false)
+}
+
+func validateRouteMethods(c *gin.Context, route policy.Route, watchAllowed bool, methods ...string) bool {
+	if !slices.Contains(methods, route.Method) {
+		c.Header("Allow", strings.Join(methods, ", "))
+		c.AbortWithStatus(http.StatusMethodNotAllowed)
+		return false
+	}
+	if policy.HasWatch(c.Request.URL.Query()) && !watchAllowed {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "watch is not supported for this route"})
+		return false
+	}
+	return true
+}
+
+func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
+	if !a.publicLimit.Allow(c.ClientIP()) {
+		c.Header("Retry-After", "1")
+		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+		return false
+	}
+	if route.Name == "" && route.Subresource == "" {
+		query := c.Request.URL.Query()
+		limit, err := strconv.Atoi(query.Get("limit"))
+		if err != nil || limit < 1 || limit > 100 || len(query["limit"]) != 1 {
+			query.Set("limit", "100")
+			c.Request.URL.RawQuery = query.Encode()
+		}
+	}
+	c.Set("public", true)
+	return true
+}
+
+func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route) bool {
+	if !a.limits.Allow(who.Subject + "/" + c.ClientIP()) {
+		c.Header("Retry-After", "1")
+		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+		return false
+	}
+	if err := a.policy.Authorize(c.Request.Context(), who, route); err != nil {
+		status := http.StatusForbidden
+		if classified, ok := err.(*policy.Error); ok {
+			status = classified.Status
+		}
+		c.AbortWithStatusJSON(status, gin.H{"error": err.Error()})
+		return false
+	}
+	if who.Type == identity.ServiceType {
+		c.Set("serviceAuthorization", "allowed")
+	}
+	return true
+}
+
 func (a *Handler) forwardResource(route resourceRoute) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		resolved := route.at(c)
-		if route.resource == "configs" && c.Param("name") != "" && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) {
-			a.serveConfig(c)
+		who := middleware.Principal(c)
+		switch resolved.Resource {
+		case "configs":
+			if resolved.Name != "" && (resolved.Method == http.MethodGet || resolved.Method == http.MethodHead) {
+				a.serveConfig(c)
+				return
+			}
+		case "runners":
+			a.forwardRunnerResource(c, who, resolved)
+			return
+		case "jobs":
+			a.forwardJobResource(c, who, resolved)
 			return
 		}
-		who := middleware.Principal(c)
-		if who.Type == identity.RunnerType && route.resource == "runners" && route.subresource == "jobs" && c.Query("watch") == "true" {
+		a.forwardRequest(c, who, resolved)
+	}
+}
+
+func (a *Handler) forwardRunnerResource(c *gin.Context, who identity.Principal, route policy.Route) {
+	if who.Type == identity.RunnerType && route.Subresource == "jobs" {
+		if !validateRunnerJobsRequest(c) {
+			return
+		}
+		if c.Query("watch") == "true" {
 			if !a.acquireRunnerWatch(who.Runner) {
 				c.Header("Retry-After", "5")
 				c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many Runner watches"})
@@ -152,29 +306,44 @@ func (a *Handler) forwardResource(route resourceRoute) gin.HandlerFunc {
 			}
 			defer a.releaseRunnerWatch(who.Runner)
 		}
-		if who.Type == identity.RunnerType && route.resource == "jobs" && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) {
-			if !a.runnerOwnsJob(c, who.Runner) {
-				return
-			}
-		}
-		if c.Request.Method == http.MethodPost && route.subresource == "" {
-			if !a.prepareCreate(c, who, resolved) {
-				return
-			}
-		}
-		if (c.Request.Method == http.MethodPost && route.subresource == "abort") || c.Request.Method == http.MethodDelete {
-			if !a.limitWriteBody(c) {
-				return
-			}
-		}
-		if c.Request.Method == http.MethodPut || c.Request.Method == http.MethodPatch {
-			if !a.prepareUpdate(c, who, resolved) {
-				return
-			}
-		}
-		public, _ := c.Get("public")
-		a.upstream.Forward(c, public == true)
 	}
+	a.forwardRequest(c, who, route)
+}
+
+func (a *Handler) forwardJobResource(c *gin.Context, who identity.Principal, route policy.Route) {
+	if who.Type == identity.RunnerType && (route.Method == http.MethodGet || route.Method == http.MethodHead) {
+		if !a.runnerOwnsJob(c, who.Runner) {
+			return
+		}
+	}
+	a.forwardRequest(c, who, route)
+}
+
+func (a *Handler) forwardRequest(c *gin.Context, who identity.Principal, route policy.Route) {
+	if route.Method == http.MethodPost && route.Subresource == "" {
+		if !a.prepareCreate(c, who, route) {
+			return
+		}
+	}
+	if (route.Method == http.MethodPost && route.Subresource == "abort") || route.Method == http.MethodDelete {
+		if !a.limitWriteBody(c) {
+			return
+		}
+	}
+	if route.Method == http.MethodPut || route.Method == http.MethodPatch {
+		if !a.prepareUpdate(c, who, route) {
+			return
+		}
+	}
+	a.upstream.Forward(c, c.GetBool("public"))
+}
+
+func validateRunnerJobsRequest(c *gin.Context) bool {
+	if !validRunnerJobsQuery(c.Request.URL.Query()) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unsupported Runner Jobs query"})
+		return false
+	}
+	return true
 }
 
 func (a *Handler) limitWriteBody(c *gin.Context) bool {
@@ -191,62 +360,6 @@ func (a *Handler) limitWriteBody(c *gin.Context) bool {
 	c.Request.Body = io.NopCloser(bytes.NewReader(raw))
 	c.Request.ContentLength = int64(len(raw))
 	return true
-}
-
-func allowedResourceMethod(route policy.Route) bool {
-	if route.Resource == "projects" && route.Method == http.MethodDelete {
-		return false
-	}
-	method := route.Method
-	if route.Resource == "scripts" && method == http.MethodHead {
-		return false
-	}
-	if policy.IsReadOnlyProjectResource(route.Resource) {
-		return method == http.MethodGet && (route.Subresource == "" || (route.Subresource == "status" && route.Name != ""))
-	}
-	switch route.Subresource {
-	case "abort":
-		return route.Name != "" && method == http.MethodPost
-	case "jobs":
-		return route.Name != "" && method == http.MethodGet
-	case "status":
-		return route.Name != "" && (method == http.MethodGet || method == http.MethodHead || method == http.MethodPut || method == http.MethodPatch)
-	case "":
-		if route.Name == "" {
-			return method == http.MethodGet || method == http.MethodHead || method == http.MethodPost
-		}
-		return method == http.MethodGet || method == http.MethodHead || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete
-	default:
-		return false
-	}
-}
-
-func allowedResourceVerbs(route policy.Route) string {
-	if route.Resource == "projects" && route.Name != "" {
-		return "GET, HEAD, PUT, PATCH"
-	}
-	if policy.IsReadOnlyProjectResource(route.Resource) {
-		return "GET"
-	}
-	if route.Resource == "scripts" {
-		if route.Name == "" {
-			return "GET, POST"
-		}
-		return "GET, PUT, PATCH, DELETE"
-	}
-	switch route.Subresource {
-	case "abort":
-		return "POST"
-	case "jobs":
-		return "GET"
-	case "status":
-		return "GET, HEAD, PUT, PATCH"
-	default:
-		if route.Name == "" {
-			return "GET, HEAD, POST"
-		}
-		return "GET, HEAD, PUT, PATCH, DELETE"
-	}
 }
 
 func validRunnerJobsQuery(query url.Values) bool {

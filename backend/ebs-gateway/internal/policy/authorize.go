@@ -72,28 +72,101 @@ func (a *Authorizer) authorizeProject(ctx context.Context, who identity.Principa
 	if route.Method == http.MethodDelete {
 		return deny("Project deletion is not available through Gateway")
 	}
-	return a.projectResource(ctx, who, route)
+	if who.Type == identity.RunnerType {
+		return deny("Runner project access denied")
+	}
+	if route.Name != "" && isWrite(route.Method) {
+		adminUpdate := who.Scope == identity.AdminScope && route.Subresource == "" &&
+			(route.Method == http.MethodPut || route.Method == http.MethodPatch)
+		if who.Type != identity.UserType || (who.Scope != identity.UserScope && who.Scope != identity.OpsScope && !adminUpdate) {
+			return deny("only the Project owner can modify Project")
+		}
+		access, err := a.projectAccess(ctx, route.Name, who.Subject)
+		if err != nil {
+			return err
+		}
+		if !access.owner {
+			return deny("only the Project owner can modify Project")
+		}
+		return nil
+	}
+	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
+		return nil
+	}
+	if who.IsUser() && route.Name == "" && route.Method == http.MethodPost {
+		return nil // Creation injects the caller's owner label in the Project handler.
+	}
+	_, err := a.projectMembership(ctx, who, route.Name)
+	return err
 }
 
 func (a *Authorizer) authorizeBuild(ctx context.Context, who identity.Principal, route Route) error {
 	if route.Method == http.MethodPut || route.Method == http.MethodPatch {
 		return deny("Build updates are not available through Gateway")
 	}
-	return a.projectResource(ctx, who, route)
+	if who.Type == identity.RunnerType {
+		return deny("Runner project access denied")
+	}
+	if route.Method == http.MethodDelete {
+		if who.Type != identity.UserType || who.Subject == "" || route.Project == "" {
+			return deny("only the Project owner can delete Build")
+		}
+		access, err := a.projectAccess(ctx, route.Project, who.Subject)
+		if err != nil {
+			return err
+		}
+		if !access.owner {
+			return deny("only the Project owner can delete Build")
+		}
+		return nil
+	}
+	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
+		return nil
+	}
+	_, err := a.projectMembership(ctx, who, route.Project)
+	return err
 }
 
 func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, route Route) error {
 	if route.Subresource == "abort" {
 		return a.jobAbort(ctx, who, route)
 	}
-	return a.projectResource(ctx, who, route)
+	if who.Type == identity.RunnerType {
+		if route.Project != "" && route.Name != "" &&
+			((route.Subresource == "" && (route.Method == http.MethodGet || route.Method == http.MethodHead)) ||
+				(route.Subresource == "status" && (route.Method == http.MethodPut || route.Method == http.MethodPatch))) {
+			return nil // Object assignment is verified by the Job handler before forwarding.
+		}
+		return deny("Runner project access denied")
+	}
+	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
+		if route.Subresource == "status" {
+			return deny("Admin cannot update Job status")
+		}
+		return nil
+	}
+	access, err := a.projectMembership(ctx, who, route.Project)
+	if err != nil {
+		return err
+	}
+	if route.Subresource == "status" && isWrite(route.Method) {
+		return deny("user cannot update Job status")
+	}
+	if !access.owner && route.Method == http.MethodDelete {
+		return deny("Project member cannot delete resource")
+	}
+	return nil
 }
 
 func (a *Authorizer) authorizeReadOnlyResource(ctx context.Context, who identity.Principal, route Route) error {
 	if route.Method != http.MethodGet {
 		return deny("resource is read-only through Gateway")
 	}
-	return a.projectResource(ctx, who, route)
+	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
+		return nil
+	}
+	_, err := a.projectMembership(ctx, who, route.Project)
+	return err
 }
 
 func authorizeIAM(who identity.Principal) error {
@@ -236,82 +309,24 @@ func authorizeRunner(who identity.Principal, route Route) error {
 	return deny("Runner operation denied")
 }
 
-func (a *Authorizer) projectResource(ctx context.Context, who identity.Principal, route Route) error {
+func (a *Authorizer) projectMembership(ctx context.Context, who identity.Principal, project string) (access, error) {
 	if who.Type == identity.RunnerType {
-		if route.Resource == "jobs" && route.Project != "" && route.Name != "" &&
-			((route.Subresource == "" && (route.Method == http.MethodGet || route.Method == http.MethodHead)) ||
-				(route.Subresource == "status" && (route.Method == http.MethodPut || route.Method == http.MethodPatch))) {
-			return nil // Object assignment is verified by the Job handler before forwarding.
-		}
-		return deny("Runner project access denied")
-	}
-	if route.Resource == "projects" && route.Name != "" && isWrite(route.Method) {
-		adminPurposeUpdate := who.Scope == identity.AdminScope && route.Subresource == "" &&
-			(route.Method == http.MethodPut || route.Method == http.MethodPatch)
-		if who.Type != identity.UserType || (who.Scope != identity.UserScope && who.Scope != identity.OpsScope && !adminPurposeUpdate) {
-			return deny("only the Project owner can modify Project")
-		}
-		access, err := a.projectAccess(ctx, route.Name, who.Subject)
-		if err != nil {
-			return err
-		}
-		if !access.owner {
-			return deny("only the Project owner can modify Project")
-		}
-		return nil
-	}
-	if route.Resource == "builds" && route.Method == http.MethodDelete {
-		if who.Type != identity.UserType || who.Subject == "" || route.Project == "" {
-			return deny("only the Project owner can delete Build")
-		}
-		access, err := a.projectAccess(ctx, route.Project, who.Subject)
-		if err != nil {
-			return err
-		}
-		if !access.owner {
-			return deny("only the Project owner can delete Build")
-		}
-		return nil
-	}
-	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
-		if route.Resource == "jobs" && route.Subresource == "status" && who.Scope == identity.AdminScope {
-			return deny("Admin cannot update Job status")
-		}
-		return nil
+		return access{}, deny("Runner project access denied")
 	}
 	if !who.IsUser() {
-		return deny("project access denied")
-	}
-	if route.Resource == "projects" && route.Name == "" && route.Method == http.MethodPost {
-		return nil // Creation injects the caller's owner label in the Project handler.
-	}
-	project := route.Project
-	if route.Resource == "projects" {
-		project = route.Name
+		return access{}, deny("project access denied")
 	}
 	if project == "" {
-		return deny("project name required")
+		return access{}, deny("project name required")
 	}
-	access, err := a.projectAccess(ctx, project, who.Subject)
+	membership, err := a.projectAccess(ctx, project, who.Subject)
 	if err != nil {
-		return err
+		return access{}, err
 	}
-	if !access.owner && !access.member {
-		return deny("project access denied")
+	if !membership.owner && !membership.member {
+		return access{}, deny("project access denied")
 	}
-	if route.Resource == "projects" {
-		if !access.owner && isWrite(route.Method) {
-			return deny("only the Project owner can modify Project")
-		}
-		return nil
-	}
-	if route.Resource == "jobs" && route.Subresource == "status" && isWrite(route.Method) {
-		return deny("user cannot update Job status")
-	}
-	if access.member && !access.owner && route.Method == http.MethodDelete {
-		return deny("Project member cannot delete resource")
-	}
-	return nil
+	return membership, nil
 }
 
 func isWrite(method string) bool {
@@ -379,22 +394,6 @@ func IsPublicRead(route Route) bool {
 	switch route.Resource {
 	case "snapshots", "builds", "buildinfos", "buildgraphs", "rpmrepos", "jobs", "oldjobs":
 		return true
-	default:
-		return false
-	}
-}
-
-// SupportsWatch identifies Job collection routes exposed for watch through Gateway.
-// Authentication and resource permissions are checked separately.
-func SupportsWatch(route Route) bool {
-	if route.Method != http.MethodGet {
-		return false
-	}
-	switch route.Resource {
-	case "jobs":
-		return route.Project != "" && route.Name == "" && route.Subresource == ""
-	case "runners":
-		return route.Project == "" && route.Name != "" && route.Subresource == "jobs"
 	default:
 		return false
 	}

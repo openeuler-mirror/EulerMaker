@@ -14,9 +14,7 @@ import (
 	"ebs-gateway/internal/policy"
 )
 
-func (a *Handler) IAM(resource string) gin.HandlerFunc { return a.serveIAM(resource) }
-
-func (a *Handler) serveIAM(resource string) gin.HandlerFunc {
+func (a *Handler) IAM(resource string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		method := c.Request.Method
 		name := c.Param("name")
