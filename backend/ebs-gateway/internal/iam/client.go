@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"net/url"
 
+	"k8s.io/apimachinery/pkg/util/sets"
+	validation "k8s.io/apimachinery/pkg/util/validation"
+
 	iamv1 "ebs-api/iam/v1"
 
 	"ebs-gateway/internal/identity"
@@ -105,6 +108,20 @@ func (c *Client) GetMachine(ctx context.Context, name string) (*iamv1.MachineAcc
 	}
 	if account.Name == "" || !account.Spec.Type.IsValid() {
 		return nil, response.StatusCode, fmt.Errorf("invalid IAM machine account response")
+	}
+	projects := sets.New[string]()
+	for _, project := range account.Spec.Projects {
+		if len(validation.IsDNS1123Label(project)) != 0 || projects.Has(project) {
+			return nil, response.StatusCode, fmt.Errorf("invalid IAM machine account projects")
+		}
+		projects.Insert(project)
+	}
+	permissions := sets.New[iamv1.MachineAccountPermission]()
+	for _, permission := range account.Spec.Permissions {
+		if !permission.IsValid() || permissions.Has(permission) {
+			return nil, response.StatusCode, fmt.Errorf("invalid IAM machine account permissions")
+		}
+		permissions.Insert(permission)
 	}
 	return &account, response.StatusCode, nil
 }

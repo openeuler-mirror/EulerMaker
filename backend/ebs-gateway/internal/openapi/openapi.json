@@ -744,13 +744,37 @@
           "name": {
             "type": "string"
           },
+          "permissions": {
+            "description": "Independent service permissions, checked against the current account on every request. Omitted or empty: no resource access. No read permission; use anonymous requests for public reads.",
+            "items": {
+              "enum": [
+                "projects:update",
+                "builds:create",
+                "builds:abort"
+              ],
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "projects": {
+            "description": "Exact Project names for a service account, without wildcards. Omitted or empty: no resource access. Permissions apply to every listed Project.",
+            "items": {
+              "maxLength": 63,
+              "minLength": 1,
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
           "tokenTTLSeconds": {
             "description": "0 or omitted: 3600; otherwise 300–86400 seconds.",
             "type": "integer"
           },
           "type": {
             "default": "runner",
-            "description": "Immutable account type. Omitted: runner. Service accounts cannot obtain Runner tokens. They may update named Projects and create Builds across Projects through the fixed Gateway allowlist.",
+            "description": "Immutable account type. Omitted: runner. Only service accounts may have nonempty projects and permissions; service accounts cannot obtain Runner tokens.",
             "enum": [
               "runner",
               "service"
@@ -3111,6 +3135,24 @@
       },
       "ebs-api.iam.v1.MachineAccountSpec": {
         "properties": {
+          "permissions": {
+            "items": {
+              "enum": [
+                "builds:abort",
+                "builds:create",
+                "projects:update"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projects": {
+            "description": "Projects and Permissions apply only to service accounts; either empty list grants no resource access.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "tokenTTLSeconds": {
             "format": "int64",
             "type": "integer"
@@ -3485,7 +3527,7 @@
     "securitySchemes": {
       "BearerAuth": {
         "bearerFormat": "JWT",
-        "description": "User, Runner or service token. Service tokens may update named Projects with PUT/PATCH and create Builds in any Project. Other resource operations are denied.",
+        "description": "User, Runner or service token. Service resource requests require both an exact Project match and the corresponding projects:update, builds:create or builds:abort permission from the current MachineAccount. Empty grants deny resource access; use anonymous requests for public reads.",
         "scheme": "bearer",
         "type": "http"
       },
@@ -4750,7 +4792,7 @@
         ]
       },
       "patch": {
-        "description": "Project owner with user or Ops scope, or service token for any Project. Owner and server metadata remain protected; service cannot change build-purpose. Admin has no ordinary update override.",
+        "description": "Project owner with user or Ops scope, or service token with this Project in MachineAccount.spec.projects and projects:update in spec.permissions. Both grants are read on each request; missing grants return 403. Owner and server metadata remain protected; service cannot change build-purpose. Admin has no ordinary update override.",
         "operationId": "patchProjectsObject",
         "parameters": [
           {
@@ -4868,7 +4910,7 @@
         ]
       },
       "put": {
-        "description": "Project owner with user or Ops scope, or service token for any Project. Owner and server metadata remain protected; service cannot change build-purpose. Admin has no ordinary update override. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Project owner with user or Ops scope, or service token with this Project in MachineAccount.spec.projects and projects:update in spec.permissions. Both grants are read on each request; missing grants return 403. Owner and server metadata remain protected; service cannot change build-purpose. Admin has no ordinary update override. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "putProjectsObject",
         "parameters": [
           {
@@ -5874,7 +5916,7 @@
         ]
       },
       "post": {
-        "description": "Project owner/member or Admin, or service token for any Project. Build inputs remain subject to apiserver validation. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Project owner/member or Admin, or service token with this Project in MachineAccount.spec.projects and builds:create in spec.permissions. Grants are read on each request; missing grants return 403. Does not grant builds:abort. Build inputs remain subject to apiserver validation. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "postBuildsList",
         "parameters": [
           {
@@ -6264,7 +6306,7 @@
     },
     "/apis/ebs/v1/projects/{project}/builds/{name}/abort": {
       "post": {
-        "description": "Project owner/member or Admin. Ops has ordinary project-member access, not a cross-project override.",
+        "description": "Project owner/member or Admin, or service token with this Project in MachineAccount.spec.projects and builds:abort in spec.permissions. Grants are read on each request; missing grants return 403. Independent of builds:create; the Build need not have been created by this account. Apiserver handles the existing abort protocol.",
         "operationId": "postBuildsAbort",
         "parameters": [
           {
@@ -12552,7 +12594,7 @@
     },
     "/auth/machine-token": {
       "post": {
-        "description": "Requires MachineAccount Basic credentials. Runner accounts send a runner name; service accounts send an empty object. The stored account type determines the token identity. Service tokens identify the account by name and may update named Projects with PUT/PATCH and create Builds across Projects. Other resource operations are denied. Invalid or missing account type in the IAM response returns 503.",
+        "description": "Requires MachineAccount Basic credentials. Runner accounts send a runner name; service accounts send an empty object. The stored account type determines the token identity. Service tokens carry identity only; each resource request checks current MachineAccount projects and permissions. Empty grants allow token exchange but no resource operations. Invalid or missing account type in the IAM response returns 503.",
         "operationId": "obtainMachineToken",
         "requestBody": {
           "content": {

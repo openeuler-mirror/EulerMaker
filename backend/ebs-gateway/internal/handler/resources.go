@@ -65,6 +65,18 @@ func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
 		if who.Type == identity.ServiceType || (who.Type == identity.RunnerType && resolved.Resource != "configs") {
 			public = false
 		}
+		if who.Type == identity.ServiceType {
+			project, permission := policy.ServiceOperation(resolved)
+			if project == "" {
+				project = resolved.Project
+				if resolved.Resource == "projects" {
+					project = resolved.Name
+				}
+			}
+			c.Set("serviceProject", project)
+			c.Set("servicePermission", string(permission))
+			c.Set("serviceAuthorization", "denied")
+		}
 		if !allowedResourceMethod(resolved) {
 			c.Header("Allow", allowedResourceVerbs(resolved))
 			c.AbortWithStatus(http.StatusMethodNotAllowed)
@@ -102,6 +114,9 @@ func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
 				}
 				c.AbortWithStatusJSON(status, gin.H{"error": err.Error()})
 				return
+			}
+			if who.Type == identity.ServiceType {
+				c.Set("serviceAuthorization", "allowed")
 			}
 			if who.Type == identity.RunnerType && resolved.Resource == "runners" && resolved.Subresource == "jobs" {
 				if !validRunnerJobsQuery(c.Request.URL.Query()) {

@@ -269,10 +269,12 @@ func (a *Handler) changePassword(c *gin.Context) {
 
 func (a *Handler) registerMachine(c *gin.Context) {
 	var input struct {
-		Name            string          `json:"name"`
-		ClientSecret    string          `json:"clientSecret"`
-		TokenTTLSeconds int             `json:"tokenTTLSeconds"`
-		Type            json.RawMessage `json:"type,omitempty"`
+		Name            string                           `json:"name"`
+		ClientSecret    string                           `json:"clientSecret"`
+		TokenTTLSeconds int                              `json:"tokenTTLSeconds"`
+		Type            json.RawMessage                  `json:"type,omitempty"`
+		Projects        []string                         `json:"projects,omitempty"`
+		Permissions     []iamv1.MachineAccountPermission `json:"permissions,omitempty"`
 	}
 	if err := a.readJSON(c, &input); err != nil || !validUsername(input.Name) || len(input.ClientSecret) > 256 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid machine account"})

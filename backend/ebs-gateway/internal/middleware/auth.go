@@ -81,6 +81,7 @@ func (a *Auth) verifyBearer(c *gin.Context, header string) (identity.Principal, 
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return identity.Principal{}, false
 		}
+		who.ServiceGrants = &identity.ServiceGrants{Projects: account.Spec.Projects, Permissions: account.Spec.Permissions}
 	}
 	return who, true
 }
