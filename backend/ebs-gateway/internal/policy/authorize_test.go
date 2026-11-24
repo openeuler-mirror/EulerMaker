@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -15,6 +16,66 @@ import (
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
+
+func TestProjectAccessProjectionAndErrors(t *testing.T) {
+	const metadata = `{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"alice"}}}`
+	for _, tc := range []struct {
+		name           string
+		status         int
+		body           string
+		transportError bool
+		want           int
+	}{
+		{"large project projected", 200, metadata, false, 0},
+		{"missing", 404, "", false, 404},
+		{"unavailable", 503, "private upstream error", false, 503},
+		{"throttled", 429, "", false, 503},
+		{"invalid JSON", 200, "{", false, 502},
+		{"wrong identity", 200, `{"metadata":{"name":"other"}}`, false, 502},
+		{"connection error", 0, "", true, 503},
+		{"not owner", 200, `{"metadata":{"name":"team"}}`, false, 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := upstream.New("https://api.example", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Query().Get("includeFields") != "metadata.name,metadata.labels" {
+					t.Error("Project lookup must request metadata only")
+					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(
+						`{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"alice"}},"spec":{"large":"` + strings.Repeat("x", 2<<20) + `"}}`))}, nil
+				}
+				if tc.transportError {
+					return nil, errors.New("private connection error")
+				}
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := New(client)
+			who := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
+			for _, route := range []Route{
+				{Resource: "projects", Name: "team", Method: http.MethodPatch},
+				{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete},
+				{Resource: "builds", Project: "team", Method: http.MethodPost},
+				{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost},
+			} {
+				err := a.Authorize(context.Background(), who, route)
+				if tc.want == 0 {
+					if err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
+				var classified *Error
+				if !errors.As(err, &classified) || classified.Status != tc.want {
+					t.Fatalf("route=%+v error=%v, want status %d", route, err, tc.want)
+				}
+				if strings.Contains(err.Error(), "private") {
+					t.Fatal("upstream details exposed")
+				}
+			}
+		})
+	}
+}
 
 func projectAuthorizer(t *testing.T) *Authorizer {
 	t.Helper()

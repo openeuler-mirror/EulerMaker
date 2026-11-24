@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+const (
+	maxEntries    = 4096
+	idleTTL       = 10 * time.Minute
+	sweepInterval = time.Minute
+)
+
 type bucket struct {
 	tokens float64
 	last   time.Time
@@ -12,11 +18,12 @@ type bucket struct {
 
 // Buckets is an in-process keyed token-bucket limiter.
 type Buckets struct {
-	mu       sync.Mutex
-	rate     float64
-	capacity float64
-	entries  map[string]bucket
-	now      func() time.Time
+	mu        sync.Mutex
+	rate      float64
+	capacity  float64
+	entries   map[string]bucket
+	now       func() time.Time
+	nextSweep time.Time
 }
 
 func New(rate float64, capacity int, now func() time.Time) *Buckets {
@@ -35,8 +42,21 @@ func (b *Buckets) Allow(key string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
+	if !now.Before(b.nextSweep) {
+		for key, entry := range b.entries {
+			elapsed := now.Sub(entry.last)
+			// Only discard buckets whose allowance has fully recovered.
+			if elapsed >= idleTTL && entry.tokens+elapsed.Seconds()*b.rate >= b.capacity {
+				delete(b.entries, key)
+			}
+		}
+		b.nextSweep = now.Add(sweepInterval)
+	}
 	entry, found := b.entries[key]
 	if !found {
+		if len(b.entries) >= maxEntries {
+			return false
+		}
 		entry = bucket{tokens: b.capacity, last: now}
 	}
 	if elapsed := now.Sub(entry.last).Seconds(); elapsed > 0 {

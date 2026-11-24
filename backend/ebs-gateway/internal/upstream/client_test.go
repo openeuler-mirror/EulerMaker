@@ -2,11 +2,13 @@ package upstream
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,6 +16,75 @@ import (
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestInternalRequestTimeout(t *testing.T) {
+	for _, phase := range []string{"headers", "body"} {
+		t.Run(phase, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if phase == "body" {
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+				}
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			client, err := New(server.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.http.Timeout != 30*time.Second {
+				t.Fatal("missing default timeout")
+			}
+			client.http.Timeout = 50 * time.Millisecond
+			response, err := client.Do(context.Background(), http.MethodGet, "/test", nil, nil)
+			if phase == "body" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				_, err = io.ReadAll(response.Body)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("want timeout, got %v", err)
+			}
+		})
+	}
+}
+
+func TestInternalRequestHonorsCallerCancellation(t *testing.T) {
+	client, err := New("https://api.example", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := client.Do(ctx, http.MethodGet, "/test", nil, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want cancellation, got %v", err)
+	}
+}
+
+func TestWatchDoesNotUseInternalRequestTimeout(t *testing.T) {
+	client, err := New("https://api.example", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if _, ok := r.Context().Deadline(); ok {
+			t.Error("proxy acquired an internal request deadline")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("event\n"))}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.http.Timeout = time.Nanosecond
+	router := gin.New()
+	router.GET("/watch", func(c *gin.Context) { client.Forward(c, false) })
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/watch?watch=true", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "event\n" {
+		t.Fatalf("watch interrupted: status=%d body=%s", recorder.Code, recorder.Body)
+	}
+}
 
 func TestInternalRequestDoesNotForwardCallerCredentials(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {

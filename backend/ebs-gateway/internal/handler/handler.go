@@ -40,6 +40,7 @@ type Handler struct {
 	registerIP            *limit.Buckets
 	registrationUserLimit *limit.Buckets
 	loginLimit            *limit.Buckets
+	loginIP               *limit.Buckets
 	machineLimit          *limit.Buckets
 	publicLimit           *limit.Buckets
 	policy                *policy.Authorizer
@@ -74,6 +75,7 @@ func New(deps Dependencies) (*Handler, error) {
 		registerIP:            limit.New(5.0/60.0, 5, deps.Now),
 		registrationUserLimit: limit.New(3.0/60.0, 3, deps.Now),
 		loginLimit:            limit.New(5.0/60.0, 5, deps.Now),
+		loginIP:               limit.New(20.0/60.0, 20, deps.Now),
 		machineLimit:          limit.New(5.0/60.0, 5, deps.Now),
 		publicLimit:           limit.New(20, 40, deps.Now),
 		policy:                policy.New(deps.Upstream),

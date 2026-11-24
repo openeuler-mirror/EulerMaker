@@ -3,7 +3,6 @@ package policy
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -154,7 +153,10 @@ func (a *Authorizer) jobAbort(ctx context.Context, who identity.Principal, route
 		return deny("Job abort requires a project member")
 	}
 	access, err := a.projectAccess(ctx, route.Project, who.Subject)
-	if err != nil || (!access.owner && !access.member) {
+	if err != nil {
+		return err
+	}
+	if !access.owner && !access.member {
 		return deny("Job abort requires a project member")
 	}
 	return nil
@@ -250,7 +252,10 @@ func (a *Authorizer) projectResource(ctx context.Context, who identity.Principal
 			return deny("only the Project owner can modify Project")
 		}
 		access, err := a.projectAccess(ctx, route.Name, who.Subject)
-		if err != nil || !access.owner {
+		if err != nil {
+			return err
+		}
+		if !access.owner {
 			return deny("only the Project owner can modify Project")
 		}
 		return nil
@@ -260,7 +265,10 @@ func (a *Authorizer) projectResource(ctx context.Context, who identity.Principal
 			return deny("only the Project owner can delete Build")
 		}
 		access, err := a.projectAccess(ctx, route.Project, who.Subject)
-		if err != nil || !access.owner {
+		if err != nil {
+			return err
+		}
+		if !access.owner {
 			return deny("only the Project owner can delete Build")
 		}
 		return nil
@@ -286,7 +294,7 @@ func (a *Authorizer) projectResource(ctx context.Context, who identity.Principal
 	}
 	access, err := a.projectAccess(ctx, project, who.Subject)
 	if err != nil {
-		return deny("project access could not be confirmed")
+		return err
 	}
 	if !access.owner && !access.member {
 		return deny("project access denied")
@@ -316,13 +324,17 @@ type access struct {
 }
 
 func (a *Authorizer) projectAccess(ctx context.Context, project, subject string) (access, error) {
-	response, err := a.upstream.Do(ctx, http.MethodGet, "/apis/ebs/v1/projects/"+url.PathEscape(project), nil, nil)
+	path := "/apis/ebs/v1/projects/" + url.PathEscape(project) + "?includeFields=metadata.name,metadata.labels"
+	response, err := a.upstream.Do(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
-		return access{}, err
+		return access{}, &Error{Status: http.StatusServiceUnavailable, Message: "Project lookup unavailable"}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return access{}, fmt.Errorf("Project lookup returned %d", response.StatusCode)
+		if response.StatusCode == http.StatusNotFound {
+			return access{}, &Error{Status: http.StatusNotFound, Message: "Project not found"}
+		}
+		return access{}, &Error{Status: http.StatusServiceUnavailable, Message: "Project lookup unavailable"}
 	}
 	var object struct {
 		Metadata struct {
@@ -331,10 +343,10 @@ func (a *Authorizer) projectAccess(ctx context.Context, project, subject string)
 		} `json:"metadata"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&object); err != nil {
-		return access{}, err
+		return access{}, &Error{Status: http.StatusBadGateway, Message: "invalid Project response"}
 	}
 	if object.Metadata.Name != project {
-		return access{}, fmt.Errorf("Project identity mismatch")
+		return access{}, &Error{Status: http.StatusBadGateway, Message: "Project identity mismatch"}
 	}
 	return access{
 		owner:  object.Metadata.Labels[ebsv1.ProjectOwnerUserLabel] == subject,
