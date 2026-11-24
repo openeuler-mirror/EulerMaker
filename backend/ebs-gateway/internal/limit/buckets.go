@@ -23,7 +23,12 @@ func New(rate float64, capacity int, now func() time.Time) *Buckets {
 	if now == nil {
 		now = time.Now
 	}
-	return &Buckets{rate: rate, capacity: float64(capacity), entries: make(map[string]bucket), now: now}
+	return &Buckets{
+		rate:     rate,
+		capacity: float64(capacity),
+		entries:  make(map[string]bucket),
+		now:      now,
+	}
 }
 
 func (b *Buckets) Allow(key string) bool {

@@ -59,10 +59,15 @@ func newProvider(config Config, now func() time.Time, transport http.RoundTrippe
 	if transport == nil {
 		transport = http.DefaultTransport.(*http.Transport).Clone()
 	}
-	return &provider{config: config, now: now, client: &http.Client{
-		Timeout: 10 * time.Second, Transport: guardedTransport{transport, config.Provider},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}}
+	return &provider{
+		config: config,
+		now:    now,
+		client: &http.Client{
+			Timeout:       10 * time.Second,
+			Transport:     guardedTransport{transport, config.Provider},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	}
 }
 
 func (p *provider) ensure(ctx context.Context) (ProviderConfig, *oidc.IDTokenVerifier, error) {
@@ -118,7 +123,8 @@ func (p *provider) ensure(ctx context.Context) (ProviderConfig, *oidc.IDTokenVer
 		jwksClient.Transport = &keyTransport{base: p.client.Transport, now: p.now}
 		keys := oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), &jwksClient), endpoints.JWKSURL)
 		p.verifier = oidc.NewVerifier(endpoints.Issuer, keys, &oidc.Config{
-			ClientID: endpoints.ClientID, SupportedSigningAlgs: endpoints.SigningAlgorithms,
+			ClientID:             endpoints.ClientID,
+			SupportedSigningAlgs: endpoints.SigningAlgorithms,
 			// Check expiration, nbf and iat together below with a uniform 60-second tolerance.
 			SkipExpiryCheck: true,
 		})
@@ -155,7 +161,12 @@ func (t *keyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.err != nil {
 		return nil, t.err
 	}
-	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(t.data)), Request: req}, nil
+	return &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(t.data)),
+		Request:    req,
+	}, nil
 }
 
 func (p *provider) request(req *http.Request, output any) error {

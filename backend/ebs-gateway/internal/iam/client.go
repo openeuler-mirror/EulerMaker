@@ -18,9 +18,13 @@ import (
 	"ebs-gateway/internal/upstream"
 )
 
-type Client struct{ upstream *upstream.Client }
+type Client struct {
+	upstream *upstream.Client
+}
 
-func New(upstreamClient *upstream.Client) *Client { return &Client{upstream: upstreamClient} }
+func New(upstreamClient *upstream.Client) *Client {
+	return &Client{upstream: upstreamClient}
+}
 
 type User struct {
 	Name    string
@@ -47,7 +51,10 @@ func (c *Client) GetUser(ctx context.Context, name string) (User, int, error) {
 		scopes[i] = identity.Scope(scope)
 	}
 	return User{
-		Name: object.Name, UID: string(object.UID), Enabled: object.Spec.Enabled != nil && *object.Spec.Enabled, Scopes: scopes,
+		Name:    object.Name,
+		UID:     string(object.UID),
+		Enabled: object.Spec.Enabled != nil && *object.Spec.Enabled,
+		Scopes:  scopes,
 	}, response.StatusCode, nil
 }
 

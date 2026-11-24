@@ -2,12 +2,12 @@ package handler
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"k8s.io/klog/v2"
 
 	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
@@ -63,9 +63,13 @@ func New(deps Dependencies) (*Handler, error) {
 	}
 	iamClient := iam.New(deps.Upstream)
 	return &Handler{
-		OAuth:    oauth.New(config, iamClient, deps.Tokens, deps.Now),
-		upstream: deps.Upstream, tokens: deps.Tokens, limits: deps.Limits, now: deps.Now,
-		iam: iamClient, bodyLimit: deps.BodyLimit,
+		OAuth:                 oauth.New(config, iamClient, deps.Tokens, deps.Now),
+		upstream:              deps.Upstream,
+		tokens:                deps.Tokens,
+		limits:                deps.Limits,
+		now:                   deps.Now,
+		iam:                   iamClient,
+		bodyLimit:             deps.BodyLimit,
 		auth:                  middleware.NewAuth(deps.Tokens, iamClient, deps.Now),
 		registerIP:            limit.New(5.0/60.0, 5, deps.Now),
 		registrationUserLimit: limit.New(3.0/60.0, 3, deps.Now),
@@ -97,7 +101,11 @@ func (a *Handler) audit(c *gin.Context) {
 	if subject == "" {
 		subject = "anonymous"
 	}
-	log.Printf("method=%q path=%q status=%d response_bytes=%d latency_ms=%d client_ip=%q user=%q request_id=%q service_project=%q service_permission=%q service_authorization=%q", method, path, c.Writer.Status(), c.Writer.Size(), a.now().Sub(started).Milliseconds(), c.ClientIP(), subject, c.Writer.Header().Get("X-Request-ID"), c.GetString("serviceProject"), c.GetString("servicePermission"), c.GetString("serviceAuthorization"))
+	klog.InfoS("HTTP request", "method", method, "path", path, "status", c.Writer.Status(),
+		"response_bytes", c.Writer.Size(), "latency_ms", a.now().Sub(started).Milliseconds(),
+		"client_ip", c.ClientIP(), "user", subject, "request_id", c.Writer.Header().Get("X-Request-ID"),
+		"service_project", c.GetString("serviceProject"), "service_permission", c.GetString("servicePermission"),
+		"service_authorization", c.GetString("serviceAuthorization"))
 }
 
 // Middleware and Endpoints expose HTTP handlers for route registration.
@@ -111,7 +119,13 @@ type Middleware struct {
 }
 
 func (a *Handler) Middleware() Middleware {
-	return Middleware{a.auth.Authenticate, a.auth.ResolveUser, a.limitAuthenticated, a.audit, a.requireAdmin}
+	return Middleware{
+		a.auth.Authenticate,
+		a.auth.ResolveUser,
+		a.limitAuthenticated,
+		a.audit,
+		a.requireAdmin,
+	}
 }
 
 type Endpoints struct {
@@ -126,6 +140,14 @@ type Endpoints struct {
 }
 
 func (a *Handler) Endpoints() Endpoints {
-	return Endpoints{a.registerUser, a.login, a.machineToken, a.checkToken, a.changePassword,
-		a.registerMachine, a.getOrdinaryUser, a.listOrdinaryUsers}
+	return Endpoints{
+		a.registerUser,
+		a.login,
+		a.machineToken,
+		a.checkToken,
+		a.changePassword,
+		a.registerMachine,
+		a.getOrdinaryUser,
+		a.listOrdinaryUsers,
+	}
 }

@@ -49,7 +49,11 @@ func New(address string, transport http.RoundTripper) (*Client, error) {
 		}
 		return nil
 	}
-	return &Client{endpoint: endpoint, http: &http.Client{Transport: transport}, proxy: proxy}, nil
+	return &Client{
+		endpoint: endpoint,
+		http:     &http.Client{Transport: transport},
+		proxy:    proxy,
+	}, nil
 }
 
 func (c *Client) Do(ctx context.Context, method, path string, body io.Reader, headers http.Header) (*http.Response, error) {
@@ -99,11 +103,15 @@ func (c *Client) Forward(ctx *gin.Context, public bool) {
 
 // ReverseProxy probes optional net/http writer interfaces. Wrapping Gin's
 // writer keeps those probes aligned with the actual underlying connection.
-type responseWriter struct{ http.ResponseWriter }
+type responseWriter struct {
+	http.ResponseWriter
+}
 
 func (w responseWriter) Flush()                      { _ = http.NewResponseController(w.ResponseWriter).Flush() }
 func (w responseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-type headWriter struct{ http.ResponseWriter }
+type headWriter struct {
+	http.ResponseWriter
+}
 
 func (w headWriter) Write(data []byte) (int, error) { return len(data), nil }

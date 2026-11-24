@@ -29,15 +29,22 @@ const apiPrefix = "/apis/ebs/v1"
 
 func (r resourceRoute) at(c *gin.Context) policy.Route {
 	return policy.Route{
-		Resource: r.resource, Project: c.Param(r.projectKey),
-		Name: c.Param(r.nameKey), Subresource: r.subresource,
-		Method: c.Request.Method,
+		Resource:    r.resource,
+		Project:     c.Param(r.projectKey),
+		Name:        c.Param(r.nameKey),
+		Subresource: r.subresource,
+		Method:      c.Request.Method,
 	}
 }
 
 // ResourceHandlers returns the guard and final handler for one registered resource path.
 func (a *Handler) ResourceHandlers(resource, projectKey, nameKey, subresource string) (gin.HandlerFunc, gin.HandlerFunc) {
-	route := resourceRoute{resource: resource, projectKey: projectKey, nameKey: nameKey, subresource: subresource}
+	route := resourceRoute{
+		resource:    resource,
+		projectKey:  projectKey,
+		nameKey:     nameKey,
+		subresource: subresource,
+	}
 	return a.resourceGuard(route), a.forwardResource(route)
 }
 

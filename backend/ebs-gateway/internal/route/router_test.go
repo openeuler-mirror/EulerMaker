@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"k8s.io/klog/v2"
 
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/handler"
@@ -522,9 +523,16 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 
 func TestServiceTokenUsesCurrentGrants(t *testing.T) {
 	var audit bytes.Buffer
-	previousOutput := log.Writer()
-	log.SetOutput(&audit)
-	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	state := klog.CaptureState()
+	t.Cleanup(state.Restore)
+	loggingFlags := flag.NewFlagSet("logging", flag.ContinueOnError)
+	klog.InitFlags(loggingFlags)
+	for name, value := range map[string]string{"logtostderr": "false", "alsologtostderr": "false", "stderrthreshold": "FATAL", "one_output": "true"} {
+		if err := loggingFlags.Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	klog.SetOutput(&audit)
 	var projects, permissions []string
 	lookups, writes := 0, 0
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -582,6 +590,7 @@ func TestServiceTokenUsesCurrentGrants(t *testing.T) {
 				if tc.want == http.StatusOK {
 					decision = "allowed"
 				}
+				klog.Flush()
 				for _, field := range []string{`user="service"`, `service_project="team"`, `service_permission="builds:abort"`, `service_authorization="` + decision + `"`} {
 					if !strings.Contains(audit.String(), field) {
 						t.Fatalf("audit missing %s: %s", field, audit.String())
