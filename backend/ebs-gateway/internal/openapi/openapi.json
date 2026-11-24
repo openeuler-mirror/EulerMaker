@@ -4532,7 +4532,7 @@
         ]
       },
       "post": {
-        "description": "Authenticated user creation; Gateway sets the owner label to the caller. Only Ops/Admin may select community Project type. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Authenticated user creation; Gateway sets the owner label to the caller. Project type uses metadata.labels[ebs.io/project-type] with personal or community values. Only Ops/Admin may select community Project type. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "postProjectsList",
         "requestBody": {
           "content": {

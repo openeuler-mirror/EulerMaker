@@ -3,7 +3,7 @@ package v1
 const (
 	ProjectOwnerUserLabel        = "ebs.io/owner-user"
 	ProjectMemberUserLabelPrefix = "ebs.io/member-user."
-	ProjectTypeLabel             = "project.ebs.io/type"
+	ProjectTypeLabel             = "ebs.io/project-type"
 	BuildPurposeLabel            = "ebs.io/build-purpose"
 	RunnerPoolLabel              = "ebs.io/pool"
 	RunnerDedicatedTaint         = "ebs.io/dedicated"

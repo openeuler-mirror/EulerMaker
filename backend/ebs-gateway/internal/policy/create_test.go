@@ -115,8 +115,8 @@ func TestProjectCreateUsesTokenOwner(t *testing.T) {
 				body string
 			}{
 				{"missing labels", `{"metadata":{"name":"team"}}`},
-				{"missing owner", `{"metadata":{"name":"team","labels":{"project.ebs.io/type":"personal"}}}`},
-				{"different owner", `{"metadata":{"name":"team","labels":{"project.ebs.io/type":"personal","ebs.io/owner-user":"bob"}}}`},
+				{"missing owner", `{"metadata":{"name":"team","labels":{"ebs.io/project-type":"personal"}}}`},
+				{"different owner", `{"metadata":{"name":"team","labels":{"ebs.io/project-type":"personal","ebs.io/owner-user":"bob"}}}`},
 			} {
 				t.Run(input.name, func(t *testing.T) {
 					who := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: scope}
@@ -149,7 +149,7 @@ func TestOrdinaryUserCannotCreateCommunityProject(t *testing.T) {
 	authorizer := &Authorizer{}
 	_, err := authorizer.PrepareCreate(context.Background(), identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope},
 		Route{Resource: "projects", Method: http.MethodPost},
-		[]byte(`{"metadata":{"name":"team","labels":{"project.ebs.io/type":"community"}}}`))
+		[]byte(`{"metadata":{"name":"team","labels":{"ebs.io/project-type":"community"}}}`))
 	if err == nil {
 		t.Fatal("community Project creation was allowed")
 	}

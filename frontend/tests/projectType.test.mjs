@@ -8,6 +8,6 @@ const { outputText } = ts.transpileModule(source, { compilerOptions: { module: t
 const { projectTypeSelector } = await import("data:text/javascript;base64," + Buffer.from(outputText).toString("base64"));
 
 test("project tabs select before pagination and include unlabeled personal projects", () => {
-  assert.equal(projectTypeSelector("community"), "project.ebs.io/type=community");
-  assert.equal(projectTypeSelector("personal"), "project.ebs.io/type!=community");
+  assert.equal(projectTypeSelector("community"), "ebs.io/project-type=community");
+  assert.equal(projectTypeSelector("personal"), "ebs.io/project-type!=community");
 });

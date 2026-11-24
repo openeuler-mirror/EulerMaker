@@ -10,7 +10,7 @@
 
 | 对象 | 标签 | 值 | 写入方 | 用途 |
 |------|------|----|--------|------|
-| Project | `project.ebs.io/type` | `community` / `personal` | 创建方；apiserver 默认 `personal` | 工程分类，详见 3.3 |
+| Project | `ebs.io/project-type` | `community` / `personal` | 创建方；apiserver 默认 `personal` | 工程分类，详见 3.3 |
 | Project | `ebs.io/owner-user` | User `metadata.name` | Gateway（创建时） | 标识 Project owner；写入及不可变规则见 3.1 |
 | Project | `ebs.io/member-user.<username>` | 固定为 `"true"` | Project owner | 授予指定用户 Project 成员权限 |
 | Project、Build、Job | `ebs.io/build-purpose` | `gating`；缺省为普通构建 | Ops/Admin owner 设置 Project；apiserver 固化到 Build；BuildInfo 传递到 Job | 门禁任务调度，详见 3.4 |
@@ -57,7 +57,7 @@ Project 子资源不重复保存访问标签，而是通过所属 Project 继承
 
 ### 3.3 工程分类
 
-`project.ebs.io/type` 是系统保留的分类标签，只允许 `community`（社区工程）和 `personal`（个人工程），不增加对应 spec 字段。
+`ebs.io/project-type` 是系统保留的分类标签，只允许 `community`（社区工程）和 `personal`（个人工程），不增加对应 spec 字段。
 
 - apiserver 创建及普通更新时补齐缺失标签为 `personal`；显式空值或其他值返回 `422 Invalid`。读取旧对象不写回，缺失标签按个人工程解释。
 - 普通用户只能创建个人工程；不能修改或删除已有类型标签。旧对象可补写 `personal`。Ops 在自己拥有的 Project 中可修改类型；Ops、Admin 创建 Project 时可以指定类型，Admin 对已有 Project 的更新仅开放 3.4 中的用途标签。
@@ -69,8 +69,8 @@ Project 子资源不重复保存访问标签，而是通过所属 Project 继承
 
 | Tab | 选择器 |
 |-----|--------|
-| 社区工程 | `project.ebs.io/type=community` |
-| 个人工程 | `project.ebs.io/type!=community` |
+| 社区工程 | `ebs.io/project-type=community` |
+| 个人工程 | `ebs.io/project-type!=community` |
 
 不等于筛选包含无标签对象，保证旧工程在个人 Tab 中可见；过滤在服务端分页前完成。Tab 切换后忽略前一次未完成请求的结果。普通用户表单固定创建个人工程；Ops 及以上可以选择类型，YAML 导入保留显式标签并由后端校验。
 
