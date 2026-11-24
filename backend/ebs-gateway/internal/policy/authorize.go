@@ -7,9 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	ebsv1 "ebs-api/ebs/v1"
+	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/upstream"
 )
@@ -39,7 +41,7 @@ func New(upstreamClient *upstream.Client) *Authorizer {
 
 func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, route Route) error {
 	if who.Type == identity.ServiceType {
-		return authorizeService(route)
+		return authorizeService(who, route)
 	}
 	if route.Resource == "projects" && route.Method == http.MethodDelete {
 		return deny("Project deletion is not available through Gateway")
@@ -72,20 +74,37 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 	}
 }
 
-func authorizeService(route Route) error {
-	if route.Subresource == "" {
-		switch route.Resource {
-		case "projects":
-			if route.Name != "" && (route.Method == http.MethodPut || route.Method == http.MethodPatch) {
-				return nil
+func authorizeService(who identity.Principal, route Route) error {
+	project, permission := ServiceOperation(route)
+	if permission == "" {
+		return deny("service operation is not allowed")
+	}
+	grants := who.ServiceGrants
+	if grants == nil || !slices.Contains(grants.Projects, project) || !slices.Contains(grants.Permissions, permission) {
+		return deny("service account lacks project or operation permission")
+	}
+	return nil
+}
+
+// ServiceOperation identifies the project and permission required by an exposed service write route.
+func ServiceOperation(route Route) (string, iamv1.MachineAccountPermission) {
+	switch route.Resource {
+	case "projects":
+		if route.Project == "" && route.Name != "" && route.Subresource == "" &&
+			(route.Method == http.MethodPut || route.Method == http.MethodPatch) {
+			return route.Name, iamv1.MachinePermissionProjectsUpdate
+		}
+	case "builds":
+		if route.Project != "" && route.Method == http.MethodPost {
+			if route.Name == "" && route.Subresource == "" {
+				return route.Project, iamv1.MachinePermissionBuildsCreate
 			}
-		case "builds":
-			if route.Project != "" && route.Name == "" && route.Method == http.MethodPost {
-				return nil
+			if route.Name != "" && route.Subresource == "abort" {
+				return route.Project, iamv1.MachinePermissionBuildsAbort
 			}
 		}
 	}
-	return deny("service operation is not allowed")
+	return "", ""
 }
 
 func IsReadOnlyProjectResource(resource string) bool {

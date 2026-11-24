@@ -53,6 +53,10 @@ Runner 访问 `ebs-gateway`，API 路径保持 `ebs-apiserver` 的资源路径�
 
 ### 3.1 获取 Runner token
 
+统一换取路径为 `/auth/machine-token`，Gateway 与 Runner 须配套使用该路径，契约见
+[Gateway 机器账号认证](ebs-gateway.md#machine-token)。Runner 使用 type=runner 的账号；
+service 账号不能获得 Runner 身份，现有 Runner Token 内容和权限不变。
+
 Runner 不保存长期 Runner JWT，而是使用预置的 MachineAccount client ID 和 client secret 换取短期 token：
 
 ```text

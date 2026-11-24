@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/upstream"
@@ -42,7 +44,7 @@ func TestAuthMiddleware(t *testing.T) {
 				paths <- r.URL.Path
 				w.Header().Set("Content-Type", "application/json")
 				if test.typ == identity.ServiceType {
-					fmt.Fprint(w, `{"metadata":{"name":"account"},"spec":{"type":"service"}}`)
+					fmt.Fprint(w, `{"metadata":{"name":"account"},"spec":{"type":"service","projects":["team"],"permissions":["projects:update"]}}`)
 				} else {
 					fmt.Fprint(w, `{"metadata":{"name":"account"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`)
 				}
@@ -72,6 +74,13 @@ func TestAuthMiddleware(t *testing.T) {
 				who := Principal(c)
 				if who.Subject != "account" || who.Type != test.typ || who.Scope != test.scope || who.Runner != runner {
 					t.Errorf("principal = %+v", who)
+				}
+				var grants *identity.ServiceGrants
+				if test.typ == identity.ServiceType {
+					grants = &identity.ServiceGrants{Projects: []string{"team"}, Permissions: []iamv1.MachineAccountPermission{iamv1.MachinePermissionProjectsUpdate}}
+				}
+				if !reflect.DeepEqual(who.ServiceGrants, grants) {
+					t.Errorf("service grants = %+v, want %+v", who.ServiceGrants, grants)
 				}
 				c.Status(http.StatusOK)
 			})

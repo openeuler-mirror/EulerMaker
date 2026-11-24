@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/upstream"
 )
@@ -110,28 +111,71 @@ func TestPublicRead(t *testing.T) {
 
 func TestServiceOperationAllowlist(t *testing.T) {
 	a := &Authorizer{}
-	who := identity.Principal{Type: identity.ServiceType, Subject: "automation"}
+	who := identity.Principal{
+		Type: identity.ServiceType, Subject: "automation",
+		ServiceGrants: &identity.ServiceGrants{
+			Projects: []string{"team"},
+			Permissions: []iamv1.MachineAccountPermission{
+				iamv1.MachinePermissionProjectsUpdate, iamv1.MachinePermissionBuildsCreate, iamv1.MachinePermissionBuildsAbort,
+			},
+		},
+	}
 	for _, test := range []struct {
 		route Route
 		allow bool
 	}{
 		{Route{Resource: "projects", Name: "team", Method: http.MethodPut}, true},
-		{Route{Resource: "projects", Name: "other", Method: http.MethodPatch}, true},
+		{Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true},
+		{Route{Resource: "projects", Name: "other", Method: http.MethodPatch}, false},
 		{Route{Resource: "projects", Name: "team", Method: http.MethodGet}, false},
 		{Route{Resource: "projects", Name: "team", Subresource: "status", Method: http.MethodPut}, false},
 		{Route{Resource: "projects", Method: http.MethodPost}, false},
 		{Route{Resource: "projects", Method: http.MethodPut}, false},
 		{Route{Resource: "builds", Project: "team", Method: http.MethodPost}, true},
-		{Route{Resource: "builds", Project: "other", Method: http.MethodPost}, true},
+		{Route{Resource: "builds", Project: "other", Method: http.MethodPost}, false},
 		{Route{Resource: "builds", Method: http.MethodPost}, false},
 		{Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodPost}, false},
-		{Route{Resource: "builds", Project: "team", Name: "b", Subresource: "abort", Method: http.MethodPost}, false},
+		{Route{Resource: "builds", Project: "team", Name: "b", Subresource: "abort", Method: http.MethodPost}, true},
+		{Route{Resource: "builds", Project: "other", Name: "b", Subresource: "abort", Method: http.MethodPost}, false},
+		{Route{Resource: "builds", Project: "team", Subresource: "abort", Method: http.MethodPost}, false},
+		{Route{Resource: "builds", Project: "team", Name: "b", Subresource: "status", Method: http.MethodPut}, false},
+		{Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, false},
 		{Route{Resource: "jobs", Project: "team", Method: http.MethodPost}, false},
 		{Route{Resource: "machineaccounts", Method: http.MethodGet}, false},
 	} {
 		err := a.Authorize(context.Background(), who, test.route)
 		if (err == nil) != test.allow {
 			t.Errorf("Authorize(%+v) = %v, want allowed=%v", test.route, err, test.allow)
+		}
+	}
+}
+
+func TestServicePermissionsAreIndependent(t *testing.T) {
+	operations := []struct {
+		permission iamv1.MachineAccountPermission
+		route      Route
+	}{
+		{iamv1.MachinePermissionProjectsUpdate, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}},
+		{iamv1.MachinePermissionBuildsCreate, Route{Resource: "builds", Project: "team", Method: http.MethodPost}},
+		{iamv1.MachinePermissionBuildsAbort, Route{Resource: "builds", Project: "team", Name: "b", Subresource: "abort", Method: http.MethodPost}},
+	}
+	for _, granted := range operations {
+		who := identity.Principal{Type: identity.ServiceType, ServiceGrants: &identity.ServiceGrants{
+			Projects: []string{"team"}, Permissions: []iamv1.MachineAccountPermission{granted.permission},
+		}}
+		for _, requested := range operations {
+			err := (&Authorizer{}).Authorize(context.Background(), who, requested.route)
+			if (err == nil) != (granted.permission == requested.permission) {
+				t.Errorf("granted=%s requested=%s err=%v", granted.permission, requested.permission, err)
+			}
+		}
+	}
+	for _, grants := range []*identity.ServiceGrants{nil, {}, {Projects: []string{"team"}}, {
+		Permissions: []iamv1.MachineAccountPermission{iamv1.MachinePermissionProjectsUpdate},
+	}} {
+		who := identity.Principal{Type: identity.ServiceType, ServiceGrants: grants}
+		if err := (&Authorizer{}).Authorize(context.Background(), who, operations[0].route); err == nil {
+			t.Errorf("incomplete grants allowed: %+v", grants)
 		}
 	}
 }

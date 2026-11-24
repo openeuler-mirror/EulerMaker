@@ -155,7 +155,7 @@ spec:
 ```
 
 MachineAccount 保存账号用途、Token 有效期及 service 账号的最小授权配置。
-认证响应返回账号名称、类型及有效期；apiserver 校验、存储授权字段，Gateway 的工程范围和权限检查另行接入。以下描述目标授权契约，统一交换入口及授权规则见
+认证响应返回账号名称、类型及有效期；apiserver 校验、存储授权字段，Gateway 每次请求读取账号并执行工程范围和权限检查，统一交换入口及授权规则见
 [Gateway 机器账号认证](ebs-gateway.md#machine-token)。
 
 ```yaml
@@ -212,7 +212,7 @@ spec:
   已部署索引通过 mapping 更新流程补齐。apiserver 校验授权内容，Gateway 执行面向外部调用方的权限判断。
 - 验收覆盖两种类型的注册、GET/List、凭据认证、默认类型、三个权限枚举、授权字段校验和认证响应；Gateway 验收工程范围、操作权限及现有字段保护，不因 service 类型自动授予 Build 创建或中止权限。
 
-公共 IAM 类型、DeepCopy、内部注册 DTO、ES 初始 mapping 和 apiserver OpenAPI 已支持授权字段。内部注册在生成凭据及写入 ES 前复用资源校验，拒绝未知权限与重复条目，不静默过滤非法授权；存储策略对创建和更新同样执行校验，但不新增外部更新入口。已部署索引先使用 mapping 检查/更新命令补齐 `data.spec.projects`、`data.spec.permissions` 的 keyword 定义。Gateway 注册字段转发和逐请求授权校验另行接入，单独升级 apiserver 不改变 Gateway 现有放行规则；接入后，无授权字段的旧 service 账号按空列表处理，不保留全工程默认放行。首版没有在线授权编辑接口，账号替换时须向客户端下发对应凭据。
+公共 IAM 类型、DeepCopy、内部注册 DTO、ES 初始 mapping 和 apiserver OpenAPI 已支持授权字段。内部注册在生成凭据及写入 ES 前复用资源校验，拒绝未知权限与重复条目，不静默过滤非法授权；存储策略对创建和更新同样执行校验，但不新增外部更新入口。已部署索引先使用 mapping 检查/更新命令补齐 `data.spec.projects`、`data.spec.permissions` 的 keyword 定义。Gateway 注册入口转发授权字段，并在每次请求中执行授权校验；无授权字段的旧 service 账号按空列表处理，不保留全工程默认放行。首版没有在线授权编辑接口，账号替换时须向客户端下发对应凭据。
 
 IAM 模块还注册仅供 gateway 使用的内部接口：
 

@@ -1,11 +1,14 @@
 package route
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -305,6 +308,12 @@ func TestServiceTokenChecksCurrentAccount(t *testing.T) {
 		{"wrong type", `{"metadata":{"name":"service","uid":"uid-1"},"spec":{"type":"runner"}}`, 200, 401},
 		{"unavailable", `{}`, 503, 503},
 		{"malformed", `{}`, 200, 503},
+		{"malformed projects", `{"metadata":{"name":"service"},"spec":{"type":"service","projects":"team"}}`, 200, 503},
+		{"invalid project", `{"metadata":{"name":"service"},"spec":{"type":"service","projects":["*"]}}`, 200, 503},
+		{"duplicate project", `{"metadata":{"name":"service"},"spec":{"type":"service","projects":["team","team"]}}`, 200, 503},
+		{"unknown permission", `{"metadata":{"name":"service"},"spec":{"type":"service","permissions":["projects:update","projects:delete"]}}`, 200, 503},
+		{"duplicate permission", `{"metadata":{"name":"service"},"spec":{"type":"service","permissions":["projects:update","projects:update"]}}`, 200, 503},
+		{"malformed permissions", `{"metadata":{"name":"service"},"spec":{"type":"service","permissions":{}}}`, 200, 503},
 		{"recovered", account, 200, 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -338,7 +347,7 @@ func TestServiceTokenRejectsOperationsOutsideAllowlist(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
 			t.Fatalf("service request reached resource or user API: %s %s", r.Method, r.URL)
 		}
-		body := `{"metadata":{"name":"service","uid":"uid-1"},"spec":{"type":"service"}}`
+		body := `{"metadata":{"name":"service"},"spec":{"type":"service","projects":["team"],"permissions":["projects:update","builds:create","builds:abort"]}}`
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
 	token, err := api.tokens.Issue("service", "", identity.ServiceType, "", time.Hour, api.now())
@@ -354,7 +363,8 @@ func TestServiceTokenRejectsOperationsOutsideAllowlist(t *testing.T) {
 		{"GET", "/apis/ebs/v1/projects/team/builds"},
 		{"PATCH", "/apis/ebs/v1/projects/team/builds/build-1"},
 		{"DELETE", "/apis/ebs/v1/projects/team/builds/build-1"},
-		{"POST", "/apis/ebs/v1/projects/team/builds/build-1/abort"},
+		{"POST", "/apis/ebs/v1/projects/team/jobs/job-1/abort"},
+		{"PATCH", "/apis/ebs/v1/projects/team/builds/build-1/status"},
 		{"GET", "/apis/ebs/v1/configs/services"},
 		{"GET", "/apis/ebs/v1/runners/service/jobs?watch=true"},
 		{"GET", "/apis/ebs/v1/service-endpoints"},
@@ -389,6 +399,7 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 		{"uid protected", "PATCH", "/apis/ebs/v1/projects/team", "application/merge-patch+json", `{"metadata":{"uid":"another"}}`, 403, false},
 		{"stale version", "PATCH", "/apis/ebs/v1/projects/team", "application/json-patch+json", `[{"op":"test","path":"/metadata/resourceVersion","value":"v1:0:1"}]`, 409, false},
 		{"build create", "POST", "/apis/ebs/v1/projects/team/builds", "application/json", `{"metadata":{"name":"b","namespace":"team"},"spec":{"type":"single","arch":"aarch64","packages":["pkg"]}}`, 201, true},
+		{"build abort", "POST", "/apis/ebs/v1/projects/team/builds/b/abort", "application/json", `{}`, 200, true},
 		{"namespace mismatch", "POST", "/apis/ebs/v1/projects/team/builds", "application/json", `{"metadata":{"name":"b","namespace":"other"}}`, 400, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -399,7 +410,7 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/machineaccounts/service":
 					lookups++
-					body = `{"metadata":{"name":"service"},"spec":{"type":"service"}}`
+					body = `{"metadata":{"name":"service"},"spec":{"type":"service","projects":["team"],"permissions":["projects:update","builds:create","builds:abort"]}}`
 				case r.Method == http.MethodGet && r.URL.Path == "/apis/ebs/v1/projects/team":
 				case r.Method == http.MethodPut && r.URL.Path == "/apis/ebs/v1/projects/team":
 					forwarded = true
@@ -420,6 +431,13 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 				case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/team/builds":
 					forwarded = true
 					status, body = http.StatusCreated, test.body
+				case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/team/builds/b/abort":
+					forwarded = true
+					raw, err := io.ReadAll(r.Body)
+					if err != nil || string(raw) != test.body {
+						t.Fatalf("abort body=%s err=%v", raw, err)
+					}
+					body = `{"metadata":{"name":"b","namespace":"team"},"status":{"phase":"Aborted"}}`
 				default:
 					t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL)
 				}
@@ -444,8 +462,85 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 	}
 }
 
-func TestRegisterMachineAccountTypeForwarding(t *testing.T) {
-	for _, typeField := range []string{"", `,"type":"runner"`, `,"type":"service"`} {
+func TestServiceTokenUsesCurrentGrants(t *testing.T) {
+	var audit bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&audit)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	var projects, permissions []string
+	lookups, writes := 0, 0
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		status, body := http.StatusOK, `{}`
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/machineaccounts/service":
+			lookups++
+			raw, err := json.Marshal(map[string]any{
+				"metadata": map[string]string{"name": "service"},
+				"spec":     map[string]any{"type": "service", "projects": projects, "permissions": permissions},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = string(raw)
+		case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/team/builds/b/abort":
+			writes++
+		default:
+			t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL)
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	api := newTestAPI(t, transport)
+	token, err := api.tokens.Issue("service", "", identity.ServiceType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	routers := []*gin.Engine{api.Router(), newTestAPI(t, transport).Router()}
+	for _, tc := range []struct {
+		name                  string
+		projects, permissions []string
+		want                  int
+	}{
+		{"empty", nil, nil, 403},
+		{"granted abort only", []string{"team"}, []string{"builds:abort"}, 200},
+		{"revoked permission", []string{"team"}, []string{"builds:create"}, 403},
+		{"cross project", []string{"other"}, []string{"builds:abort"}, 403},
+		{"no projects", nil, []string{"builds:abort"}, 403},
+		{"no permissions", []string{"team"}, nil, 403},
+		{"restored", []string{"team", "other"}, []string{"builds:abort"}, 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			projects, permissions = tc.projects, tc.permissions
+			for _, router := range routers {
+				audit.Reset()
+				beforeLookups, beforeWrites := lookups, writes
+				req := httptest.NewRequest(http.MethodPost, "/apis/ebs/v1/projects/team/builds/b/abort", strings.NewReader(`{"reason":"private-abort-reason"}`))
+				req.Header.Set("Authorization", "Bearer "+token)
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, req)
+				if rec.Code != tc.want || lookups != beforeLookups+1 || (writes == beforeWrites+1) != (tc.want == 200) {
+					t.Fatalf("status=%d lookups=%d writes=%d body=%s", rec.Code, lookups-beforeLookups, writes-beforeWrites, rec.Body)
+				}
+				decision := "denied"
+				if tc.want == http.StatusOK {
+					decision = "allowed"
+				}
+				for _, field := range []string{`user="service"`, `service_project="team"`, `service_permission="builds:abort"`, `service_authorization="` + decision + `"`} {
+					if !strings.Contains(audit.String(), field) {
+						t.Fatalf("audit missing %s: %s", field, audit.String())
+					}
+				}
+				if strings.Contains(audit.String(), token) || strings.Contains(audit.String(), "private-abort-reason") {
+					t.Fatal("audit contains token or request body")
+				}
+			}
+		})
+	}
+}
+
+func TestRegisterMachineAccountConfigurationForwarding(t *testing.T) {
+	for _, typeField := range []string{"", `,"type":"runner"`, `,"type":"service"`,
+		`,"type":"service","projects":["team","other"],"permissions":["projects:update","builds:create","builds:abort"]`,
+	} {
 		t.Run(typeField, func(t *testing.T) {
 			registered := false
 			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -461,6 +556,11 @@ func TestRegisterMachineAccountTypeForwarding(t *testing.T) {
 					_ = json.Unmarshal([]byte(`{"name":"worker"`+typeField+`}`), &want)
 					if input["type"] != want["type"] || input["name"] != "worker" || input["tokenTTLSeconds"] != float64(3600) {
 						t.Fatalf("forwarded input=%v", input)
+					}
+					for _, field := range []string{"projects", "permissions"} {
+						if !reflect.DeepEqual(input[field], want[field]) {
+							t.Fatalf("forwarded %s=%v, want %v", field, input[field], want[field])
+						}
 					}
 					body, status = `{"name":"worker"}`, http.StatusCreated
 				} else if r.URL.Path != "/apis/iam.ebs/v1/users/admin" {

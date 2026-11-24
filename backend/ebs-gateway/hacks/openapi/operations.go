@@ -28,7 +28,7 @@ func operations() object {
 	}
 	auth("post", "/auth/register", "registerUser", "Register a user", "Anonymous password registration; returns the username, not a token. Returns 403 when OAuth is enabled.", "RegisterRequest", "RegisteredUser", "201", []object{})
 	auth("post", "/auth/login", "login", "Obtain a user token", "Anonymous password login. Response must not be cached. Returns 403 when OAuth is enabled, including during provider outages.", "LoginRequest", "LoginResponse", "200", []object{})
-	auth("post", "/auth/machine-token", "obtainMachineToken", "Obtain a machine token", "Requires MachineAccount Basic credentials. Runner accounts send a runner name; service accounts send an empty object. The stored account type determines the token identity. Service tokens identify the account by name and may update named Projects with PUT/PATCH and create Builds across Projects. Other resource operations are denied. Invalid or missing account type in the IAM response returns 503.", "MachineTokenRequest", "MachineTokenResponse", "200", []object{{"MachineBasic": []string{}}})
+	auth("post", "/auth/machine-token", "obtainMachineToken", "Obtain a machine token", "Requires MachineAccount Basic credentials. Runner accounts send a runner name; service accounts send an empty object. The stored account type determines the token identity. Service tokens carry identity only; each resource request checks current MachineAccount projects and permissions. Empty grants allow token exchange but no resource operations. Invalid or missing account type in the IAM response returns 503.", "MachineTokenRequest", "MachineTokenResponse", "200", []object{{"MachineBasic": []string{}}})
 	auth("post", "/auth/check", "checkToken", "Check a token", "Accepts user, Runner and service Bearer tokens. No request body. Service tokens require a live MachineAccount with matching name and service type. Deleted accounts return 401; recreating a service account with the same name makes unexpired tokens valid again. IAM failures return 503. Does not grant resource permissions.", "", "CheckResponse", "200", bearer)
 	auth("put", "/auth/users/{name}/password", "changePassword", "Change your password", "Only the user named in the path may change their password; current password is required.", "PasswordRequest", "", "204", bearer)
 	auth("post", "/auth/machineaccounts", "registerMachineAccount", "Register a machine account", "Admin only. The secret is supplied by the caller and is never returned.", "MachineRequest", "RegisteredMachine", "201", bearer)
@@ -305,7 +305,7 @@ func permissions(resource, part, method string) ([]object, string) {
 			return bearer, "Authenticated user creation; Gateway sets the owner label to the caller. Only Ops/Admin may select community Project type."
 		}
 		if part == "object" && (method == "put" || method == "patch") {
-			return bearer, "Project owner with user or Ops scope, or service token for any Project. Owner and server metadata remain protected; service cannot change build-purpose. Admin has no ordinary update override."
+			return bearer, "Project owner with user or Ops scope, or service token with this Project in MachineAccount.spec.projects and projects:update in spec.permissions. Both grants are read on each request; missing grants return 403. Owner and server metadata remain protected; service cannot change build-purpose. Admin has no ordinary update override."
 		}
 		return bearer, "Project owner with user or Ops scope only; Admin has no override. Owner label is immutable."
 	}
@@ -322,7 +322,10 @@ func permissions(resource, part, method string) ([]object, string) {
 		return bearer, "Project owner or Admin; members cannot delete child resources."
 	}
 	if resource == "builds" && part == "list" && method == "post" {
-		return bearer, "Project owner/member or Admin, or service token for any Project. Build inputs remain subject to apiserver validation."
+		return bearer, "Project owner/member or Admin, or service token with this Project in MachineAccount.spec.projects and builds:create in spec.permissions. Grants are read on each request; missing grants return 403. Does not grant builds:abort. Build inputs remain subject to apiserver validation."
+	}
+	if resource == "builds" && part == "abort" {
+		return bearer, "Project owner/member or Admin, or service token with this Project in MachineAccount.spec.projects and builds:abort in spec.permissions. Grants are read on each request; missing grants return 403. Independent of builds:create; the Build need not have been created by this account. Apiserver handles the existing abort protocol."
 	}
 	return bearer, "Project owner/member or Admin. Ops has ordinary project-member access, not a cross-project override."
 }

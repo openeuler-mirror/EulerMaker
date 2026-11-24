@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	iamv1 "ebs-api/iam/v1"
 )
 
 const (
@@ -39,6 +41,13 @@ type Principal struct {
 	Scope     Scope
 	ID        string
 	ExpiresAt time.Time
+	// ServiceGrants comes from the current account lookup, never from JWT claims.
+	ServiceGrants *ServiceGrants `json:"-"`
+}
+
+type ServiceGrants struct {
+	Projects    []string
+	Permissions []iamv1.MachineAccountPermission
 }
 
 func (p Principal) IsUser() bool {

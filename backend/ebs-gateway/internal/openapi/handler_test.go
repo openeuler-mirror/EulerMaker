@@ -3,6 +3,7 @@ package openapi
 import (
 	"encoding/json"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -60,6 +61,16 @@ func TestDocumentContract(t *testing.T) {
 		}
 		if name == "MachineRequest" && typ["default"] != "runner" {
 			t.Fatalf("registration default type=%v", typ["default"])
+		}
+		projects := properties["projects"].(map[string]any)
+		permissions := properties["permissions"].(map[string]any)
+		if projects["type"] != "array" || projects["items"].(map[string]any)["type"] != "string" || permissions["type"] != "array" {
+			t.Fatalf("%s grants schemas: projects=%v permissions=%v", name, projects, permissions)
+		}
+		enum := permissions["items"].(map[string]any)["enum"].([]any)
+		sort.Slice(enum, func(i, j int) bool { return enum[i].(string) < enum[j].(string) })
+		if !reflect.DeepEqual(enum, []any{"builds:abort", "builds:create", "projects:update"}) {
+			t.Fatalf("%s permission enum=%v", name, enum)
 		}
 	}
 	buildStatus := schemas["ebs-api.ebs.v1.BuildStatus"].(map[string]any)["properties"].(map[string]any)

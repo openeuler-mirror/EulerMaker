@@ -112,9 +112,19 @@ func schemas() object {
 	}, "currentPassword", "newPassword")
 	result["MachineRequest"] = record(object{
 		"name":            textSchema(),
-		"type":            object{"type": "string", "enum": []string{"runner", "service"}, "default": "runner", "description": "Immutable account type. Omitted: runner. Service accounts cannot obtain Runner tokens. They may update named Projects and create Builds across Projects through the fixed Gateway allowlist."},
+		"type":            object{"type": "string", "enum": []string{"runner", "service"}, "default": "runner", "description": "Immutable account type. Omitted: runner. Only service accounts may have nonempty projects and permissions; service accounts cannot obtain Runner tokens."},
 		"clientSecret":    object{"type": "string", "format": "password", "description": "Unpadded base64url; at least 32 decoded bytes, at most 256 encoded characters."},
 		"tokenTTLSeconds": object{"type": "integer", "description": "0 or omitted: 3600; otherwise 300–86400 seconds."},
+		"projects": object{
+			"type": "array", "uniqueItems": true,
+			"items":       object{"type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+			"description": "Exact Project names for a service account, without wildcards. Omitted or empty: no resource access. Permissions apply to every listed Project.",
+		},
+		"permissions": object{
+			"type": "array", "uniqueItems": true,
+			"items":       object{"type": "string", "enum": []string{"projects:update", "builds:create", "builds:abort"}},
+			"description": "Independent service permissions, checked against the current account on every request. Omitted or empty: no resource access. No read permission; use anonymous requests for public reads.",
+		},
 	}, "name", "clientSecret")
 	for _, name := range []string{"LoginRequest", "RegisterRequest", "PasswordRequest", "MachineRequest", "JobAbort"} {
 		result[name].(map[string]any)["additionalProperties"] = false

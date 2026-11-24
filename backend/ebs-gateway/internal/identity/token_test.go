@@ -72,7 +72,7 @@ func TestServiceTokenIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	who, err := tokens.Verify(token, now)
-	if err != nil || who.Type != ServiceType || who.Subject != "release-management" || who.IsUser() || who.IsPrivileged() {
+	if err != nil || who.Type != ServiceType || who.Subject != "release-management" || who.IsUser() || who.IsPrivileged() || who.ServiceGrants != nil {
 		t.Fatalf("principal=%+v err=%v", who, err)
 	}
 	parts := strings.Split(token, ".")

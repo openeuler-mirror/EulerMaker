@@ -97,7 +97,7 @@ func (a *Handler) audit(c *gin.Context) {
 	if subject == "" {
 		subject = "anonymous"
 	}
-	log.Printf("method=%q path=%q status=%d response_bytes=%d latency_ms=%d client_ip=%q user=%q request_id=%q", method, path, c.Writer.Status(), c.Writer.Size(), a.now().Sub(started).Milliseconds(), c.ClientIP(), subject, c.Writer.Header().Get("X-Request-ID"))
+	log.Printf("method=%q path=%q status=%d response_bytes=%d latency_ms=%d client_ip=%q user=%q request_id=%q service_project=%q service_permission=%q service_authorization=%q", method, path, c.Writer.Status(), c.Writer.Size(), a.now().Sub(started).Milliseconds(), c.ClientIP(), subject, c.Writer.Header().Get("X-Request-ID"), c.GetString("serviceProject"), c.GetString("servicePermission"), c.GetString("serviceAuthorization"))
 }
 
 // Middleware and Endpoints expose HTTP handlers for route registration.
