@@ -9,7 +9,8 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `cmd/main.go` | 执行 Gateway 命令 |
 | `cmd/app/server.go` | 定义 Cobra 参数、配置上游 TLS、启动 HTTP 服务 |
 | `internal/route` | 注册 Gin 路由、组织中间件 |
-| `internal/handler` | 处理 Auth、IAM 与资源请求，执行鉴权和转发 |
+| `internal/middleware` | 身份认证、账号核验、Admin 门卫、请求限流和审计 |
+| `internal/handler` | 按资源处理请求，协调授权、请求准备和转发 |
 | `internal/identity` | JWT 签发、验证和身份类型 |
 | `internal/iam` | 调用 apiserver 的 IAM 接口 |
 | `internal/oauth` | OAuth/OIDC 提供方认证、加密 Cookie、首次注册及结果确认 |
@@ -17,6 +18,12 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/mutation` | 严格解析 PUT/PATCH 并生成完整候选对象 |
 | `internal/upstream` | 可信内部读取和流式反向代理 |
 | `internal/limit` | 请求令牌桶 |
+
+Handler 的资源入口保留在 `resources.go`，方法与 Watch 边界集中在 `resource_routes.go`，
+公共写请求处理放在 `request.go`，Runner、Job、Config 的特殊处理放在各自的业务文件。
+Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
+测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
+Handler 私有逻辑测试放在对应文件中，真实 HTTP 请求链、路由注册和 OpenAPI 测试统一放在 `route/router_test.go`。
 
 ## 本地运行
 
