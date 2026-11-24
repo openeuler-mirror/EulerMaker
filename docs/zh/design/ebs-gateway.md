@@ -766,7 +766,7 @@ Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回任何�
 
 Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；中间件按顺序执行认证、用户状态确认、限流及资源授权；Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。审计日志覆盖整个请求链。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
 
-路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/route` 负责路径注册和中间件组装；`internal/middleware/auth.go` 统一处理 Bearer JWT 校验、Service 账号实时核验、User 状态确认和请求身份存取；`internal/handler` 负责登录与 Token 换取、匿名访问分支、资源授权、请求准备及最终业务响应或代理。全局中间件负责审计与 panic 恢复；各路由链完成认证、User 状态确认、限流和授权。身份、IAM 客户端、权限、完整对象 PATCH、上游通信和限流分别位于 `internal/identity`、`iam`、`policy`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
+路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/route` 负责路径注册和中间件组装；`internal/middleware` 负责 Bearer JWT 校验、Service 账号实时核验、User 状态确认、Admin 门卫、已认证请求限流和审计；`internal/handler` 按资源处理请求，协调匿名访问、Policy 授权、请求准备及最终响应或代理。Policy 的公共入口负责分派，Project、Runner 的授权及写入规则分别集中在各自的业务文件。全局路由链挂载审计与 panic 恢复。身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iam`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
 
 `/healthz` 和登录、注册、Token 换取/校验接口使用各自的 Handler，其中 Token 校验保留独立的认证与限流语义。密码、MachineAccount 和 IAM 路由使用需要认证的中间件链。业务 API 在认证前隐藏内部全局路径；没有 Authorization header 时仅公开读取可进入匿名分支，携带 header 的请求必须先验证身份，不能失败后降级。认证后的公开读取也使用公开读取 Handler，service 必须先通过专属允许列表检查；其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。具名 Config 读取必须由同一次上游响应完成可见性判断和内容返回。
 
