@@ -21,10 +21,11 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/klog/v2"
 
-	"ebs-gateway/internal/handler"
+	"ebs-gateway/internal/gateway"
+	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
-	"ebs-gateway/internal/route"
+	"ebs-gateway/internal/oauth"
 	"ebs-gateway/internal/upstream"
 )
 
@@ -120,20 +121,27 @@ func run(opts options) error {
 	if err != nil {
 		return fmt.Errorf("initialize --apiserver-addr client: %w", err)
 	}
-	handlers, err := handler.New(handler.Dependencies{
-		Upstream:        client,
-		Tokens:          tokens,
-		Now:             time.Now,
-		Limits:          limit.New(opts.rate, opts.burst, time.Now),
-		BodyLimit:       opts.maxBody,
-		OAuthConfigFile: opts.oauthConfigFile,
+	oauthConfig, err := oauth.Load(opts.oauthConfigFile)
+	if err != nil {
+		return fmt.Errorf("load --oauth-config-file: %w", err)
+	}
+	accounts := iam.New(client)
+	oauthHandler := oauth.New(oauthConfig, accounts, tokens, time.Now)
+	api, err := gateway.NewHandler(gateway.Dependencies{
+		Upstream:         client,
+		Tokens:           tokens,
+		Now:              time.Now,
+		Limits:           limit.New(opts.rate, opts.burst, time.Now),
+		BodyLimit:        opts.maxBody,
+		IAM:              accounts,
+		LocalAuthEnabled: oauthConfig.LocalAuthenticationEnabled(),
 	})
 	if err != nil {
 		return fmt.Errorf("initialize Gateway handlers: %w", err)
 	}
 	server := &http.Server{
 		Addr:              ":" + strconv.Itoa(opts.port),
-		Handler:           route.New(handlers),
+		Handler:           gateway.NewRouter(api, oauthHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -145,7 +153,7 @@ func run(opts options) error {
 	backgroundDone := make(chan struct{})
 	go func() {
 		defer close(backgroundDone)
-		handlers.OAuth.Run(ctx)
+		oauthHandler.Run(ctx)
 	}()
 	defer func() {
 		cancel()

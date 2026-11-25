@@ -1,4 +1,4 @@
-package handler
+package gateway
 
 import (
 	"encoding/base64"
@@ -13,12 +13,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/upstream"
 )
 
-func TestRunnerJobsQueryRejectsCallerFieldSelector(t *testing.T) {
+func TestValidRunnerJobsQuery(t *testing.T) {
 	for _, test := range []struct {
 		query url.Values
 		allow bool
@@ -28,6 +29,8 @@ func TestRunnerJobsQueryRejectsCallerFieldSelector(t *testing.T) {
 		{url.Values{"includeFields": {"metadata.name,status.phase"}, "excludeFields": {"status.stage"}}, true},
 		{url.Values{"fieldSelector": {"status.runner=other"}}, false},
 		{url.Values{"watch": {"true", "false"}}, false},
+		{url.Values{"includeFields": {"metadata.name", "status.phase"}}, false},
+		{url.Values{"resourceVersion": nil}, false},
 		{url.Values{"timeoutSeconds": {"301"}}, false},
 	} {
 		if got := validRunnerJobsQuery(test.query); got != test.allow {
@@ -66,7 +69,7 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
 				}
 				calls++
-				if !tc.user && tc.query == "watch=true" && api.runnerWatches["runner-1"] != 1 {
+				if !tc.user && tc.query == "watch=true" && !api.runnerWatches.Has("runner-1") {
 					t.Error("watch forwarded without holding its quota")
 				}
 				if tc.upstreamFailure {
@@ -77,12 +80,12 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			api, err = New(Dependencies{Upstream: client, Tokens: tokens, Limits: limit.New(100, 100, time.Now), BodyLimit: 1 << 20})
+			api, err = NewHandler(Dependencies{Upstream: client, IAM: iam.New(client), Tokens: tokens, Limits: limit.New(100, 100, time.Now), BodyLimit: 1 << 20})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if tc.active {
-				api.runnerWatches["runner-1"] = 1
+				api.runnerWatches.Insert("runner-1")
 			}
 			who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
 			if tc.user {
@@ -93,7 +96,7 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			router := gin.New()
-			router.GET("/runners/:runner/jobs", api.ResourceGuard("runners", "", "runner", "jobs"), api.RunnerJobsListGuard, api.ForwardResource)
+			router.GET("/runners/:runner/jobs", api.resourceGuard("runners", "", "runner", "jobs"), api.runnerJobsListGuard, api.forwardResource)
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/runners/runner-1/jobs?"+tc.query, nil)
 			request.Header.Set("Authorization", "Bearer "+token)
@@ -102,7 +105,7 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 				t.Fatalf("status=%d calls=%d, want %d/%d", recorder.Code, calls, tc.wantStatus, tc.wantCalls)
 			}
 			if tc.active {
-				if api.runnerWatches["runner-1"] != 1 {
+				if !api.runnerWatches.Has("runner-1") {
 					t.Fatal("existing watch quota changed")
 				}
 			} else if len(api.runnerWatches) != 0 {

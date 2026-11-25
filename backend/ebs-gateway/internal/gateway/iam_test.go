@@ -1,4 +1,4 @@
-package handler
+package gateway
 
 import (
 	"io"
@@ -34,7 +34,7 @@ func TestNamedUserProtection(t *testing.T) {
 				}
 				api := &Handler{upstream: client, bodyLimit: 64}
 				router := gin.New()
-				router.Handle(method, "/users/:name", api.Users)
+				router.Handle(method, "/users/:name", api.users)
 				response := httptest.NewRecorder()
 				router.ServeHTTP(response, httptest.NewRequest(method, "/users/example", nil))
 				wantCalls := "GET"

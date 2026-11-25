@@ -22,6 +22,9 @@ type Config struct {
 	Provider      ProviderConfig `yaml:"provider"`
 }
 
+// LocalAuthenticationEnabled reports whether the gateway uses local login and registration.
+func (c Config) LocalAuthenticationEnabled() bool { return c.PublicBaseURL == "" }
+
 type ProviderConfig struct {
 	ID                      string   `yaml:"id"`
 	Protocol                string   `yaml:"protocol"`

@@ -1,4 +1,4 @@
-package handler
+package gateway
 
 import (
 	"encoding/json"
@@ -14,8 +14,8 @@ import (
 	"ebs-gateway/internal/policy"
 )
 
-// RejectIAMWatch disallows watches on all IAM resource routes.
-func RejectIAMWatch(c *gin.Context) {
+// rejectIAMWatch disallows watches on all IAM resource routes.
+func rejectIAMWatch(c *gin.Context) {
 	if policy.HasWatch(c.Request.URL.Query()) {
 		c.AbortWithStatus(http.StatusForbidden)
 		return
@@ -23,7 +23,7 @@ func RejectIAMWatch(c *gin.Context) {
 	c.Next()
 }
 
-func (a *Handler) Users(c *gin.Context) {
+func (a *Handler) users(c *gin.Context) {
 	switch c.Request.Method {
 	case http.MethodGet, http.MethodHead:
 		if c.Param("name") == "" {
@@ -48,7 +48,7 @@ func (a *Handler) Users(c *gin.Context) {
 	a.forwardIAM(c, "users")
 }
 
-func (a *Handler) MachineAccounts(c *gin.Context) {
+func (a *Handler) machineAccounts(c *gin.Context) {
 	a.forwardIAM(c, "machineaccounts")
 }
 

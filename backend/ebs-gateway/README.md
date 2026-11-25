@@ -8,9 +8,8 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | --- | --- |
 | `cmd/main.go` | 执行 Gateway 命令 |
 | `cmd/app/server.go` | 定义 Cobra 参数、配置上游 TLS、启动 HTTP 服务 |
-| `internal/route` | 注册 Gin 路由、组织中间件 |
+| `internal/gateway` | 注册 Gin 路由，组装中间件，按资源处理和转发请求 |
 | `internal/middleware` | 身份认证、账号核验、Admin 门卫、请求限流和审计 |
-| `internal/handler` | 按资源处理请求，协调授权、请求准备和转发 |
 | `internal/identity` | JWT 签发、验证和身份类型 |
 | `internal/iam` | 调用 apiserver 的 IAM 接口 |
 | `internal/oauth` | OAuth/OIDC 提供方认证、加密 Cookie、首次注册及结果确认 |
@@ -19,12 +18,12 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/upstream` | 可信内部读取和流式反向代理 |
 | `internal/limit` | 请求令牌桶 |
 
-资源路径及允许的 HTTP 方法在 `route/router.go` 显式注册；`handler/resources.go` 负责资源请求的认证、授权、限流和 Watch 检查。
-指定 Job 的 GET/HEAD 路由显式挂载 `RunnerJobReadGuard` 检查 Runner 归属；Runner 任务列表的 GET 路由挂载 `RunnerJobsListGuard` 检查查询参数和 Watch 并发。漏挂所需 guard 时返回 500，不转发。
+从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的认证、授权、限流和 Watch 检查。
+指定 Job 的 GET/HEAD 路由显式挂载 `runnerJobReadGuard` 检查 Runner 归属；Runner 任务列表的 GET 路由挂载 `runnerJobsListGuard` 检查查询参数和 Watch 并发。漏挂所需 guard 时返回 500，不转发。
 Config 的可见性校验和响应读取由同一 Handler 完成；公共写请求处理放在 `request.go`。
 Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
 测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
-Handler 私有逻辑测试放在对应文件中，真实 HTTP 请求链、路由注册和 OpenAPI 测试统一放在 `route/router_test.go`。
+Handler 私有逻辑测试放在对应文件中，真实 HTTP 请求链、路由注册和 OpenAPI 路由契约测试放在 [router_test.go](internal/gateway/router_test.go)。
 
 ## 本地运行
 

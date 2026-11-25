@@ -1,4 +1,4 @@
-package handler
+package gateway
 
 import (
 	"net/http"
@@ -29,8 +29,8 @@ type resourceAccess struct {
 	pending resourceCheck
 }
 
-// ResourceGuard authorizes the route and records any check still required before forwarding.
-func (a *Handler) ResourceGuard(resource, projectKey, nameKey, subresource string) gin.HandlerFunc {
+// resourceGuard authorizes the route and records any check still required before forwarding.
+func (a *Handler) resourceGuard(resource, projectKey, nameKey, subresource string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		resolved := policy.Route{
 			Resource:    resource,
@@ -133,8 +133,7 @@ func prepareServiceAudit(c *gin.Context, route policy.Route) {
 
 func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
 	if !a.publicLimit.Allow(c.ClientIP()) {
-		c.Header("Retry-After", "1")
-		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+		middleware.AbortRateLimited(c, 1, "too many requests")
 		return false
 	}
 	if route.Name == "" && route.Subresource == "" {
@@ -154,11 +153,7 @@ func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, rout
 		return false
 	}
 	if err := a.policy.Authorize(c.Request.Context(), who, route); err != nil {
-		status := http.StatusForbidden
-		if classified, ok := err.(*policy.Error); ok {
-			status = classified.Status
-		}
-		c.AbortWithStatusJSON(status, gin.H{"error": err.Error()})
+		c.AbortWithStatusJSON(policyErrorStatus(err), gin.H{"error": err.Error()})
 		return false
 	}
 	if who.Type == identity.ServiceType {
@@ -167,8 +162,15 @@ func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, rout
 	return true
 }
 
-// ForwardResource only forwards after all required guards have passed.
-func (a *Handler) ForwardResource(c *gin.Context) {
+func policyErrorStatus(err error) int {
+	if classified, ok := err.(*policy.Error); ok {
+		return classified.Status
+	}
+	return http.StatusForbidden
+}
+
+// forwardResource only forwards after all required guards have passed.
+func (a *Handler) forwardResource(c *gin.Context) {
 	access := requireResourceCheck(c, noPendingCheck)
 	if access == nil {
 		return
