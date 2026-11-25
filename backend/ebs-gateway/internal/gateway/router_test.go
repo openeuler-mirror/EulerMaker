@@ -185,9 +185,9 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 	for path, methods := range map[string]string{
 		"/auth/login": "post", "/auth/register": "post", "/auth/machine-token": "post", "/auth/check": "post",
 		"/auth/users/{name}/password": "put", "/auth/machineaccounts": "post",
-		"/apis/ebs/v1/projects/{project}/builds":               "get head post",
-		"/apis/ebs/v1/projects/{project}/builds/{name}":        "get head delete",
-		"/apis/ebs/v1/projects/{project}/builds/{name}/status": "get head",
+		"/apis/ebs/v1/projects/{project}/builds":               "get post",
+		"/apis/ebs/v1/projects/{project}/builds/{name}":        "get delete",
+		"/apis/ebs/v1/projects/{project}/builds/{name}/status": "get",
 		"/apis/ebs/v1/projects/{project}/builds/{name}/abort":  "post",
 		"/apis/ebs/v1/scripts":                                 "get post",
 		"/apis/ebs/v1/scripts/{name}":                          "get put patch delete",
