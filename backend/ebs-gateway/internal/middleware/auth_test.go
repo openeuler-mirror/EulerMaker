@@ -26,17 +26,14 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
-		name        string
-		typ         identity.Type
-		scope       identity.Scope
-		resolveUser bool
-		status      int
-		lookupPath  string
+		name       string
+		typ        identity.Type
+		scope      identity.Scope
+		lookupPath string
 	}{
-		{"user", identity.UserType, identity.UserScope, true, http.StatusOK, "/apis/iam.ebs/v1/users/account"},
-		{"runner", identity.RunnerType, "", true, http.StatusOK, ""},
-		{"service token check", identity.ServiceType, "", false, http.StatusOK, "/apis/iam.ebs/v1/machineaccounts/account"},
-		{"service skips user resolution", identity.ServiceType, "", true, http.StatusOK, "/apis/iam.ebs/v1/machineaccounts/account"},
+		{"user", identity.UserType, identity.UserScope, "/apis/iam.ebs/v1/users/account"},
+		{"runner", identity.RunnerType, "", ""},
+		{"service", identity.ServiceType, "", "/apis/iam.ebs/v1/machineaccounts/account"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			paths := make(chan string, 4)
@@ -64,12 +61,8 @@ func TestAuthMiddleware(t *testing.T) {
 				t.Fatal(err)
 			}
 			router := gin.New()
-			router.Use(auth.Authenticate)
-			if test.resolveUser {
-				router.Use(auth.ResolveUser)
-			}
 			called := false
-			router.GET("/", func(c *gin.Context) {
+			router.GET("/", auth.Authenticate, func(c *gin.Context) {
 				called = true
 				who := Principal(c)
 				if who.Subject != "account" || who.Type != test.typ || who.Scope != test.scope || who.Runner != runner {
@@ -88,8 +81,8 @@ func TestAuthMiddleware(t *testing.T) {
 			request.Header.Set("Authorization", "Bearer "+token)
 			recorder := httptest.NewRecorder()
 			router.ServeHTTP(recorder, request)
-			if recorder.Code != test.status || called != (test.status == http.StatusOK) {
-				t.Fatalf("status=%d handler called=%v, want status=%d", recorder.Code, called, test.status)
+			if recorder.Code != http.StatusOK || !called {
+				t.Fatalf("status=%d handler called=%v", recorder.Code, called)
 			}
 			var lookups []string
 			for len(paths) > 0 {

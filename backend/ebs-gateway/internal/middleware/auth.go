@@ -38,63 +38,50 @@ func Principal(c *gin.Context) identity.Principal {
 	return value.(identity.Principal)
 }
 
-// Authenticate requires a valid Bearer token before continuing the route chain.
+// Authenticate verifies the token and, for user identities, the current IAM account.
 func (a *Auth) Authenticate(c *gin.Context) {
-	if !a.Verify(c) {
+	if !a.VerifyAccess(c) {
 		return
 	}
 	c.Next()
 }
 
-// Verify stores the verified identity for routes that also support anonymous access.
-func (a *Auth) Verify(c *gin.Context) bool {
-	who, ok := a.verifyBearer(c, c.GetHeader("Authorization"))
-	if !ok {
-		return false
-	}
-	c.Set(principalKey, who)
-	return true
-}
-
-// ResolveUser checks resource-access identity before continuing the route chain.
-func (a *Auth) ResolveUser(c *gin.Context) {
-	if !a.ConfirmUser(c, Principal(c)) {
-		return
-	}
-	c.Next()
-}
-
-func (a *Auth) verifyBearer(c *gin.Context, header string) (identity.Principal, bool) {
-	parts := strings.Fields(header)
+func (a *Auth) verifyToken(c *gin.Context) bool {
+	parts := strings.Fields(c.GetHeader("Authorization"))
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return identity.Principal{}, false
+		return false
 	}
 	who, err := a.tokens.Verify(parts[1], a.now())
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return identity.Principal{}, false
+		return false
 	}
 	if who.Type == identity.ServiceType {
 		account, status, err := a.iam.GetMachine(c.Request.Context(), who.Subject)
 		if err != nil || (status != http.StatusOK && status != http.StatusNotFound) {
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "machine account service unavailable"})
-			return identity.Principal{}, false
+			return false
 		}
 		if status == http.StatusNotFound || account.Name != who.Subject || account.Spec.Type != iamv1.MachineAccountService {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return identity.Principal{}, false
+			return false
 		}
 		who.ServiceGrants = &identity.ServiceGrants{
 			Projects:    account.Spec.Projects,
 			Permissions: account.Spec.Permissions,
 		}
 	}
-	return who, true
+	c.Set(principalKey, who)
+	return true
 }
 
-// ConfirmUser validates User accounts; other identities are handled by their own authentication and authorization rules.
-func (a *Auth) ConfirmUser(c *gin.Context, who identity.Principal) bool {
+// VerifyAccess authenticates a request without advancing its middleware chain.
+func (a *Auth) VerifyAccess(c *gin.Context) bool {
+	if !a.verifyToken(c) {
+		return false
+	}
+	who := Principal(c)
 	if !who.IsUser() {
 		return true
 	}

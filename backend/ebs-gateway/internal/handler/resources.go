@@ -116,10 +116,7 @@ func (a *Handler) authenticateResource(c *gin.Context, allowAnonymous bool) bool
 		c.Set("anonymous", true)
 		return true
 	}
-	if !a.auth.Verify(c) {
-		return false
-	}
-	return a.auth.ConfirmUser(c, middleware.Principal(c))
+	return a.auth.VerifyAccess(c)
 }
 
 func prepareServiceAudit(c *gin.Context, route policy.Route) {

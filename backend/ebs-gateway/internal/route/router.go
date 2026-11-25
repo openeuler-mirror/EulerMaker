@@ -18,7 +18,7 @@ func New(api *handler.Handler) *gin.Engine {
 	middleware := api.Middleware()
 	router.Use(middleware.Audit, gin.Recovery())
 
-	registerAuth(router, middleware, api.Endpoints())
+	registerAuth(router, api, middleware)
 	registerOAuth(router, api)
 	registerIAM(router, api, middleware)
 
@@ -32,7 +32,7 @@ func New(api *handler.Handler) *gin.Engine {
 	registerHealthz(router)
 	registerOpenAPI(router)
 
-	router.NoRoute(middleware.Authenticate, middleware.ResolveUser, func(c *gin.Context) {
+	router.NoRoute(middleware.Authenticate, func(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 	})
 	return router
@@ -40,25 +40,23 @@ func New(api *handler.Handler) *gin.Engine {
 
 func registerOAuth(router *gin.Engine, api *handler.Handler) {
 	router.GET("/auth/providers", api.OAuth.Providers)
-	group := router.Group("/auth/oauth")
-	group.GET("/:provider/login", api.OAuth.Login)
-	group.POST("/:provider/callback", api.OAuth.Callback)
-	group.POST("/register", api.OAuth.Register)
+	router.GET("/auth/oauth/:provider/login", api.OAuth.Login)
+	router.POST("/auth/oauth/:provider/callback", api.OAuth.Callback)
+	router.POST("/auth/oauth/register", api.OAuth.Register)
 }
 
-func registerAuth(router *gin.Engine, middleware handler.Middleware, endpoints handler.Endpoints) {
-	auth := router.Group("/auth")
-	auth.POST("/register", endpoints.RegisterUser)
-	auth.POST("/login", endpoints.Login)
-	auth.POST("/machine-token", endpoints.MachineToken)
-	auth.POST("/check", middleware.Authenticate, middleware.LimitAuthenticated, endpoints.CheckToken)
-	auth.PUT("/users/:name/password", middleware.Authenticate, middleware.ResolveUser, middleware.LimitAuthenticated, endpoints.ChangePassword)
-	auth.POST("/machineaccounts", middleware.Authenticate, middleware.ResolveUser, middleware.LimitAuthenticated, middleware.RequireAdmin, endpoints.RegisterMachine)
+func registerAuth(router *gin.Engine, api *handler.Handler, middleware handler.Middleware) {
+	router.POST("/auth/register", api.RegisterUser)
+	router.POST("/auth/login", api.Login)
+	router.POST("/auth/check", middleware.Authenticate, middleware.LimitAuthenticated, api.CheckToken)
+	router.PUT("/auth/users/:name/password", middleware.Authenticate, middleware.LimitAuthenticated, api.ChangePassword)
+	router.POST("/auth/machine-token", api.MachineToken)
+	router.POST("/auth/machineaccounts", middleware.Authenticate, middleware.LimitAuthenticated, middleware.RequireAdmin, api.RegisterMachine)
 }
 
 func registerIAM(router *gin.Engine, api *handler.Handler, middleware handler.Middleware) {
 	iam := router.Group("/apis/iam.ebs/v1")
-	iam.Use(middleware.Authenticate, middleware.ResolveUser, middleware.LimitAuthenticated, middleware.RequireAdmin)
+	iam.Use(middleware.Authenticate, middleware.LimitAuthenticated, middleware.RequireAdmin)
 
 	iam.Match([]string{http.MethodGet, http.MethodHead}, "/users", api.Users)
 	iam.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/users/:name", api.Users)
@@ -67,7 +65,7 @@ func registerIAM(router *gin.Engine, api *handler.Handler, middleware handler.Mi
 }
 
 func registerServiceEndpoints(router *gin.Engine, api *handler.Handler, middleware handler.Middleware) {
-	router.GET("/apis/ebs/v1/service-endpoints", middleware.Authenticate, middleware.ResolveUser,
+	router.GET("/apis/ebs/v1/service-endpoints", middleware.Authenticate,
 		middleware.LimitAuthenticated, api.ServiceEndpoints)
 }
 

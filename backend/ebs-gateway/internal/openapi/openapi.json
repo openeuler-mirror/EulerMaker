@@ -12655,7 +12655,7 @@
     },
     "/auth/check": {
       "post": {
-        "description": "Accepts user, Runner and service Bearer tokens. No request body. Service tokens require a live MachineAccount with matching name and service type. Deleted accounts return 401; recreating a service account with the same name makes unexpired tokens valid again. IAM failures return 503. Does not grant resource permissions.",
+        "description": "Accepts user, Runner and service Bearer tokens. No request body. User tokens require a matching, enabled User with the same scope; missing, disabled or mismatched users return 403. Runner tokens require no account lookup. Service tokens require a live MachineAccount with matching name and service type. Deleted service accounts return 401; recreating a service account with the same name makes unexpired tokens valid again. IAM failures return 503. Does not grant resource permissions.",
         "operationId": "checkToken",
         "responses": {
           "200": {

@@ -404,7 +404,13 @@ POST /auth/check
 Authorization: Bearer <token>
 ```
 
-该接口不要求 mTLS 客户端证书、服务凭据或其他服务身份。Gateway 验证 JWT 签名、issuer、audience、时间字段和 scope 结构；成功返回认证身份、Token scopes 和过期时间，调用方根据自身需求检查主体类型及权限。Token 非法返回 401，携带非空请求正文返回 400，超过按 `{sub}/{clientIP}` 计算的限流返回 429。接口不查询 User、Runner 或 Job，不执行资源授权；service 额外执行上述 MachineAccount 实时核验，IAM 不可用返回 503。
+该接口不要求 mTLS 客户端证书、服务凭据或其他服务身份。Gateway 验证 JWT 签名、issuer、audience、时间字段和 scope 结构；成功返回认证身份、Token scopes 和过期时间，调用方根据自身需求检查主体类型及权限。Token 非法返回 401，携带非空请求正文返回 400，超过按 `{sub}/{clientIP}` 计算的限流返回 429。接口只确认身份，不执行资源授权。
+
+- User：查询当前 IAM User，确认账号名称匹配、已启用且角色与 Token 一致。账号不存在、已禁用或角色不匹配时返回 403。
+- Runner：不查询 User、Runner 或 Job。
+- Service：按上述规则实时核验 MachineAccount；账号不存在、名称或类型不匹配时返回 401。
+
+User 或 MachineAccount 查询不可用时返回 503。
 
 响应中的 `identity.type` 为 user、runner 或 service；service 的名称为 MachineAccount 名称。
 用户权限由 `identity.scopes` 表示；Runner 和 Service 的 scopes 为空数组，不在响应中返回服务授权列表或凭据。

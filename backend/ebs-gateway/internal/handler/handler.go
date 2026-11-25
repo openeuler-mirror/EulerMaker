@@ -81,10 +81,9 @@ func New(deps Dependencies) (*Handler, error) {
 	}, nil
 }
 
-// Middleware and Endpoints expose HTTP handlers for route registration.
+// Middleware exposes the shared middleware chain for route registration.
 type Middleware struct {
 	Authenticate       gin.HandlerFunc
-	ResolveUser        gin.HandlerFunc
 	LimitAuthenticated gin.HandlerFunc
 	Audit              gin.HandlerFunc
 	RequireAdmin       gin.HandlerFunc
@@ -93,29 +92,8 @@ type Middleware struct {
 func (a *Handler) Middleware() Middleware {
 	return Middleware{
 		Authenticate:       a.auth.Authenticate,
-		ResolveUser:        a.auth.ResolveUser,
 		LimitAuthenticated: middleware.LimitAuthenticated(a.limits),
 		Audit:              middleware.Audit(a.now),
 		RequireAdmin:       middleware.RequireAdmin,
-	}
-}
-
-type Endpoints struct {
-	RegisterUser    gin.HandlerFunc
-	Login           gin.HandlerFunc
-	MachineToken    gin.HandlerFunc
-	CheckToken      gin.HandlerFunc
-	ChangePassword  gin.HandlerFunc
-	RegisterMachine gin.HandlerFunc
-}
-
-func (a *Handler) Endpoints() Endpoints {
-	return Endpoints{
-		RegisterUser:    a.registerUser,
-		Login:           a.login,
-		MachineToken:    a.machineToken,
-		CheckToken:      a.checkToken,
-		ChangePassword:  a.changePassword,
-		RegisterMachine: a.registerMachine,
 	}
 }
