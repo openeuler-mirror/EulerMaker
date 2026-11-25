@@ -225,7 +225,7 @@ func TestServicePermissionsAreIndependent(t *testing.T) {
 	}
 }
 
-func TestRunnerAndScriptAuthorization(t *testing.T) {
+func TestRunnerAuthorization(t *testing.T) {
 	a := projectAuthorizer(t)
 	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
 	for _, test := range []struct {
@@ -239,8 +239,6 @@ func TestRunnerAndScriptAuthorization(t *testing.T) {
 		{Route{Resource: "jobs", Project: "team", Name: "job-1", Method: http.MethodGet}, true},
 		{Route{Resource: "jobs", Project: "team", Name: "job-1", Subresource: "status", Method: http.MethodPatch}, true},
 		{Route{Resource: "jobs", Project: "team", Name: "job-1", Subresource: "status", Method: http.MethodGet}, false},
-		{Route{Resource: "scripts", Name: "rpmbuild", Method: http.MethodGet}, true},
-		{Route{Resource: "scripts", Method: http.MethodGet}, false},
 	} {
 		err := a.Authorize(context.Background(), runner, test.route)
 		if (err == nil) != test.allow {
@@ -249,8 +247,27 @@ func TestRunnerAndScriptAuthorization(t *testing.T) {
 	}
 }
 
+func TestScriptAuthorization(t *testing.T) {
+	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
+	for _, tc := range []struct {
+		who    identity.Principal
+		name   string
+		method string
+		allow  bool
+	}{
+		{runner, "rpmbuild", http.MethodGet, true},
+		{runner, "", http.MethodGet, false},
+		{runner, "rpmbuild", http.MethodPut, false},
+		{identity.Principal{Type: identity.ServiceType}, "rpmbuild", http.MethodGet, false},
+	} {
+		route := Route{Resource: "scripts", Name: tc.name, Method: tc.method}
+		if err := AuthorizeScript(context.Background(), tc.who, route); (err == nil) != tc.allow {
+			t.Errorf("AuthorizeScript(%s, %+v) error=%v, want allow=%v", tc.who.Type, route, err, tc.allow)
+		}
+	}
+}
+
 func TestConfigAuthorization(t *testing.T) {
-	a := projectAuthorizer(t)
 	ordinary := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
 	ops := identity.Principal{Type: identity.UserType, Subject: "ops", Scope: identity.OpsScope}
 	admin := identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}
@@ -264,6 +281,7 @@ func TestConfigAuthorization(t *testing.T) {
 		{ordinary, "services", http.MethodGet, false},
 		{ordinary, "services", http.MethodPut, false},
 		{runner, "services", http.MethodGet, false},
+		{identity.Principal{Type: identity.ServiceType}, "services", http.MethodGet, false},
 		{ops, "services", http.MethodGet, true},
 		{ops, "services", http.MethodPost, true},
 		{ops, "services", http.MethodPut, true},
@@ -277,7 +295,7 @@ func TestConfigAuthorization(t *testing.T) {
 		{ops, "custom", http.MethodDelete, true},
 	} {
 		route := Route{Resource: "configs", Name: test.name, Method: test.method}
-		if err := a.Authorize(context.Background(), test.who, route); (err == nil) != test.allow {
+		if err := AuthorizeConfig(context.Background(), test.who, route); (err == nil) != test.allow {
 			t.Errorf("Authorize(%s, %s, %s) error=%v, want allow=%v", test.who.Scope, test.name, test.method, err, test.allow)
 		}
 	}

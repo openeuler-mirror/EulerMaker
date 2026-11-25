@@ -104,9 +104,6 @@ func operations() object {
 			}
 			methods := []string{"get"}
 			if !r.readOnly {
-				if r.name == "configs" {
-					methods = append(methods, "head")
-				}
 				switch part {
 				case "list":
 					methods = append(methods, "post")
@@ -129,12 +126,9 @@ func operations() object {
 				}
 				op := operation(method+strings.Title(r.name)+strings.Title(part), r.kind, method+" "+r.name+" "+part,
 					description, security, resourceRef(responseKind), code)
-				if method == "get" || method == "head" {
-					op["parameters"] = queryParameters(part == "list", r.name == "jobs" && part == "list" && method == "get", true)
-					if r.name == "configs" && part == "object" {
-						delete(op, "parameters")
-					}
-					if r.name == "jobs" && part == "list" && method == "get" {
+				if method == "get" {
+					op["parameters"] = queryParameters(part == "list", r.name == "jobs" && part == "list", true)
+					if r.name == "jobs" && part == "list" {
 						watchResponse(op)
 					}
 				}
@@ -165,6 +159,8 @@ func operations() object {
 	op["parameters"] = queryParameters(true, true, false)
 	watchResponse(op)
 	add(paths, "/apis/ebs/v1/runners/{runner}/jobs", "get", op)
+	add(paths, "/apis/ebs/v1/build-targets", "get", operation("getBuildTargets", "Config", "List available build targets",
+		"Public read for anonymous callers and users. Returns distributions and architectures, not build images.", optionalBearer, ref("BuildTargets"), "200"))
 	add(paths, "/apis/ebs/v1/service-endpoints", "get", operation("getServiceEndpoints", "Runner", "Get Runner service addresses",
 		"Runner token only. Returns all configured Runner endpoints, not management internalURL. No query parameters.", bearer, ref("ServiceEndpoints"), "200"))
 	return paths
@@ -276,19 +272,12 @@ func setResourceRequest(op object, method string, schema object, abort bool) {
 		op["requestBody"] = body(ref("k8s.io/apimachinery/pkg/apis/meta/v1.DeleteOptions"), false)
 		op["description"] = op["description"].(string) + " Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed."
 		op["responses"].(object)["200"] = object{"description": "Deleted object or Kubernetes Status.", "content": object{"application/json": object{"schema": object{"anyOf": []object{schema, ref("k8s.io/apimachinery/pkg/apis/meta/v1.Status")}}}}}
-	case "head":
-		for code := range op["responses"].(object) {
-			op["responses"].(object)[code] = object{"description": "HTTP status only; HEAD has no response body."}
-		}
 	}
 }
 
 func permissions(resource, part, method string) ([]object, string) {
-	read := method == "get" || method == "head"
+	read := method == "get"
 	if resource == "configs" {
-		if read && part == "object" {
-			return optionalBearer, "Public Config may be read anonymously; OpsOnly requires Ops/Admin. Visibility is evaluated on the returned object."
-		}
 		return bearer, "Ops/Admin only. Built-in configs build-target, build-resource and services cannot be deleted."
 	}
 	if resource == "scripts" {
@@ -308,7 +297,7 @@ func permissions(resource, part, method string) ([]object, string) {
 		if resource == "jobs" && part == "object" {
 			description += " Runner tokens may GET only their assigned Jobs."
 		}
-		if resource == "jobs" && part == "list" && method == "get" {
+		if resource == "jobs" && part == "list" {
 			description += " Watch requires authenticated project access, returns newline-delimited WatchEvent JSON instead of JobList and cannot use field projection; restart List after 410."
 		}
 		return optionalBearer, description

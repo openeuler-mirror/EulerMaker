@@ -45,10 +45,6 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 		return authorizeService(who, route)
 	}
 	switch route.Resource {
-	case "configs":
-		return authorizeConfig(who, route)
-	case "scripts":
-		return authorizeScript(who, route)
 	case "runners":
 		return authorizeRunner(who, route)
 	case "projects":
@@ -163,15 +159,6 @@ func ServiceOperation(route Route) (string, iamv1.MachineAccountPermission) {
 	return "", ""
 }
 
-func IsReadOnlyProjectResource(resource string) bool {
-	switch resource {
-	case "snapshots", "buildinfos", "buildgraphs", "rpmrepos", "oldjobs":
-		return true
-	default:
-		return false
-	}
-}
-
 func (a *Authorizer) jobAbort(ctx context.Context, who identity.Principal, route Route) error {
 	if route.Method != http.MethodPost || route.Project == "" || route.Name == "" {
 		return deny("Job abort requires a named Job and POST")
@@ -189,7 +176,11 @@ func (a *Authorizer) jobAbort(ctx context.Context, who identity.Principal, route
 	return nil
 }
 
-func authorizeConfig(who identity.Principal, route Route) error {
+// AuthorizeConfig restricts Config reads and writes to Ops/Admin.
+func AuthorizeConfig(_ context.Context, who identity.Principal, route Route) error {
+	if who.Type == identity.ServiceType {
+		return authorizeService(who, route)
+	}
 	if !who.IsPrivileged() {
 		return deny("Config access requires Ops")
 	}
@@ -211,17 +202,21 @@ func isBuiltInConfig(name string) bool {
 	}
 }
 
-func authorizeScript(who identity.Principal, route Route) error {
+// AuthorizeScript checks Script reads and writes for the authenticated caller.
+func AuthorizeScript(_ context.Context, who identity.Principal, route Route) error {
+	if who.Type == identity.ServiceType {
+		return authorizeService(who, route)
+	}
 	if route.Subresource != "" {
 		return deny("Script subresource is not exposed")
 	}
 	if who.Type == identity.RunnerType {
-		if route.Name != "" && (route.Method == http.MethodGet || route.Method == http.MethodHead) {
+		if route.Name != "" && route.Method == http.MethodGet {
 			return nil
 		}
 		return deny("Runner can only read a named Script")
 	}
-	if route.Method == http.MethodGet || route.Method == http.MethodHead {
+	if route.Method == http.MethodGet {
 		return nil
 	}
 	if !who.IsPrivileged() {
@@ -238,11 +233,11 @@ func IsPublicRead(route Route) bool {
 	if route.Resource == "oldjobs" && route.Subresource != "" {
 		return false
 	}
-	if route.Method != http.MethodGet && route.Method != http.MethodHead {
+	if route.Method != http.MethodGet {
 		return false
 	}
-	if IsReadOnlyProjectResource(route.Resource) && route.Method != http.MethodGet {
-		return false
+	if route.Resource == "build-targets" {
+		return route.Project == "" && route.Name == "" && route.Subresource == ""
 	}
 	if route.Subresource != "" && route.Subresource != "status" {
 		return false

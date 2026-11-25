@@ -17,17 +17,8 @@ export function parseBuildTargetContent(value: unknown): BuildTargetContent {
   return value as unknown as BuildTargetContent;
 }
 
-export function configuredOS(conf: BuildTargetContent | null): string[] {
-  return Object.keys(conf?.targets || {}).sort();
-}
-
-export function configuredArches(conf: BuildTargetContent | null, os?: string): string[] {
-  const targets = conf?.targets;
-  if (!targets || !os || !Object.hasOwn(targets, os)) return [];
-  return Object.keys(targets[os].arches).sort();
-}
-
 export function supportsTarget(conf: BuildTargetContent | null, target: ConfiguredBuildTarget): boolean {
-  if (!target.os || !target.arch || !configuredArches(conf, target.os).includes(target.arch)) return false;
-  return Boolean(conf!.targets[target.os].arches[target.arch].image);
+  if (!conf || !target.os || !target.arch || !Object.hasOwn(conf.targets, target.os)) return false;
+  const arches = conf.targets[target.os].arches;
+  return Object.hasOwn(arches, target.arch) && Boolean(arches[target.arch].image);
 }

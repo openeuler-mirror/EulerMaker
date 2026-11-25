@@ -22,7 +22,7 @@ func NewRouter(api *Handler, oauthHandler *oauth.Handler) *gin.Engine {
 	registerOAuth(router, oauthHandler)
 	registerIAM(router, api)
 
-	registerServiceEndpoints(router, api)
+	registerConfigProjections(router, api)
 	registerConfigs(router, api)
 	registerScripts(router, api)
 	registerProjects(router, api)
@@ -73,21 +73,36 @@ func registerIAM(router *gin.Engine, api *Handler) {
 	iam.DELETE("/machineaccounts/:name", api.machineAccounts)
 }
 
-func registerServiceEndpoints(router *gin.Engine, api *Handler) {
+func registerConfigProjections(router *gin.Engine, api *Handler) {
+	router.GET("/apis/ebs/v1/build-targets", api.resourceGuard("build-targets", "", "", ""), api.buildTargets)
 	router.GET("/apis/ebs/v1/service-endpoints", api.auth.Authenticate,
 		middleware.LimitAuthenticated(api.limits), api.serviceEndpoints)
 }
 
 func registerConfigs(router *gin.Engine, api *Handler) {
-	guard := api.resourceGuard("configs", "", "name", "")
-	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/apis/ebs/v1/configs", guard, api.forwardResource)
-	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/apis/ebs/v1/configs/:name", guard, api.forwardResource)
+	configs := router.Group("/apis/ebs/v1/configs")
+	configs.Use(api.configGuard)
+
+	configs.GET("", api.forwardResource)
+	configs.POST("", api.forwardResource)
+
+	configs.GET("/:name", api.forwardResource)
+	configs.PUT("/:name", api.forwardResource)
+	configs.PATCH("/:name", api.forwardResource)
+	configs.DELETE("/:name", api.forwardResource)
 }
 
 func registerScripts(router *gin.Engine, api *Handler) {
-	guard := api.resourceGuard("scripts", "", "name", "")
-	router.Match([]string{http.MethodGet, http.MethodPost}, "/apis/ebs/v1/scripts", guard, api.forwardResource)
-	router.Match([]string{http.MethodGet, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/apis/ebs/v1/scripts/:name", guard, api.forwardResource)
+	scripts := router.Group("/apis/ebs/v1/scripts")
+	scripts.Use(api.scriptGuard)
+
+	scripts.GET("", api.forwardResource)
+	scripts.POST("", api.forwardResource)
+
+	scripts.GET("/:name", api.forwardResource)
+	scripts.PUT("/:name", api.forwardResource)
+	scripts.PATCH("/:name", api.forwardResource)
+	scripts.DELETE("/:name", api.forwardResource)
 }
 
 func registerProjects(router *gin.Engine, api *Handler) {

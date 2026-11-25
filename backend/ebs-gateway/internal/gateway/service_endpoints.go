@@ -1,27 +1,21 @@
 package gateway
 
 import (
-	"encoding/json"
-	"io"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
-	"gopkg.in/yaml.v3"
 
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/middleware"
 )
 
-const maxServiceConfigResponse = 5 << 20
-
 type runnerServiceEndpoint struct {
 	RunnerInternalURL string `json:"runnerInternalURL" yaml:"runnerInternalURL"`
 	RunnerExternalURL string `json:"runnerExternalURL" yaml:"runnerExternalURL"`
 }
 
-// serviceEndpoints returns Runner-facing addresses without exposing management URLs or the OpsOnly Config.
+// serviceEndpoints returns Runner-facing addresses without exposing management URLs or the raw Config.
 func (a *Handler) serviceEndpoints(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	if middleware.Principal(c).Type != identity.RunnerType {
@@ -32,41 +26,8 @@ func (a *Handler) serviceEndpoints(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query parameters are not supported"})
 		return
 	}
-	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet,
-		apiPrefix+"/configs/"+ebsv1.ServiceConfigName, nil, nil)
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "service configuration unavailable"})
-		return
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "service configuration unavailable"})
-		return
-	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxServiceConfigResponse+1))
-	if err != nil || len(data) > maxServiceConfigResponse {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "service configuration unavailable"})
-		return
-	}
-	var config struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Spec struct {
-			Visibility string `json:"visibility"`
-			Content    string `json:"content"`
-		} `json:"spec"`
-	}
-	if json.Unmarshal(data, &config) != nil || config.Metadata.Name != ebsv1.ServiceConfigName ||
-		config.Spec.Visibility != string(ebsv1.ConfigVisibilityOpsOnly) {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid service configuration"})
-		return
-	}
 	var content ebsv1.ServiceConfigContent
-	decoder := yaml.NewDecoder(strings.NewReader(config.Spec.Content))
-	decoder.KnownFields(true)
-	var trailing any
-	if decoder.Decode(&content) != nil || decoder.Decode(&trailing) != io.EOF {
+	if !a.readConfigContent(c, ebsv1.ServiceConfigName, &content) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid service configuration"})
 		return
 	}

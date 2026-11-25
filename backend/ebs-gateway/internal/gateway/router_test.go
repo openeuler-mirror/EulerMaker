@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -155,6 +154,9 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 	}
 	registered := map[string]bool{}
 	for _, route := range router.Routes() {
+		if route.Method == http.MethodHead && strings.HasPrefix(route.Path, "/apis/") {
+			t.Fatalf("management route unexpectedly supports HEAD: %s", route.Path)
+		}
 		segments := strings.Split(route.Path, "/")
 		for i, segment := range segments {
 			if strings.HasPrefix(segment, ":") {
@@ -448,6 +450,7 @@ func TestServiceTokenRejectsOperationsOutsideAllowlist(t *testing.T) {
 		{"DELETE", "/apis/ebs/v1/projects/team/builds/build-1"},
 		{"POST", "/apis/ebs/v1/projects/team/jobs/job-1/abort"},
 		{"GET", "/apis/ebs/v1/configs/services"},
+		{"GET", "/apis/ebs/v1/scripts/rpmbuild"},
 		{"GET", "/apis/ebs/v1/runners/service/jobs?watch=true"},
 		{"GET", "/apis/ebs/v1/service-endpoints"},
 		{"GET", "/apis/iam.ebs/v1/machineaccounts"},
@@ -1099,52 +1102,98 @@ func TestRegisterRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-func TestConfigVisibilityUsesOneUpstreamResponse(t *testing.T) {
+func TestPublicBuildTargets(t *testing.T) {
 	for _, tc := range []struct {
-		visibility, method string
-		runner             bool
-		status             int
+		name, content, want string
+		status              int
 	}{
-		{"Public", http.MethodGet, false, http.StatusOK},
-		{"OpsOnly", http.MethodGet, false, http.StatusForbidden},
-		{"Public", http.MethodHead, true, http.StatusOK},
-		{"OpsOnly", http.MethodHead, true, http.StatusForbidden},
+		{"sorted projection", "targets: {z: {arches: {x86_64: {image: hidden}, aarch64: {image: hidden}}}, a: {arches: {arm: {image: hidden}}}}",
+			`{"items":[{"distro":"a","arches":["arm"]},{"distro":"z","arches":["aarch64","x86_64"]}]}`, 200},
+		{"empty", "targets: {}", `{"items":[]}`, 200},
+		{"invalid", "targets: [hidden]", "", 503},
 	} {
-		t.Run(tc.method+"/"+tc.visibility, func(t *testing.T) {
-			if tc.method == http.MethodHead {
-				t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodGet || r.URL.RequestURI() != "/apis/ebs/v1/configs/build-target" {
+					t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL)
+				}
+				body, _ := json.Marshal(map[string]any{"metadata": map[string]string{"name": "build-target"}, "spec": map[string]string{"content": tc.content}})
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body))}, nil
+			}))
+			res := httptest.NewRecorder()
+			api.Router().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/build-targets", nil))
+			if res.Code != tc.status || (tc.want != "" && res.Body.String() != tc.want) || strings.Contains(res.Body.String(), "hidden") {
+				t.Fatalf("status=%d response=%s", res.Code, res.Body)
 			}
+		})
+	}
+}
+
+func TestConfigAndScriptRouteGuards(t *testing.T) {
+	for _, tc := range []struct {
+		method, path, caller string
+		status               int
+	}{
+		{"GET", "/build-targets", "user", 200},
+		{"GET", "/build-targets", "invalid", 401},
+		{"GET", "/build-targets", "runner", 403},
+		{"GET", "/configs/example", "invalid", 401},
+		{"GET", "/configs/build-target", "", 401},
+		{"GET", "/configs/build-target", "user", 403},
+		{"GET", "/configs/build-target", "runner", 403},
+		{"GET", "/configs/example?watch=true", "", 401},
+		{"GET", "/configs/example?watch=true", "ops", 403},
+		{"GET", "/configs/example", "ops", 200},
+		{"GET", "/configs/example", "admin", 200},
+		{"GET", "/configs", "", 401},
+		{"GET", "/configs", "user", 403},
+		{"GET", "/configs", "ops", 200},
+		{"DELETE", "/configs/services", "ops", 403},
+		{"GET", "/scripts/rpmbuild", "", 401},
+		{"GET", "/scripts/rpmbuild", "runner", 200},
+		{"GET", "/scripts", "runner", 403},
+		{"GET", "/scripts", "user", 200},
+		{"DELETE", "/scripts/custom", "user", 403},
+		{"DELETE", "/scripts/custom", "ops", 200},
+	} {
+		t.Run(tc.method+" "+tc.path+"/"+tc.caller, func(t *testing.T) {
 			calls := 0
 			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				calls++
-				if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/configs/example" {
-					t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+				body := "{}"
+				if r.URL.Path == "/apis/iam.ebs/v1/users/"+tc.caller {
+					body = fmt.Sprintf(`{"metadata":{"name":%q},"spec":{"enabled":true,"scopes":["ebs:%s"]}}`, tc.caller, tc.caller)
+				} else {
+					calls++
+					if r.URL.Path == "/apis/ebs/v1/configs/build-target" {
+						body = `{"metadata":{"name":"build-target"},"spec":{"content":"targets: {}"}}`
+					}
 				}
-				body := `{"metadata":{"name":"example"},"spec":{"visibility":"` + tc.visibility + `","content":"hello"}}`
-				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(tc.method, "/apis/ebs/v1/configs/example", nil)
-			if tc.runner {
-				token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+			req := httptest.NewRequest(tc.method, "/apis/ebs/v1"+tc.path, nil)
+			switch tc.caller {
+			case "":
+			case "invalid":
+				req.Header.Set("Authorization", "Bearer invalid")
+			default:
+				typ, scope, runner := identity.UserType, identity.Scope("ebs:"+tc.caller), ""
+				if tc.caller == "runner" {
+					typ, scope, runner = identity.RunnerType, "", tc.caller
+				}
+				token, err := api.tokens.Issue(tc.caller, runner, typ, scope, time.Hour, api.now())
 				if err != nil {
 					t.Fatal(err)
 				}
-				request.Header.Set("Authorization", "Bearer "+token)
+				req.Header.Set("Authorization", "Bearer "+token)
 			}
-			api.Router().ServeHTTP(recorder, request)
-			if calls != 1 || recorder.Code != tc.status {
-				t.Fatalf("calls=%d status=%d body=%q", calls, recorder.Code, recorder.Body.String())
-			}
+			res := httptest.NewRecorder()
+			api.Router().ServeHTTP(res, req)
+			wantCalls := 0
 			if tc.status == http.StatusOK {
-				if recorder.Header().Get("Content-Type") != "application/json" ||
-					(tc.method == http.MethodHead && recorder.Body.Len() != 0) ||
-					(tc.method == http.MethodGet && !strings.Contains(recorder.Body.String(), "hello")) {
-					t.Fatalf("unexpected response: headers=%v body=%q", recorder.Header(), recorder.Body)
-				}
+				wantCalls = 1
 			}
-			if tc.status == http.StatusForbidden && strings.Contains(recorder.Body.String(), "hello") {
-				t.Fatal("OpsOnly content leaked")
+			if res.Code != tc.status || calls != wantCalls {
+				t.Fatalf("status=%d upstream calls=%d, want %d/%d", res.Code, calls, tc.status, wantCalls)
 			}
 		})
 	}
@@ -1167,7 +1216,7 @@ gitServer:
 `
 	config, err := json.Marshal(map[string]any{
 		"metadata": map[string]string{"name": "services"},
-		"spec":     map[string]string{"visibility": "OpsOnly", "content": content},
+		"spec":     map[string]string{"content": content},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1243,7 +1292,7 @@ gitServer:
 
 func TestRunnerServiceEndpointsRejectsInvalidConfig(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
-		body := `{"metadata":{"name":"services"},"spec":{"visibility":"OpsOnly","content":"artifactManagers:\n  art-01:\n    internalURL: http://artifact-manager.art-01:8081\n    secret: hidden\n"}}`
+		body := `{"metadata":{"name":"services"},"spec":{"content":"artifactManagers:\n  art-01:\n    internalURL: http://artifact-manager.art-01:8081\n    secret: hidden\n"}}`
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
 	token, err := api.tokens.Issue("runner-a", "runner-a", identity.RunnerType, "", time.Hour, api.now())
@@ -1271,7 +1320,7 @@ func TestRunnerServiceEndpointsRefresh(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		body, err := json.Marshal(map[string]any{
 			"metadata": map[string]string{"name": "services"},
-			"spec":     map[string]string{"visibility": "OpsOnly", "content": content()},
+			"spec":     map[string]string{"content": content()},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1525,6 +1574,7 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		{"build status patch", http.MethodPatch, "/apis/ebs/v1/projects/team/builds/b/status", userToken, http.StatusNotFound},
 		{"anonymous unsupported method", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", "", http.StatusUnauthorized},
 		{"IAM create is not registered", http.MethodPost, "/apis/iam.ebs/v1/users", userToken, http.StatusNotFound},
+
 		{"watch on job creation", http.MethodPost, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusForbidden},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1592,6 +1642,7 @@ func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
 	}{
 		{"no guards", "GET", "/projects", "/projects", nil},
 		{"missing job read", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs}},
+
 		{"missing runner list", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners}},
 		{"wrong job guard", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs, api.runnerJobsListGuard}},
 		{"wrong list guard", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners, api.runnerJobReadGuard}},

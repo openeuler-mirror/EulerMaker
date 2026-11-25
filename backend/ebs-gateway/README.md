@@ -19,8 +19,8 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/limit` | 请求令牌桶 |
 
 从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的认证、授权、限流和 Watch 检查。
-指定 Job 的 GET/HEAD 路由显式挂载 `runnerJobReadGuard` 检查 Runner 归属；Runner 任务列表的 GET 路由挂载 `runnerJobsListGuard` 检查查询参数和 Watch 并发。漏挂所需 guard 时返回 500，不转发。
-Config 的可见性校验和响应读取由同一 Handler 完成；公共写请求处理放在 `request.go`。
+指定 Job 的 GET 路由显式挂载 `runnerJobReadGuard` 检查 Runner 归属；Runner 任务列表的 GET 路由挂载 `runnerJobsListGuard` 检查查询参数和 Watch 并发。漏挂所需 guard 时返回 500，不转发。
+Config 的读写统一要求 Ops/Admin，`GET /apis/ebs/v1/build-targets` 单独投影发行版及架构；公共写请求处理放在 `request.go`。
 Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
 测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
 Handler 私有逻辑测试放在对应文件中，真实 HTTP 请求链、路由注册和 OpenAPI 路由契约测试放在 [router_test.go](internal/gateway/router_test.go)。
@@ -71,7 +71,7 @@ Gateway 端已提供 `/auth/providers` 和 `/auth/oauth/*`，前端已接入回�
 
 - `/auth/*` 负责注册、登录、Runner token 交换、token 校验和本人密码修改；只有 Admin 能创建 MachineAccount。
 - `/apis/iam.ebs/v1/*` 仅允许 Admin 管理非管理员 User 和 MachineAccount。
-- `/apis/ebs/v1/*` 只注册设计文档列出的资源、对象和子资源路径；匿名只读白名单业务对象，Config 按可见性读取。Runner 可通过 `/apis/ebs/v1/service-endpoints` 读取 `Config/services` 中的 Runner 地址投影；响应为 `artifactManagers` 和 `gitServer`，均不包含管理地址，不直接开放 `OpsOnly` Config。
+- `/apis/ebs/v1/*` 只注册设计文档列出的资源、对象和子资源路径；匿名只读白名单业务对象，原始 Config 仅限运维读写。Runner 可通过 `/apis/ebs/v1/service-endpoints` 读取 `Config/services` 中的 Runner 地址投影；响应为 `artifactManagers` 和 `gitServer`，均不包含管理地址，不直接开放 原始 Config。
 - Service Token 每次请求读取机器账号的 `spec.projects` 和 `spec.permissions`，支持 `projects:update`、`builds:create`、`builds:abort` 三项独立权限；任一列表为空时拒绝资源操作。Admin 通过 `/auth/machineaccounts` 注册时传入授权字段，前端授权表单尚未接入。公开读取使用匿名请求，不携带 Service Token。
 - Snapshot、BuildInfo、RpmRepo 的集合、对象及对象 `/status` 仅注册 GET。
 - Gateway 不向上游注入用户或 Runner 身份头；转发时仍移除外部 Bearer Token。PUT/PATCH 先读取服务端对象、生成完整候选对象并校验受保护字段，然后以 PUT 转发。

@@ -97,11 +97,7 @@ func (c *Client) Forward(ctx *gin.Context, public bool) {
 		// Content-Encoding. Let the transport negotiate/decode gzip itself.
 		request.Header.Del("Accept-Encoding")
 	}
-	var writer http.ResponseWriter = responseWriter{ctx.Writer}
-	if request.Method == http.MethodHead {
-		writer = headWriter{writer}
-	}
-	c.proxy.ServeHTTP(writer, request)
+	c.proxy.ServeHTTP(responseWriter{ctx.Writer}, request)
 }
 
 // ReverseProxy probes optional net/http writer interfaces. Wrapping Gin's
@@ -112,9 +108,3 @@ type responseWriter struct {
 
 func (w responseWriter) Flush()                      { _ = http.NewResponseController(w.ResponseWriter).Flush() }
 func (w responseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
-
-type headWriter struct {
-	http.ResponseWriter
-}
-
-func (w headWriter) Write(data []byte) (int, error) { return len(data), nil }

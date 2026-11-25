@@ -67,7 +67,7 @@ artifact-manager ──Runner Token 校验──> ebs-gateway
 ```text
 用户 / 外部系统
        |
-       | 匿名只读 GET/HEAD 或 JWT
+       | 匿名只读 GET 或 JWT
        v
 ebs-gateway ─── mTLS ───┐
                         |
@@ -107,7 +107,7 @@ Gateway 允许匿名和已认证调用方通过 Project API get/list Project、S
 用户注册：注册资料 -> gateway 校验与注册限流 -> apiserver IAM 创建 User 与凭据
 用户登录：账号密码 -> gateway 登录限流 -> apiserver IAM 认证 -> gateway 签发 JWT
 用户写入或非公开请求：JWT -> UserResolve -> gateway Project 用户权限校验 -> apiserver
-匿名读取：无 Token GET/HEAD（公开对象、collection 或单对象 `/status`）-> gateway 公开资源白名单与限流 -> apiserver -> 完整对象响应
+匿名读取：无 Token GET（公开对象、collection 或单对象 `/status`）-> gateway 公开资源白名单与限流 -> apiserver -> 完整对象响应
 认证公开读取：JWT -> UserResolve -> gateway 公开资源白名单与认证限流 -> apiserver -> 完整对象响应
 机机账号创建：管理员 -> gateway -> apiserver IAM 原子创建 MachineAccount 与凭据
 Runner换取token：MachineAccount client凭据和Runner名称 -> gateway交换限流 -> apiserver IAM认证 -> gateway签发短期Runner JWT
@@ -212,7 +212,7 @@ PUT    /apis/ebs/v1/projects/{name}/status
 /apis/ebs/v1/projects/{project}/jobs
 ```
 
-`{project}` 是上述对象的唯一项目归属来源，`spec` 中不重复保存 `projectName`。Config 使用集群级 `/apis/ebs/v1/configs`；`Public` 允许所有身份及匿名具名读取，`OpsOnly` 仅允许 Ops/Admin 读取，list 和写操作也仅允许这些运维身份；不提供 watch 或 `/status`。
+`{project}` 是上述对象的唯一项目归属来源，`spec` 中不重复保存 `projectName`。Config 使用集群级 `/apis/ebs/v1/configs`；原始配置只允许 Ops/Admin 读写；不提供 watch 或 `/status`。
 
 ### 5.3 内部全局系统 API
 
