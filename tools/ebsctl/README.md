@@ -20,7 +20,7 @@ ebsctl get job build-kernel -o yaml
 ebsctl get cfg build-target -o yaml
 ```
 
-Config (`cfg`) is cluster-scoped: `-p/-n` never changes its URL. Named reads of `Public` objects are available to everyone; `OpsOnly` reads, list, create, replace, and patch require Ops, Admin, or System privileges. Delete and watch are unsupported. Update an object using its current resourceVersion:
+Config (`cfg`) is cluster-scoped: `-p/-n` never changes its URL. All Config operations require Ops or Admin privileges. Delete and watch are unsupported. Update an object using its current resourceVersion:
 
 ```bash
 ebsctl get cfg build-target -o yaml > build-target.yaml
@@ -34,6 +34,6 @@ For CI, set `EBS_GATEWAY` and `EBS_TOKEN` instead of persisting a context. The d
 
 If an authenticated `get` or `describe` of Project, Snapshot, Build, Job, BuildInfo, or RpmRepo returns HTTP 401, ebsctl prints a warning to stderr and retries the read once without the token. Successful anonymous reads exit with code 0; JSON/YAML stdout remains unchanged by the warning. The saved token, environment variables, and current context are not modified.
 
-Writes, watch/wait commands, `--mine`, and Config reads do not fall back to anonymous access. Config visibility is object-dependent and cannot be determined from a failed authenticated request. HTTP 401 errors prompt you to run `ebsctl login`; HTTP 403 remains a permission error. A failed anonymous retry is returned without further retries.
+Writes, watch/wait commands, `--mine`, and Config reads do not fall back to anonymous access. HTTP 401 errors prompt you to run `ebsctl login`; HTTP 403 remains a permission error. A failed anonymous retry is returned without further retries.
 
 The first version intentionally excludes Runner, Artifact, log, `apply`, plugin, exec, and port-forward commands. See `docs/zh/design/ebsctl.md` for the complete command and compatibility contract.

@@ -77,7 +77,7 @@ func (p *provider) Load(ctx context.Context) (*ebsv1.ServiceConfigContent, error
 	}
 	config, ok := obj.(*ebsv1.Config)
 	if !ok || config == nil || config.Name != ebsv1.ServiceConfigName || config.Namespace != "" ||
-		config.UID == "" || config.ResourceVersion == "" || config.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
+		config.UID == "" || config.ResourceVersion == "" {
 		return nil, invalid("unexpected Config response: %T", obj)
 	}
 	var content ebsv1.ServiceConfigContent

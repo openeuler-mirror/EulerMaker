@@ -895,13 +895,6 @@ func schema_ebs_api_ebs_v1_ConfigSpec(ref common.ReferenceCallback) common.OpenA
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"visibility": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
-						},
-					},
 					"content": {
 						SchemaProps: spec.SchemaProps{
 							Default: "",
@@ -910,7 +903,7 @@ func schema_ebs_api_ebs_v1_ConfigSpec(ref common.ReferenceCallback) common.OpenA
 						},
 					},
 				},
-				Required: []string{"visibility", "content"},
+				Required: []string{"content"},
 			},
 		},
 	}

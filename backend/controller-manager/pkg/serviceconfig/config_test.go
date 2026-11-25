@@ -45,7 +45,7 @@ func serviceObject(gitURL, artifactURL string) *ebsv1.Config {
 	})
 	return &ebsv1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ServiceConfigName, UID: "config-uid", ResourceVersion: "1"},
-		Spec:       ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityOpsOnly, Content: string(content)},
+		Spec:       ebsv1.ConfigSpec{Content: string(content)},
 	}
 }
 
@@ -166,7 +166,6 @@ func TestConfigErrorClassification(t *testing.T) {
 	}{
 		{"identity", func(c *ebsv1.Config) { c.Name = "other" }},
 		{"version", func(c *ebsv1.Config) { c.ResourceVersion = "" }},
-		{"visibility", func(c *ebsv1.Config) { c.Spec.Visibility = ebsv1.ConfigVisibilityPublic }},
 		{"content", func(c *ebsv1.Config) { c.Spec.Content = "gitServer: [" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

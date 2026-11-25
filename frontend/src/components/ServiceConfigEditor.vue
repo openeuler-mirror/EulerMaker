@@ -133,7 +133,7 @@ async function save(): Promise<void> {
   error.value = '';
   try {
     const saved = await request<Config>(path, { method: 'PUT', body: JSON.stringify({ ...current.value,
-      spec: { ...current.value.spec, visibility: 'OpsOnly', content: stringify(content) } }) });
+      spec: { ...current.value.spec, content: stringify(content) } }) });
     readContent(saved);
     current.value = saved;
     editing.value = false;

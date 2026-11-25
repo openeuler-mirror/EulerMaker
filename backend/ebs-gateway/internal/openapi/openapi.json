@@ -2135,14 +2135,9 @@
           "content": {
             "default": "",
             "type": "string"
-          },
-          "visibility": {
-            "default": "",
-            "type": "string"
           }
         },
         "required": [
-          "visibility",
           "content"
         ],
         "type": "object"

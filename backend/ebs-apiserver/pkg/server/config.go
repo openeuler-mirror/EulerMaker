@@ -41,13 +41,13 @@ func ensureDefaultConfigs(ctx context.Context, storage bootstrapStorage) error {
 		return err
 	}
 	for _, item := range []struct {
-		name       string
-		visibility ebsv1.ConfigVisibility
-		value      interface{}
+		name string
+
+		value interface{}
 	}{
-		{ebsv1.BuildTargetConfigName, ebsv1.ConfigVisibilityPublic, target},
-		{ebsv1.BuildResourceConfigName, ebsv1.ConfigVisibilityOpsOnly, resources},
-		{ebsv1.ServiceConfigName, ebsv1.ConfigVisibilityOpsOnly, services},
+		{ebsv1.BuildTargetConfigName, target},
+		{ebsv1.BuildResourceConfigName, resources},
+		{ebsv1.ServiceConfigName, services},
 	} {
 		content, err := yaml.Marshal(item.value)
 		if err != nil {
@@ -56,7 +56,7 @@ func ensureDefaultConfigs(ctx context.Context, storage bootstrapStorage) error {
 		if err := ensureDefaultConfig(ctx, storage, &ebsv1.Config{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Config"},
 			ObjectMeta: metav1.ObjectMeta{Name: item.name},
-			Spec:       ebsv1.ConfigSpec{Visibility: item.visibility, Content: string(content)},
+			Spec:       ebsv1.ConfigSpec{Content: string(content)},
 		}); err != nil {
 			return err
 		}

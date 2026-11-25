@@ -43,12 +43,12 @@ func TestWatchTablePrintsHeaderOnce(t *testing.T) {
 
 func TestConfigTable(t *testing.T) {
 	definition, _ := resource.Resolve("config")
-	data := []byte(`{"metadata":{"name":"build-resource"},"spec":{"visibility":"OpsOnly","content":"default: {}"}}`)
+	data := []byte(`{"metadata":{"name":"build-resource"},"spec":{"content":"default: {}"}}`)
 	var output bytes.Buffer
 	if err := New(&output, Options{Format: "table"}).Print(definition, data); err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"NAME", "VISIBILITY", "build-resource", "OpsOnly"} {
+	for _, value := range []string{"NAME", "AGE", "build-resource"} {
 		if !strings.Contains(output.String(), value) {
 			t.Fatalf("table missing %q: %s", value, output.String())
 		}

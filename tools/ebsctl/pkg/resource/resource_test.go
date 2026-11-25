@@ -96,7 +96,7 @@ func TestReadManifestsRejectsUnknownFieldAndNamespaceConflict(t *testing.T) {
 }
 
 func TestReadManifestsAllowsConfigNameDifferentFromProject(t *testing.T) {
-	input := "apiVersion: ebs/v1\nkind: Config\nmetadata:\n  name: other\nspec:\n  visibility: Public\n  content: 'example: true'\n"
+	input := "apiVersion: ebs/v1\nkind: Config\nmetadata:\n  name: other\nspec:\n  content: 'example: true'\n"
 	if _, err := ReadManifests("-", "project-a", false, strings.NewReader(input)); err != nil {
 		t.Fatalf("read Config manifest: %v", err)
 	}

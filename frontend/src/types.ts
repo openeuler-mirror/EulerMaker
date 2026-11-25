@@ -32,7 +32,7 @@ export interface Config {
   apiVersion?: "ebs/v1";
   kind?: "Config";
   metadata?: ObjectMeta;
-  spec: { visibility: "Public" | "OpsOnly"; content: string };
+  spec: { content: string };
 }
 
 export interface Script {
