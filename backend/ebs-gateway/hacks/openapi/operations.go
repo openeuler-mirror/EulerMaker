@@ -36,7 +36,7 @@ func operations() object {
 		base := "/apis/iam.ebs/v1/" + r.name
 		for _, named := range []bool{false, true} {
 			path, kind := base, r.kind+"List"
-			methods := []string{"get", "head"}
+			methods := []string{"get"}
 			if named {
 				path, kind = base+"/{name}", r.kind
 				methods = append(methods, "delete", "put", "patch")
@@ -49,7 +49,7 @@ func operations() object {
 				if method == "put" && r.name == "users" {
 					op["requestBody"] = body(ref("UserUpdate"), true)
 				}
-				if (method == "get" || method == "head") && r.name != "users" {
+				if method == "get" && r.name != "users" {
 					op["parameters"] = queryParameters(!named, false, true)
 				}
 				if r.name == "users" && !named {
@@ -104,7 +104,7 @@ func operations() object {
 			}
 			methods := []string{"get"}
 			if !r.readOnly {
-				if r.name != "scripts" {
+				if r.name != "scripts" && r.name != "runners" {
 					methods = append(methods, "head")
 				}
 				switch part {

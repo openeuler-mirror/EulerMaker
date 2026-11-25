@@ -58,10 +58,19 @@ func registerIAM(router *gin.Engine, api *Handler) {
 	iam := router.Group("/apis/iam.ebs/v1")
 	iam.Use(api.auth.Authenticate, middleware.LimitAuthenticated(api.limits), middleware.RequireAdmin, rejectIAMWatch)
 
-	iam.Match([]string{http.MethodGet, http.MethodHead}, "/users", api.users)
-	iam.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/users/:name", api.users)
-	iam.Match([]string{http.MethodGet, http.MethodHead}, "/machineaccounts", api.machineAccounts)
-	iam.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/machineaccounts/:name", api.machineAccounts)
+	iam.GET("/users", api.users)
+
+	iam.GET("/users/:name", api.users)
+	iam.PUT("/users/:name", api.users)
+	iam.PATCH("/users/:name", api.users)
+	iam.DELETE("/users/:name", api.users)
+
+	iam.GET("/machineaccounts", api.machineAccounts)
+
+	iam.GET("/machineaccounts/:name", api.machineAccounts)
+	iam.PUT("/machineaccounts/:name", api.machineAccounts)
+	iam.PATCH("/machineaccounts/:name", api.machineAccounts)
+	iam.DELETE("/machineaccounts/:name", api.machineAccounts)
 }
 
 func registerServiceEndpoints(router *gin.Engine, api *Handler) {
@@ -92,11 +101,18 @@ func registerProjects(router *gin.Engine, api *Handler) {
 
 func registerRunners(router *gin.Engine, api *Handler) {
 	guard := api.resourceGuard("runners", "", "runner", "")
-	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/apis/ebs/v1/runners", guard, api.forwardResource)
-	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/apis/ebs/v1/runners/:runner", guard, api.forwardResource)
+	router.GET("/apis/ebs/v1/runners", guard, api.forwardResource)
+	router.POST("/apis/ebs/v1/runners", guard, api.forwardResource)
+
+	router.GET("/apis/ebs/v1/runners/:runner", guard, api.forwardResource)
+	router.PUT("/apis/ebs/v1/runners/:runner", guard, api.forwardResource)
+	router.PATCH("/apis/ebs/v1/runners/:runner", guard, api.forwardResource)
+	router.DELETE("/apis/ebs/v1/runners/:runner", guard, api.forwardResource)
 
 	guard = api.resourceGuard("runners", "", "runner", "status")
-	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/apis/ebs/v1/runners/:runner/status", guard, api.forwardResource)
+	router.GET("/apis/ebs/v1/runners/:runner/status", guard, api.forwardResource)
+	router.PUT("/apis/ebs/v1/runners/:runner/status", guard, api.forwardResource)
+	router.PATCH("/apis/ebs/v1/runners/:runner/status", guard, api.forwardResource)
 
 	guard = api.resourceGuard("runners", "", "runner", "jobs")
 	router.GET("/apis/ebs/v1/runners/:runner/jobs", guard, api.runnerJobsListGuard, api.forwardResource)
