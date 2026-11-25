@@ -1,11 +1,13 @@
 import { computed, onMounted, ref } from "vue";
 import { errorTranslationKey, request } from "@/api";
-import type { BuildTargetContent, ConfiguredBuildTarget } from "@/types";
-import type { Config } from "@/types";
-import { parse } from "yaml";
-import { parseBuildTargetContent, configuredOS, configuredArches, supportsTarget } from "@/components/buildTargetConfigDraft";
+import type { ConfiguredBuildTarget } from "@/types";
 
-const configuration = ref<BuildTargetContent | null>(null);
+interface BuildTarget {
+  distro: string;
+  arches: string[];
+}
+
+const targets = ref<BuildTarget[]>([]);
 const loading = ref(false);
 const error = ref("");
 let pending: Promise<void> | null = null;
@@ -17,18 +19,17 @@ export function useBuildTargetConfig() {
     error.value = "";
     pending = (async () => {
       try {
-        const config = await request<Config>("/apis/ebs/v1/configs/build-target");
-        if (config.metadata?.name !== "build-target") throw new Error("invalid build-target Config");
-        configuration.value = parseBuildTargetContent(parse(config.spec.content, { uniqueKeys: true }));
+        const { items } = await request<{ items: BuildTarget[] }>("/apis/ebs/v1/build-targets");
+        targets.value = items;
       }
-      catch (reason) { configuration.value = null; error.value = errorTranslationKey(reason, "buildTargetConfig.loadFailed"); }
+      catch (reason) { targets.value = []; error.value = errorTranslationKey(reason, "buildTargetConfig.loadFailed"); }
       finally { loading.value = false; pending = null; }
     })();
     return pending;
   }
-  const operatingSystems = computed(() => configuredOS(configuration.value));
-  const arches = (os?: string) => configuredArches(configuration.value, os);
-  const supports = (target: ConfiguredBuildTarget) => !loading.value && !error.value && supportsTarget(configuration.value, target);
+  const operatingSystems = computed(() => targets.value.map(target => target.distro));
+  const arches = (os?: string) => targets.value.find(target => target.distro === os)?.arches ?? [];
+  const supports = (target: ConfiguredBuildTarget) => !loading.value && !error.value && target.arch !== undefined && arches(target.os).includes(target.arch);
   onMounted(() => { void reload(); });
-  return { configuration, loading, error, reload, operatingSystems, arches, supports };
+  return { loading, error, reload, operatingSystems, arches, supports };
 }

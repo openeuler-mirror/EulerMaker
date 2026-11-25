@@ -353,6 +353,35 @@
         ],
         "type": "object"
       },
+      "BuildTargets": {
+        "properties": {
+          "items": {
+            "items": {
+              "properties": {
+                "arches": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "distro": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "distro",
+                "arches"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "BuildUpdate": {
         "properties": {
           "apiVersion": {
@@ -3545,6 +3574,76 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/apis/ebs/v1/build-targets": {
+      "get": {
+        "description": "Public read for anonymous callers and users. Returns distributions and architectures, not build images.",
+        "operationId": "getBuildTargets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildTargets"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "404": {
+            "$ref": "#/components/responses/404"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          },
+          "410": {
+            "$ref": "#/components/responses/410"
+          },
+          "413": {
+            "$ref": "#/components/responses/413"
+          },
+          "415": {
+            "$ref": "#/components/responses/415"
+          },
+          "422": {
+            "$ref": "#/components/responses/422"
+          },
+          "429": {
+            "$ref": "#/components/responses/429"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          },
+          "502": {
+            "$ref": "#/components/responses/502"
+          },
+          "503": {
+            "$ref": "#/components/responses/503"
+          },
+          "504": {
+            "$ref": "#/components/responses/504"
+          }
+        },
+        "security": [
+          {},
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List available build targets",
+        "tags": [
+          "Config"
+        ]
+      }
+    },
     "/apis/ebs/v1/configs": {
       "get": {
         "description": "Ops/Admin only. Built-in configs build-target, build-resource and services cannot be deleted.",
@@ -3659,116 +3758,6 @@
           }
         ],
         "summary": "get configs list",
-        "tags": [
-          "Config"
-        ]
-      },
-      "head": {
-        "description": "Ops/Admin only. Built-in configs build-target, build-resource and services cannot be deleted.",
-        "operationId": "headConfigsList",
-        "parameters": [
-          {
-            "description": "Comma-separated JSON paths, e.g. metadata,status.phase. GET/List only, not watch. Type metadata is preserved.",
-            "in": "query",
-            "name": "includeFields",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Comma-separated paths excluded after includeFields, e.g. spec. Missing paths are ignored.",
-            "in": "query",
-            "name": "excludeFields",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Page size. Public resource lists cap at 100; Runner assignment lists accept 1–500.",
-            "in": "query",
-            "name": "limit",
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Opaque token from metadata.continue. Keep the other query parameters unchanged; empty means the last page.",
-            "in": "query",
-            "name": "continue",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Kubernetes label selector; supports equality, inequality, in, notin and existence.",
-            "in": "query",
-            "name": "labelSelector",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Comma-separated =, == or != comparisons (not in). Supported fields: metadata.name, metadata.namespace.",
-            "in": "query",
-            "name": "fieldSelector",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "400": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "401": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "403": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "404": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "409": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "410": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "413": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "415": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "422": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "429": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "500": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "502": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "503": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "504": {
-            "description": "HTTP status only; HEAD has no response body."
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "head configs list",
         "tags": [
           "Config"
         ]
@@ -3947,9 +3936,25 @@
         ]
       },
       "get": {
-        "description": "Public Config may be read anonymously; OpsOnly requires Ops/Admin. Visibility is evaluated on the returned object.",
+        "description": "Ops/Admin only. Built-in configs build-target, build-resource and services cannot be deleted.",
         "operationId": "getConfigsObject",
         "parameters": [
+          {
+            "description": "Comma-separated JSON paths, e.g. metadata,status.phase. GET/List only, not watch. Type metadata is preserved.",
+            "in": "query",
+            "name": "includeFields",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated paths excluded after includeFields, e.g. spec. Missing paths are ignored.",
+            "in": "query",
+            "name": "excludeFields",
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "in": "path",
             "name": "name",
@@ -4014,83 +4019,11 @@
           }
         },
         "security": [
-          {},
           {
             "BearerAuth": []
           }
         ],
         "summary": "get configs object",
-        "tags": [
-          "Config"
-        ]
-      },
-      "head": {
-        "description": "Public Config may be read anonymously; OpsOnly requires Ops/Admin. Visibility is evaluated on the returned object.",
-        "operationId": "headConfigsObject",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "400": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "401": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "403": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "404": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "409": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "410": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "413": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "415": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "422": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "429": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "500": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "502": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "503": {
-            "description": "HTTP status only; HEAD has no response body."
-          },
-          "504": {
-            "description": "HTTP status only; HEAD has no response body."
-          }
-        },
-        "security": [
-          {},
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "head configs object",
         "tags": [
           "Config"
         ]

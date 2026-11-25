@@ -6,7 +6,7 @@ import { parse, stringify } from "yaml";
 
 const source = readFileSync(new URL("../src/components/buildTargetConfigDraft.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } });
-const { parseBuildTargetContent, configuredOS, configuredArches, supportsTarget } = await import("data:text/javascript;base64," + Buffer.from(outputText).toString("base64"));
+const { parseBuildTargetContent, supportsTarget } = await import("data:text/javascript;base64," + Buffer.from(outputText).toString("base64"));
 
 test("JSON/list/YAML roundtrip preserves both architecture images and extra fields", () => {
   const spec = { targets: { os: { arches: { x86_64: { image: "build:x86" }, aarch64: { image: "build:arm" } } } }, extra: { retained: true } };
@@ -27,11 +27,8 @@ test("invalid raw structures fail without silently resetting targets", () => {
   assert.throws(() => parse("targets: {}\ntargets: {}\n", { uniqueKeys: true }));
 });
 
-test("target choices are sorted, absent targets have no fallback, old project targets stay unchanged", () => {
+test("editor detects removed target mappings without changing the saved selection", () => {
   const conf = { targets: { z: { arches: { x86_64: { image: "build:x86" }, aarch64: { image: "build:arm" } } }, a: { arches: { arch: { image: "build:a" } } } } };
-  assert.deepEqual(configuredOS(conf), ["a", "z"]);
-  assert.deepEqual(configuredArches(conf, "z"), ["aarch64", "x86_64"]);
-  assert.deepEqual(configuredArches(conf, "constructor"), []);
   const legacy = { os: "old", arch: "x86_64" };
   assert.equal(supportsTarget(conf, legacy), false);
   assert.deepEqual(legacy, { os: "old", arch: "x86_64" });
@@ -39,4 +36,27 @@ test("target choices are sorted, absent targets have no fallback, old project ta
   assert.equal(supportsTarget(conf, { os: "z", arch: "aarch64" }), true);
   delete conf.targets.z.arches.aarch64;
   assert.equal(supportsTarget(conf, { os: "z", arch: "aarch64" }), false);
+});
+
+test("project selectors use only the published distro and architecture choices", async () => {
+  const source = readFileSync(new URL("../src/composables/useBuildTargetConfig.ts", import.meta.url), "utf8");
+  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } });
+  const setup = new Function("ref", "computed", "onMounted", "request", "errorTranslationKey",
+    outputText.replace(/^import .*;$/gm, "").replace("export function", "function") + "; return useBuildTargetConfig()"
+  );
+  let fail = false;
+  const choices = setup(value => ({ value }), getter => ({ get value() { return getter(); } }), () => {}, async path => {
+    assert.equal(path, "/apis/ebs/v1/build-targets");
+    if (fail) throw new Error("unavailable");
+    return { items: [{ distro: "oe", arches: ["aarch64", "x86_64"] }] };
+  }, () => "loadFailed");
+  await choices.reload();
+  assert.deepEqual(choices.operatingSystems.value, ["oe"]);
+  assert.deepEqual(choices.arches("oe"), ["aarch64", "x86_64"]);
+  assert.equal(choices.supports({ os: "oe", arch: "x86_64" }), true);
+  assert.deepEqual(choices.arches("unknown"), []);
+  fail = true;
+  await choices.reload();
+  assert.equal(choices.supports({ os: "oe", arch: "x86_64" }), false);
+  assert.equal(choices.error.value, "loadFailed");
 });

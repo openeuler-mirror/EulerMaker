@@ -72,6 +72,9 @@ func schemas() object {
 	}, "uid")
 	endpoint := record(object{"runnerInternalURL": textSchema(), "runnerExternalURL": textSchema()},
 		"runnerInternalURL", "runnerExternalURL")
+	result["BuildTargets"] = record(object{"items": object{"type": "array", "items": record(object{
+		"distro": textSchema(), "arches": object{"type": "array", "items": textSchema()},
+	}, "distro", "arches")}}, "items")
 	result["ServiceEndpoints"] = record(object{
 		"artifactManagers": object{"type": "object", "additionalProperties": endpoint}, "gitServer": endpoint,
 	}, "artifactManagers", "gitServer")

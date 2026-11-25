@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -29,6 +30,21 @@ type resourceAccess struct {
 	pending resourceCheck
 }
 
+// These modes select the public-read path; other callers go through authorization.
+type accessMode uint8
+
+const (
+	authenticatedOnly accessMode = iota
+	publicRead
+)
+
+type resourceRule func(context.Context, identity.Principal, policy.Route) error
+
+func (a *Handler) scriptGuard(c *gin.Context) {
+	route := policy.Route{Resource: "scripts", Name: c.Param("name"), Method: c.Request.Method}
+	a.checkResourceAccess(c, route, authenticatedOnly, policy.AuthorizeScript, noPendingCheck)
+}
+
 // resourceGuard authorizes the route and records any check still required before forwarding.
 func (a *Handler) resourceGuard(resource, projectKey, nameKey, subresource string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -39,28 +55,11 @@ func (a *Handler) resourceGuard(resource, projectKey, nameKey, subresource strin
 			Subresource: subresource,
 			Method:      c.Request.Method,
 		}
-		watch := policy.HasWatch(c.Request.URL.Query())
-		allowAnonymous := !watch && (policy.IsPublicRead(resolved) || isNamedConfigRead(resolved))
-		if !a.authenticateResource(c, allowAnonymous) {
-			return
+		mode := authenticatedOnly
+		if policy.IsPublicRead(resolved) {
+			mode = publicRead
 		}
-		who := middleware.Principal(c)
-		if who.Type == identity.ServiceType {
-			prepareServiceAudit(c, resolved)
-		}
-		if watch && !supportsWatch(resolved) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "watch is not supported for this route"})
-			return
-		}
-		if allowAnonymous && canUsePublicRead(who, resolved) {
-			if !a.preparePublicRead(c, resolved) {
-				return
-			}
-		} else if !a.authorizeResource(c, who, resolved) {
-			return
-		}
-		c.Set(resourceAccessKey, &resourceAccess{route: resolved, pending: requiredResourceCheck(resolved)})
-		c.Next()
+		a.checkResourceAccess(c, resolved, mode, a.policy.Authorize, requiredResourceCheck(resolved))
 	}
 }
 
@@ -99,22 +98,31 @@ func supportsWatch(route policy.Route) bool {
 	}
 }
 
-func canUsePublicRead(who identity.Principal, route policy.Route) bool {
-	switch who.Type {
-	case identity.ServiceType:
-		return false
-	case identity.RunnerType:
-		return isNamedConfigRead(route)
-	default:
-		return true
+func (a *Handler) checkResourceAccess(c *gin.Context, route policy.Route, mode accessMode, rule resourceRule, pending resourceCheck) {
+	watch := policy.HasWatch(c.Request.URL.Query())
+	allowPublic := !watch && mode != authenticatedOnly
+	if !allowPublic || c.GetHeader("Authorization") != "" {
+		if !a.auth.VerifyAccess(c) {
+			return
+		}
 	}
-}
-
-func (a *Handler) authenticateResource(c *gin.Context, allowAnonymous bool) bool {
-	if c.GetHeader("Authorization") == "" && allowAnonymous {
-		return true
+	who := middleware.Principal(c)
+	if who.Type == identity.ServiceType {
+		prepareServiceAudit(c, route)
 	}
-	return a.auth.VerifyAccess(c)
+	if watch && !supportsWatch(route) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "watch is not supported for this route"})
+		return
+	}
+	if allowPublic && (who.Type == "" || who.IsUser()) {
+		if !a.preparePublicRead(c, route) {
+			return
+		}
+	} else if !a.authorizeResource(c, who, route, rule) {
+		return
+	}
+	c.Set(resourceAccessKey, &resourceAccess{route: route, pending: pending})
+	c.Next()
 }
 
 func prepareServiceAudit(c *gin.Context, route policy.Route) {
@@ -135,7 +143,7 @@ func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
 		middleware.AbortRateLimited(c, 1, "too many requests")
 		return false
 	}
-	if route.Name == "" && route.Subresource == "" {
+	if route.Resource != "build-targets" && route.Name == "" && route.Subresource == "" {
 		query := c.Request.URL.Query()
 		limit, err := strconv.Atoi(query.Get("limit"))
 		if err != nil || limit < 1 || limit > 100 || len(query["limit"]) != 1 {
@@ -147,11 +155,11 @@ func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
 	return true
 }
 
-func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route) bool {
+func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route, rule resourceRule) bool {
 	if !middleware.AllowAuthenticated(c, a.limits) {
 		return false
 	}
-	if err := a.policy.Authorize(c.Request.Context(), who, route); err != nil {
+	if err := rule(c.Request.Context(), who, route); err != nil {
 		c.AbortWithStatusJSON(policyErrorStatus(err), gin.H{"error": err.Error()})
 		return false
 	}
@@ -174,10 +182,5 @@ func (a *Handler) forwardResource(c *gin.Context) {
 	if access == nil {
 		return
 	}
-	route := access.route
-	if isNamedConfigRead(route) {
-		a.serveConfig(c)
-		return
-	}
-	a.forwardRequest(c, middleware.Principal(c), route)
+	a.forwardRequest(c, middleware.Principal(c), access.route)
 }
