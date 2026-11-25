@@ -68,8 +68,7 @@ func requiredResourceCheck(route policy.Route) resourceCheck {
 	switch {
 	case route.Resource == "runners" && route.Subresource == "jobs" && route.Method == http.MethodGet:
 		return runnerJobsListCheck
-	case route.Resource == "jobs" && route.Name != "" && route.Subresource == "" &&
-		(route.Method == http.MethodGet || route.Method == http.MethodHead):
+	case route.Resource == "jobs" && route.Name != "" && route.Subresource == "" && route.Method == http.MethodGet:
 		return runnerJobReadCheck
 	default:
 		return noPendingCheck

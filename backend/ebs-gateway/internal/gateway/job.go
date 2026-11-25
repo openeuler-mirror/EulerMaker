@@ -35,11 +35,7 @@ func (a *Handler) runnerOwnsJob(c *gin.Context, runner string) bool {
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound {
 		// Runner recovery needs to distinguish deleted Jobs from denied access.
-		if c.Request.Method == http.MethodHead {
-			c.Status(http.StatusNotFound)
-		} else {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
-		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 		return false
 	}
 	if response.StatusCode != http.StatusOK {

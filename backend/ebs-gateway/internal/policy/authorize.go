@@ -94,7 +94,7 @@ func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, r
 	}
 	if who.Type == identity.RunnerType {
 		if route.Project != "" && route.Name != "" &&
-			((route.Subresource == "" && (route.Method == http.MethodGet || route.Method == http.MethodHead)) ||
+			((route.Subresource == "" && route.Method == http.MethodGet) ||
 				(route.Subresource == "status" && (route.Method == http.MethodPut || route.Method == http.MethodPatch))) {
 			return nil // Object assignment is verified by the Job handler before forwarding.
 		}
