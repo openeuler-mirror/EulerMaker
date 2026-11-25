@@ -80,10 +80,6 @@ func (a *Handler) prepareCreate(c *gin.Context, who identity.Principal, route po
 }
 
 func (a *Handler) prepareUpdate(c *gin.Context, who identity.Principal, route policy.Route) bool {
-	if route.Name == "" {
-		c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "object name required"})
-		return false
-	}
 	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet, c.Request.URL.Path, nil, nil)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "unable to read current object"})

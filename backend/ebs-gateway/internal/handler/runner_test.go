@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -8,11 +9,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"ebs-gateway/internal/identity"
-	"ebs-gateway/internal/policy"
+	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/upstream"
 )
 
@@ -35,6 +37,10 @@ func TestRunnerJobsQueryRejectsCallerFieldSelector(t *testing.T) {
 }
 
 func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
+	tokens, err := identity.NewTokens(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name            string
 		query           string
@@ -53,8 +59,12 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			api := &Handler{runnerWatches: make(map[string]int)}
-			client, err := upstream.New("https://api.example", roundTripFunc(func(*http.Request) (*http.Response, error) {
+			var api *Handler
+			client, err := upstream.New("https://api.example", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if tc.user && r.URL.Path == "/apis/iam.ebs/v1/users/admin" {
+					body := `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+				}
 				calls++
 				if !tc.user && tc.query == "watch=true" && api.runnerWatches["runner-1"] != 1 {
 					t.Error("watch forwarded without holding its quota")
@@ -67,7 +77,10 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			api.upstream = client
+			api, err = New(Dependencies{Upstream: client, Tokens: tokens, Limits: limit.New(100, 100, time.Now), BodyLimit: 1 << 20})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if tc.active {
 				api.runnerWatches["runner-1"] = 1
 			}
@@ -75,10 +88,16 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 			if tc.user {
 				who = identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}
 			}
+			token, err := tokens.Issue(who.Subject, who.Runner, who.Type, who.Scope, time.Hour, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := gin.New()
+			router.GET("/runners/:runner/jobs", api.ResourceGuard("runners", "", "runner", "jobs"), api.RunnerJobsListGuard, api.ForwardResource)
 			recorder := httptest.NewRecorder()
-			ctx, _ := gin.CreateTestContext(recorder)
-			ctx.Request = httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/runners/runner-1/jobs?"+tc.query, nil)
-			api.forwardRunnerResource(ctx, who, policy.Route{Resource: "runners", Name: "runner-1", Subresource: "jobs", Method: http.MethodGet})
+			request := httptest.NewRequest(http.MethodGet, "/runners/runner-1/jobs?"+tc.query, nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			router.ServeHTTP(recorder, request)
 			if recorder.Code != tc.wantStatus || calls != tc.wantCalls {
 				t.Fatalf("status=%d calls=%d, want %d/%d", recorder.Code, calls, tc.wantStatus, tc.wantCalls)
 			}

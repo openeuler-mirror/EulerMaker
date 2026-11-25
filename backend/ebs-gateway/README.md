@@ -19,8 +19,9 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/upstream` | 可信内部读取和流式反向代理 |
 | `internal/limit` | 请求令牌桶 |
 
-Handler 的资源入口保留在 `resources.go`，方法与 Watch 边界集中在 `resource_routes.go`，
-公共写请求处理放在 `request.go`，Runner、Job、Config 的特殊处理放在各自的业务文件。
+资源路径及允许的 HTTP 方法在 `route/router.go` 显式注册；`handler/resources.go` 负责资源请求的认证、授权、限流和 Watch 检查。
+指定 Job 的 GET/HEAD 路由显式挂载 `RunnerJobReadGuard` 检查 Runner 归属；Runner 任务列表的 GET 路由挂载 `RunnerJobsListGuard` 检查查询参数和 Watch 并发。漏挂所需 guard 时返回 500，不转发。
+Config 的可见性校验和响应读取由同一 Handler 完成；公共写请求处理放在 `request.go`。
 Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
 测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
 Handler 私有逻辑测试放在对应文件中，真实 HTTP 请求链、路由注册和 OpenAPI 测试统一放在 `route/router_test.go`。

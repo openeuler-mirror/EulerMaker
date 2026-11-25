@@ -16,14 +16,22 @@ func New(api *handler.Handler) *gin.Engine {
 	router.RemoveExtraSlash = false
 	_ = router.SetTrustedProxies(nil)
 	middleware := api.Middleware()
-	endpoints := api.Endpoints()
 	router.Use(middleware.Audit, gin.Recovery())
-	router.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok\n") })
-	router.GET("/openapi.json", openapi.Serve)
-	registerAuth(router, middleware, endpoints)
+
+	registerAuth(router, middleware, api.Endpoints())
 	registerOAuth(router, api)
 	registerIAM(router, api, middleware)
-	registerResources(router, api)
+
+	registerServiceEndpoints(router, api, middleware)
+	registerConfigs(router, api)
+	registerScripts(router, api)
+	registerProjects(router, api)
+	registerRunners(router, api)
+	registerProjectScopedResources(router, api)
+
+	registerHealthz(router)
+	registerOpenAPI(router)
+
 	router.NoRoute(middleware.Authenticate, middleware.ResolveUser, func(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 	})
@@ -51,71 +59,92 @@ func registerAuth(router *gin.Engine, middleware handler.Middleware, endpoints h
 func registerIAM(router *gin.Engine, api *handler.Handler, middleware handler.Middleware) {
 	iam := router.Group("/apis/iam.ebs/v1")
 	iam.Use(middleware.Authenticate, middleware.ResolveUser, middleware.LimitAuthenticated, middleware.RequireAdmin)
-	users := iam.Group("/users")
-	users.Any("", api.IAM("users"))
-	users.Any("/:name", api.IAM("users"))
-	machines := iam.Group("/machineaccounts")
-	machines.Any("", api.IAM("machineaccounts"))
-	machines.Any("/:name", api.IAM("machineaccounts"))
+
+	iam.Match([]string{http.MethodGet, http.MethodHead}, "/users", api.Users)
+	iam.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/users/:name", api.Users)
+	iam.Match([]string{http.MethodGet, http.MethodHead}, "/machineaccounts", api.MachineAccounts)
+	iam.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/machineaccounts/:name", api.MachineAccounts)
 }
 
-func registerResources(router *gin.Engine, api *handler.Handler) {
-	group := router.Group("/apis/ebs/v1")
-	middleware := api.Middleware()
-	group.GET("/service-endpoints", middleware.Authenticate, middleware.ResolveUser,
+func registerServiceEndpoints(router *gin.Engine, api *handler.Handler, middleware handler.Middleware) {
+	router.GET("/apis/ebs/v1/service-endpoints", middleware.Authenticate, middleware.ResolveUser,
 		middleware.LimitAuthenticated, api.ServiceEndpoints)
-	registerCollection(group, api, "projects", "project")
-	registerCollection(group, api, "runners", "runner")
-	registerCollection(group, api, "configs", "name")
-	registerCollection(group, api, "scripts", "name")
+}
+
+func registerConfigs(router *gin.Engine, api *handler.Handler) {
+	guard := api.ResourceGuard("configs", "", "name", "")
+	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/apis/ebs/v1/configs", guard, api.ForwardResource)
+	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/apis/ebs/v1/configs/:name", guard, api.ForwardResource)
+}
+
+func registerScripts(router *gin.Engine, api *handler.Handler) {
+	guard := api.ResourceGuard("scripts", "", "name", "")
+	router.Match([]string{http.MethodGet, http.MethodPost}, "/apis/ebs/v1/scripts", guard, api.ForwardResource)
+	router.Match([]string{http.MethodGet, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/apis/ebs/v1/scripts/:name", guard, api.ForwardResource)
+}
+
+func registerProjects(router *gin.Engine, api *handler.Handler) {
+	guard := api.ResourceGuard("projects", "", "project", "")
+	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/apis/ebs/v1/projects", guard, api.ForwardResource)
+	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/apis/ebs/v1/projects/:project", guard, api.ForwardResource)
+
+	guard = api.ResourceGuard("projects", "", "project", "status")
+	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/apis/ebs/v1/projects/:project/status", guard, api.ForwardResource)
+}
+
+func registerRunners(router *gin.Engine, api *handler.Handler) {
+	guard := api.ResourceGuard("runners", "", "runner", "")
+	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/apis/ebs/v1/runners", guard, api.ForwardResource)
+	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/apis/ebs/v1/runners/:runner", guard, api.ForwardResource)
+
+	guard = api.ResourceGuard("runners", "", "runner", "status")
+	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/apis/ebs/v1/runners/:runner/status", guard, api.ForwardResource)
+
+	guard = api.ResourceGuard("runners", "", "runner", "jobs")
+	router.GET("/apis/ebs/v1/runners/:runner/jobs", guard, api.RunnerJobsListGuard, api.ForwardResource)
+}
+
+func registerProjectScopedResources(router *gin.Engine, api *handler.Handler) {
+	project := router.Group("/apis/ebs/v1/projects/:project")
+	guard := api.ResourceGuard("builds", "project", "name", "")
+	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/builds", guard, api.ForwardResource)
+	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/builds/:name", guard, api.ForwardResource)
+
+	guard = api.ResourceGuard("builds", "project", "name", "status")
+	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/builds/:name/status", guard, api.ForwardResource)
+
+	guard = api.ResourceGuard("builds", "project", "name", "abort")
+	project.POST("/builds/:name/abort", guard, api.ForwardResource)
+
+	guard = api.ResourceGuard("jobs", "project", "name", "")
+	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/jobs", guard, api.ForwardResource)
+	project.Match([]string{http.MethodGet, http.MethodHead}, "/jobs/:name", guard, api.RunnerJobReadGuard, api.ForwardResource)
+	project.Match([]string{http.MethodPut, http.MethodPatch, http.MethodDelete}, "/jobs/:name", guard, api.ForwardResource)
+
+	guard = api.ResourceGuard("jobs", "project", "name", "status")
+	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/jobs/:name/status", guard, api.ForwardResource)
+
+	guard = api.ResourceGuard("jobs", "project", "name", "abort")
+	project.POST("/jobs/:name/abort", guard, api.ForwardResource)
+
+	guard = api.ResourceGuard("oldjobs", "project", "name", "")
+	project.GET("/oldjobs", guard, api.ForwardResource)
+	project.GET("/oldjobs/:name", guard, api.ForwardResource)
+
 	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos"} {
-		project := group.Group("/projects/:project/" + resource)
-		registerReadOnlyResource(project, api, "", resource, "")
-		registerReadOnlyResource(project, api, "/:name", resource, "")
-		registerReadOnlyResource(project, api, "/:name/status", resource, "status")
-	}
-	for _, resource := range []string{"builds", "jobs"} {
-		project := group.Group("/projects/:project/" + resource)
-		registerResource(project, api, "", resource, "project", "name", "")
-		registerResource(project, api, "/:name", resource, "project", "name", "")
-		registerResource(project, api, "/:name/status", resource, "project", "name", "status")
-		registerResource(project, api, "/:name/abort", resource, "project", "name", "abort")
-	}
-	history := group.Group("/projects/:project/oldjobs")
-	registerReadOnlyResource(history, api, "", "oldjobs", "")
-	registerReadOnlyResource(history, api, "/:name", "oldjobs", "")
-}
+		guard := api.ResourceGuard(resource, "project", "name", "")
+		project.GET("/"+resource, guard, api.ForwardResource)
+		project.GET("/"+resource+"/:name", guard, api.ForwardResource)
 
-func registerReadOnlyResource(group *gin.RouterGroup, api *handler.Handler, path, resource, subresource string) {
-	guard, endpoint := api.ResourceHandlers(resource, "project", "name", subresource)
-	group.GET(path, guard, endpoint)
-}
-
-func registerCollection(parent *gin.RouterGroup, api *handler.Handler, resource, nameKey string) {
-	group := parent.Group("/" + resource)
-	registerResource(group, api, "", resource, "", nameKey, "")
-	registerResource(group, api, "/:"+nameKey, resource, "", nameKey, "")
-	if resource == "projects" || resource == "runners" {
-		registerResource(group, api, "/:"+nameKey+"/status", resource, "", nameKey, "status")
-	}
-	if resource == "runners" {
-		registerResource(group, api, "/:"+nameKey+"/jobs", resource, "", nameKey, "jobs")
+		guard = api.ResourceGuard(resource, "project", "name", "status")
+		project.GET("/"+resource+"/:name/status", guard, api.ForwardResource)
 	}
 }
 
-func registerResource(group *gin.RouterGroup, api *handler.Handler, path, resource, projectKey, nameKey, subresource string) {
-	guard, endpoint := api.ResourceHandlers(resource, projectKey, nameKey, subresource)
-	if resource == "projects" {
-		methods := []string{http.MethodGet, http.MethodHead}
-		if path == "" {
-			methods = append(methods, http.MethodPost)
-		} else {
-			methods = append(methods, http.MethodPut, http.MethodPatch)
-		}
-		for _, method := range methods {
-			group.Handle(method, path, guard, endpoint)
-		}
-		return
-	}
-	group.Any(path, guard, endpoint)
+func registerHealthz(router *gin.Engine) {
+	router.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok\n") })
+}
+
+func registerOpenAPI(router *gin.Engine) {
+	router.GET("/openapi.json", openapi.Serve)
 }

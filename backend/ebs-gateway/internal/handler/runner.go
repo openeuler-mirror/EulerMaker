@@ -8,32 +8,32 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ebs-gateway/internal/identity"
-	"ebs-gateway/internal/policy"
+	"ebs-gateway/internal/middleware"
 )
 
-func (a *Handler) forwardRunnerResource(c *gin.Context, who identity.Principal, route policy.Route) {
-	if who.Type == identity.RunnerType && route.Subresource == "jobs" {
-		if !validateRunnerJobsRequest(c) {
+// RunnerJobsListGuard checks Runner list queries and holds the watch slot until forwarding ends.
+func (a *Handler) RunnerJobsListGuard(c *gin.Context) {
+	access := requireResourceCheck(c, runnerJobsListCheck)
+	if access == nil {
+		return
+	}
+	who := middleware.Principal(c)
+	if who.Type == identity.RunnerType {
+		if !validRunnerJobsQuery(c.Request.URL.Query()) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unsupported Runner Jobs query"})
 			return
 		}
 		if c.Query("watch") == "true" {
 			if !a.acquireRunnerWatch(who.Runner) {
 				c.Header("Retry-After", "5")
-				c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many Runner watches"})
+				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many Runner watches"})
 				return
 			}
 			defer a.releaseRunnerWatch(who.Runner)
 		}
 	}
-	a.forwardRequest(c, who, route)
-}
-
-func validateRunnerJobsRequest(c *gin.Context) bool {
-	if !validRunnerJobsQuery(c.Request.URL.Query()) {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unsupported Runner Jobs query"})
-		return false
-	}
-	return true
+	access.pending = noPendingCheck
+	c.Next()
 }
 
 func validRunnerJobsQuery(query url.Values) bool {

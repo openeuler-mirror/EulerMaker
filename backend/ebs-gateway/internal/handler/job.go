@@ -8,16 +8,22 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ebs-gateway/internal/identity"
-	"ebs-gateway/internal/policy"
+	"ebs-gateway/internal/middleware"
 )
 
-func (a *Handler) forwardJobResource(c *gin.Context, who identity.Principal, route policy.Route) {
-	if who.Type == identity.RunnerType && (route.Method == http.MethodGet || route.Method == http.MethodHead) {
-		if !a.runnerOwnsJob(c, who.Runner) {
-			return
-		}
+// RunnerJobReadGuard verifies assignment before a Runner reads a named Job.
+func (a *Handler) RunnerJobReadGuard(c *gin.Context) {
+	access := requireResourceCheck(c, runnerJobReadCheck)
+	if access == nil {
+		return
 	}
-	a.forwardRequest(c, who, route)
+	who := middleware.Principal(c)
+	if who.Type == identity.RunnerType && !a.runnerOwnsJob(c, who.Runner) {
+		c.Abort()
+		return
+	}
+	access.pending = noPendingCheck
+	c.Next()
 }
 
 func (a *Handler) runnerOwnsJob(c *gin.Context, runner string) bool {
