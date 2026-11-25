@@ -140,12 +140,18 @@ func registerProjectScopedResources(router *gin.Engine, api *Handler) {
 	project.POST("/builds/:name/abort", guard, api.forwardResource)
 
 	guard = api.resourceGuard("jobs", "project", "name", "")
-	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/jobs", guard, api.forwardResource)
-	project.Match([]string{http.MethodGet, http.MethodHead}, "/jobs/:name", guard, api.runnerJobReadGuard, api.forwardResource)
-	project.Match([]string{http.MethodPut, http.MethodPatch, http.MethodDelete}, "/jobs/:name", guard, api.forwardResource)
+	project.GET("/jobs", guard, api.forwardResource)
+	project.POST("/jobs", guard, api.forwardResource)
+
+	project.GET("/jobs/:name", guard, api.runnerJobReadGuard, api.forwardResource)
+	project.PUT("/jobs/:name", guard, api.forwardResource)
+	project.PATCH("/jobs/:name", guard, api.forwardResource)
+	project.DELETE("/jobs/:name", guard, api.forwardResource)
 
 	guard = api.resourceGuard("jobs", "project", "name", "status")
-	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/jobs/:name/status", guard, api.forwardResource)
+	project.GET("/jobs/:name/status", guard, api.forwardResource)
+	project.PUT("/jobs/:name/status", guard, api.forwardResource)
+	project.PATCH("/jobs/:name/status", guard, api.forwardResource)
 
 	guard = api.resourceGuard("jobs", "project", "name", "abort")
 	project.POST("/jobs/:name/abort", guard, api.forwardResource)

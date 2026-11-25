@@ -104,7 +104,7 @@ func operations() object {
 			}
 			methods := []string{"get"}
 			if !r.readOnly {
-				if r.name == "configs" || r.name == "jobs" {
+				if r.name == "configs" {
 					methods = append(methods, "head")
 				}
 				switch part {
@@ -306,7 +306,7 @@ func permissions(resource, part, method string) ([]object, string) {
 			description += " Public lists are limited to at most 100 items per page; continue until metadata.continue is empty."
 		}
 		if resource == "jobs" && part == "object" {
-			description += " Runner tokens may GET/HEAD only their assigned Jobs."
+			description += " Runner tokens may GET only their assigned Jobs."
 		}
 		if resource == "jobs" && part == "list" && method == "get" {
 			description += " Watch requires authenticated project access, returns newline-delimited WatchEvent JSON instead of JobList and cannot use field projection; restart List after 410."

@@ -1427,43 +1427,35 @@ func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
 }
 
 func TestRunnerJobReadPreservesNotFound(t *testing.T) {
-	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		t.Run(method, func(t *testing.T) {
-			path := "/apis/ebs/v1/projects/team/jobs/deleted-job"
-			calls := 0
-			api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
-				calls++
-				if request.Method != http.MethodGet || request.URL.Path != path {
-					t.Fatalf("unexpected upstream request: %s %s", request.Method, request.URL.Path)
-				}
-				return &http.Response{
-					StatusCode: http.StatusNotFound,
-					Header:     make(http.Header),
-					Body:       io.NopCloser(strings.NewReader(`{"reason":"NotFound"}`)),
-				}, nil
-			}))
-			token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
-			if err != nil {
-				t.Fatal(err)
-			}
-			request := httptest.NewRequest(method, path, nil)
-			request.Header.Set("Authorization", "Bearer "+token)
-			response := httptest.NewRecorder()
-			api.Router().ServeHTTP(response, request)
-			if response.Code != http.StatusNotFound || calls != 1 {
-				t.Fatalf("status=%d calls=%d body=%q", response.Code, calls, response.Body.String())
-			}
-			if method == http.MethodGet {
-				var body struct {
-					Error string `json:"error"`
-				}
-				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Error != "Job not found" {
-					t.Fatalf("unexpected response: %s, error=%v", response.Body.String(), err)
-				}
-			} else if response.Body.Len() != 0 {
-				t.Fatalf("HEAD response contains a body: %q", response.Body.String())
-			}
-		})
+	path := "/apis/ebs/v1/projects/team/jobs/deleted-job"
+	calls := 0
+	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Method != http.MethodGet || request.URL.Path != path {
+			t.Fatalf("unexpected upstream request: %s %s", request.Method, request.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"reason":"NotFound"}`)),
+		}, nil
+	}))
+	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	api.Router().ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound || calls != 1 {
+		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls, response.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Error != "Job not found" {
+		t.Fatalf("unexpected response: %s, error=%v", response.Body.String(), err)
 	}
 }
 
@@ -1533,7 +1525,6 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		{"build status patch", http.MethodPatch, "/apis/ebs/v1/projects/team/builds/b/status", userToken, http.StatusNotFound},
 		{"anonymous unsupported method", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", "", http.StatusUnauthorized},
 		{"IAM create is not registered", http.MethodPost, "/apis/iam.ebs/v1/users", userToken, http.StatusNotFound},
-		{"watch on jobs HEAD", http.MethodHead, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusForbidden},
 		{"watch on job creation", http.MethodPost, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusForbidden},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1601,7 +1592,6 @@ func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
 	}{
 		{"no guards", "GET", "/projects", "/projects", nil},
 		{"missing job read", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs}},
-		{"missing job HEAD", "HEAD", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs}},
 		{"missing runner list", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners}},
 		{"wrong job guard", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs, api.runnerJobsListGuard}},
 		{"wrong list guard", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners, api.runnerJobReadGuard}},
