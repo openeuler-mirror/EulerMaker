@@ -51,8 +51,6 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 		return authorizeScript(who, route)
 	case "runners":
 		return authorizeRunner(who, route)
-	case "users", "machineaccounts":
-		return authorizeIAM(who)
 	case "projects":
 		return a.authorizeProject(ctx, who, route)
 	case "builds":
@@ -67,9 +65,6 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 }
 
 func (a *Authorizer) authorizeBuild(ctx context.Context, who identity.Principal, route Route) error {
-	if route.Method == http.MethodPut || route.Method == http.MethodPatch {
-		return deny("Build updates are not available through Gateway")
-	}
 	if who.Type == identity.RunnerType {
 		return deny("Runner project access denied")
 	}
@@ -133,13 +128,6 @@ func (a *Authorizer) authorizeReadOnlyResource(ctx context.Context, who identity
 	}
 	_, err := a.projectMembership(ctx, who, route.Project)
 	return err
-}
-
-func authorizeIAM(who identity.Principal) error {
-	if who.Scope != identity.AdminScope {
-		return deny("IAM administration requires Admin")
-	}
-	return nil
 }
 
 func authorizeService(who identity.Principal, route Route) error {

@@ -14,54 +14,47 @@ import (
 	"ebs-gateway/internal/policy"
 )
 
-func (a *Handler) Users(c *gin.Context) {
-	route, ok := a.authorizeIAM(c, "users")
-	if !ok {
+// RejectIAMWatch disallows watches on all IAM resource routes.
+func RejectIAMWatch(c *gin.Context) {
+	if policy.HasWatch(c.Request.URL.Query()) {
+		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
-	switch route.Method {
+	c.Next()
+}
+
+func (a *Handler) Users(c *gin.Context) {
+	switch c.Request.Method {
 	case http.MethodGet, http.MethodHead:
-		if route.Name == "" {
+		if c.Param("name") == "" {
 			a.listOrdinaryUsers(c)
-		} else {
-			a.getOrdinaryUser(c)
+			return
 		}
+		data, ok := a.readOrdinaryUser(c)
+		if !ok {
+			return
+		}
+		if c.Request.Method == http.MethodHead {
+			c.Status(http.StatusOK)
+			return
+		}
+		c.Data(http.StatusOK, "application/json", data)
 		return
 	case http.MethodDelete:
-		if !a.ordinaryUserObject(c) {
+		if _, ok := a.readOrdinaryUser(c); !ok {
 			return
 		}
 	}
-	a.forwardIAM(c, route)
+	a.forwardIAM(c, "users")
 }
 
 func (a *Handler) MachineAccounts(c *gin.Context) {
-	route, ok := a.authorizeIAM(c, "machineaccounts")
-	if !ok {
-		return
-	}
-	a.forwardIAM(c, route)
+	a.forwardIAM(c, "machineaccounts")
 }
 
-func (a *Handler) authorizeIAM(c *gin.Context, resource string) (policy.Route, bool) {
-	route := policy.Route{
-		Resource: resource,
-		Name:     c.Param("name"),
-		Method:   c.Request.Method,
-	}
-	if policy.HasWatch(c.Request.URL.Query()) {
-		c.Status(http.StatusForbidden)
-		return route, false
-	}
-	if err := a.policy.Authorize(c.Request.Context(), middleware.Principal(c), route); err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
-		return route, false
-	}
-	return route, true
-}
-
-func (a *Handler) forwardIAM(c *gin.Context, route policy.Route) {
-	if route.Method == http.MethodPut || route.Method == http.MethodPatch {
+func (a *Handler) forwardIAM(c *gin.Context, resource string) {
+	if method := c.Request.Method; method == http.MethodPut || method == http.MethodPatch {
+		route := policy.Route{Resource: resource, Name: c.Param("name"), Method: method}
 		if !a.prepareUpdate(c, middleware.Principal(c), route) {
 			return
 		}
@@ -69,59 +62,32 @@ func (a *Handler) forwardIAM(c *gin.Context, route policy.Route) {
 	a.upstream.Forward(c, false)
 }
 
-func (a *Handler) getOrdinaryUser(c *gin.Context) {
+func (a *Handler) readOrdinaryUser(c *gin.Context) ([]byte, bool) {
 	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet, c.Request.URL.Path, nil, nil)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "User unavailable"})
-		return
+		return nil, false
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		c.Status(response.StatusCode)
-		return
+		return nil, false
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, a.bodyLimit+1))
 	if err != nil || int64(len(data)) > a.bodyLimit {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User response"})
-		return
+		return nil, false
 	}
 	var object iamv1.User
 	if err := json.Unmarshal(data, &object); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User response"})
-		return
+		return nil, false
 	}
 	if len(object.Spec.Scopes) != 1 || object.Spec.Scopes[0] == string(identity.AdminScope) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Admin User is protected"})
-		return
+		return nil, false
 	}
-	if c.Request.Method == http.MethodHead {
-		c.Status(http.StatusOK)
-		return
-	}
-	c.Data(http.StatusOK, "application/json", data)
-}
-
-func (a *Handler) ordinaryUserObject(c *gin.Context) bool {
-	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet, c.Request.URL.Path, nil, nil)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "User unavailable"})
-		return false
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		c.Status(response.StatusCode)
-		return false
-	}
-	var object iamv1.User
-	if err := json.NewDecoder(io.LimitReader(response.Body, a.bodyLimit+1)).Decode(&object); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User response"})
-		return false
-	}
-	if len(object.Spec.Scopes) != 1 || object.Spec.Scopes[0] == string(identity.AdminScope) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Admin User is protected"})
-		return false
-	}
-	return true
+	return data, true
 }
 
 func (a *Handler) listOrdinaryUsers(c *gin.Context) {

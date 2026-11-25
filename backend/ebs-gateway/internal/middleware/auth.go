@@ -38,7 +38,7 @@ func Principal(c *gin.Context) identity.Principal {
 	return value.(identity.Principal)
 }
 
-// Authenticate verifies the token and, for user identities, the current IAM account.
+// Authenticate advances the middleware chain only after VerifyAccess succeeds.
 func (a *Auth) Authenticate(c *gin.Context) {
 	if !a.VerifyAccess(c) {
 		return
@@ -46,18 +46,28 @@ func (a *Auth) Authenticate(c *gin.Context) {
 	c.Next()
 }
 
-func (a *Auth) verifyToken(c *gin.Context) bool {
-	parts := strings.Fields(c.GetHeader("Authorization"))
+func (a *Auth) verifyToken(header string) (identity.Principal, bool) {
+	parts := strings.Fields(header)
 	if len(parts) != 2 || parts[0] != "Bearer" {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return false
+		return identity.Principal{}, false
 	}
 	who, err := a.tokens.Verify(parts[1], a.now())
-	if err != nil {
+	return who, err == nil
+}
+
+// VerifyAccess authenticates a request without advancing its middleware chain.
+func (a *Auth) VerifyAccess(c *gin.Context) bool {
+	who, ok := a.verifyToken(c.GetHeader("Authorization"))
+	if !ok {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return false
 	}
-	if who.Type == identity.ServiceType {
+	switch who.Type {
+	case identity.UserType:
+		// Keep the signed user identity available to audit even if IAM rejects access.
+		c.Set(principalKey, who)
+		return a.verifyUser(c, who)
+	case identity.ServiceType:
 		account, status, err := a.iam.GetMachine(c.Request.Context(), who.Subject)
 		if err != nil || (status != http.StatusOK && status != http.StatusNotFound) {
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "machine account service unavailable"})
@@ -71,20 +81,17 @@ func (a *Auth) verifyToken(c *gin.Context) bool {
 			Projects:    account.Spec.Projects,
 			Permissions: account.Spec.Permissions,
 		}
+	case identity.RunnerType:
+		// Runner tokens require no IAM lookup.
+	default:
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return false
 	}
 	c.Set(principalKey, who)
 	return true
 }
 
-// VerifyAccess authenticates a request without advancing its middleware chain.
-func (a *Auth) VerifyAccess(c *gin.Context) bool {
-	if !a.verifyToken(c) {
-		return false
-	}
-	who := Principal(c)
-	if !who.IsUser() {
-		return true
-	}
+func (a *Auth) verifyUser(c *gin.Context, who identity.Principal) bool {
 	user, status, err := a.iam.GetUser(c.Request.Context(), who.Subject)
 	if err != nil || (status != http.StatusOK && status != http.StatusNotFound) {
 		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "user service unavailable"})

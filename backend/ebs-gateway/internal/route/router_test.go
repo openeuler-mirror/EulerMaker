@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -167,8 +168,8 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 		}
 		path := strings.Join(segments, "/")
 		registered[route.Method+" "+path] = true
-		if path != "/healthz" && path != "/openapi.json" && document.Paths[path] == nil {
-			t.Fatalf("undocumented Gateway route: %s", path)
+		if _, ok := document.Paths[path][strings.ToLower(route.Method)]; !ok && path != "/healthz" && path != "/openapi.json" {
+			t.Fatalf("undocumented Gateway route: %s %s", route.Method, path)
 		}
 	}
 	for path, methods := range document.Paths {
@@ -225,6 +226,11 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 
 func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 	t.Helper()
+	return newTestAPIWithBurst(t, transport, 200)
+}
+
+func newTestAPIWithBurst(t *testing.T, transport http.RoundTripper, burst int) *testAPI {
+	t.Helper()
 	client, err := upstream.New("https://api.example", transport)
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +240,7 @@ func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 		t.Fatal(err)
 	}
 	now := func() time.Time { return time.Unix(1790000000, 0) }
-	api, err := handler.New(handler.Dependencies{Upstream: client, Tokens: tokens, Now: now, Limits: limit.New(100, 200, now), BodyLimit: 1 << 20})
+	api, err := handler.New(handler.Dependencies{Upstream: client, Tokens: tokens, Now: now, Limits: limit.New(100, burst, now), BodyLimit: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,10 +446,8 @@ func TestServiceTokenRejectsOperationsOutsideAllowlist(t *testing.T) {
 		{"POST", "/apis/ebs/v1/projects"},
 		{"PATCH", "/apis/ebs/v1/projects/team/status"},
 		{"GET", "/apis/ebs/v1/projects/team/builds"},
-		{"PATCH", "/apis/ebs/v1/projects/team/builds/build-1"},
 		{"DELETE", "/apis/ebs/v1/projects/team/builds/build-1"},
 		{"POST", "/apis/ebs/v1/projects/team/jobs/job-1/abort"},
-		{"PATCH", "/apis/ebs/v1/projects/team/builds/build-1/status"},
 		{"GET", "/apis/ebs/v1/configs/services"},
 		{"GET", "/apis/ebs/v1/runners/service/jobs?watch=true"},
 		{"GET", "/apis/ebs/v1/service-endpoints"},
@@ -776,6 +780,74 @@ func TestOldJobsReadRoutes(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedRoutesShareLimit(t *testing.T) {
+	api := newTestAPIWithBurst(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/apis/ebs/v1/runners/runner-1/jobs" {
+			t.Fatalf("unexpected upstream request: %s", r.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
+	}), 1)
+	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := api.Router()
+	for _, tc := range []struct {
+		method, path string
+		status       int
+	}{
+		{http.MethodGet, "/apis/ebs/v1/runners/runner-1/jobs", http.StatusOK},
+		{http.MethodPost, "/auth/check", http.StatusTooManyRequests},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, req)
+		if res.Code != tc.status || (tc.status == http.StatusTooManyRequests && res.Header().Get("Retry-After") != "1") {
+			t.Fatalf("%s: status=%d Retry-After=%q", tc.path, res.Code, res.Header().Get("Retry-After"))
+		}
+	}
+}
+
+func TestIAMRouteGuards(t *testing.T) {
+	for _, tc := range []struct {
+		scope identity.Scope
+		query string
+		want  int
+	}{
+		{identity.UserScope, "", http.StatusForbidden},
+		{identity.OpsScope, "", http.StatusForbidden},
+		{identity.AdminScope, "?watch=false&watch=true", http.StatusForbidden},
+		{identity.AdminScope, "?watch=false", http.StatusOK},
+	} {
+		t.Run(string(tc.scope)+tc.query, func(t *testing.T) {
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				body := `{"items":[]}`
+				if r.URL.Path == "/apis/iam.ebs/v1/users/operator" {
+					body = fmt.Sprintf(`{"metadata":{"name":"operator"},"spec":{"enabled":true,"scopes":[%q]}}`, tc.scope)
+				} else if tc.want != http.StatusOK {
+					t.Fatalf("denied request reached upstream: %s", r.URL)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			token, err := api.tokens.Issue("operator", "", identity.UserType, tc.scope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := api.Router()
+			for _, resource := range []string{"users", "machineaccounts"} {
+				req := httptest.NewRequest(http.MethodGet, "/apis/iam.ebs/v1/"+resource+tc.query, nil)
+				req.Header.Set("Authorization", "Bearer "+token)
+				res := httptest.NewRecorder()
+				router.ServeHTTP(res, req)
+				if res.Code != tc.want {
+					t.Errorf("%s: status=%d, want %d", resource, res.Code, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestWatchRouteAllowlist(t *testing.T) {
 	forwarded := 0
 	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1040,6 +1112,9 @@ func TestConfigVisibilityUsesOneUpstreamResponse(t *testing.T) {
 		{"OpsOnly", http.MethodHead, true, http.StatusForbidden},
 	} {
 		t.Run(tc.method+"/"+tc.visibility, func(t *testing.T) {
+			if tc.method == http.MethodHead {
+				t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+			}
 			calls := 0
 			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				calls++
@@ -1061,6 +1136,13 @@ func TestConfigVisibilityUsesOneUpstreamResponse(t *testing.T) {
 			api.Router().ServeHTTP(recorder, request)
 			if calls != 1 || recorder.Code != tc.status {
 				t.Fatalf("calls=%d status=%d body=%q", calls, recorder.Code, recorder.Body.String())
+			}
+			if tc.status == http.StatusOK {
+				if recorder.Header().Get("Content-Type") != "application/json" ||
+					(tc.method == http.MethodHead && recorder.Body.Len() != 0) ||
+					(tc.method == http.MethodGet && !strings.Contains(recorder.Body.String(), "hello")) {
+					t.Fatalf("unexpected response: headers=%v body=%q", recorder.Header(), recorder.Body)
+				}
 			}
 			if tc.status == http.StatusForbidden && strings.Contains(recorder.Body.String(), "hello") {
 				t.Fatal("OpsOnly content leaked")
@@ -1321,6 +1403,9 @@ func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
 			if !strings.Contains(string(body), `"phase":"Online"`) || !strings.Contains(string(body), `"instanceID":"constant"`) {
 				t.Errorf("invalid complete object forwarded: %s", body)
 			}
+			if request.Header.Get("Content-Type") != "application/json" || request.ContentLength != int64(len(body)) || request.Header.Get("Content-Length") != "" {
+				t.Errorf("invalid rewritten headers=%v content length=%d, body length=%d", request.Header, request.ContentLength, len(body))
+			}
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 		default:
 			t.Fatalf("unexpected method %s", request.Method)
@@ -1334,6 +1419,7 @@ func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPatch, "/apis/ebs/v1/runners/runner-1/status", strings.NewReader(`{"status":{"phase":"Online"}}`))
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Content-Type", "application/merge-patch+json")
+	request.Header.Set("Content-Length", fmt.Sprint(request.ContentLength))
 	response := httptest.NewRecorder()
 	api.Router().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || writes != 1 {
@@ -1442,6 +1528,10 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		{"unknown authenticated path", http.MethodGet, "/apis/ebs/v1/secrets", userToken, http.StatusNotFound},
 		{"abort wrong method", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/job-1/abort", userToken, http.StatusNotFound},
 		{"collection update", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", userToken, http.StatusNotFound},
+		{"build update", http.MethodPut, "/apis/ebs/v1/projects/team/builds/b", userToken, http.StatusNotFound},
+		{"build patch", http.MethodPatch, "/apis/ebs/v1/projects/team/builds/b", userToken, http.StatusNotFound},
+		{"build status update", http.MethodPut, "/apis/ebs/v1/projects/team/builds/b/status", userToken, http.StatusNotFound},
+		{"build status patch", http.MethodPatch, "/apis/ebs/v1/projects/team/builds/b/status", userToken, http.StatusNotFound},
 		{"anonymous unsupported method", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", "", http.StatusUnauthorized},
 		{"IAM create is not registered", http.MethodPost, "/apis/iam.ebs/v1/users", userToken, http.StatusNotFound},
 		{"watch on jobs HEAD", http.MethodHead, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusForbidden},
@@ -1571,8 +1661,8 @@ func TestResourceRouteRegistration(t *testing.T) {
 		{"/scripts", []string{http.MethodGet, http.MethodPost}},
 		{"/scripts/:name", []string{http.MethodGet, http.MethodPut, http.MethodPatch, http.MethodDelete}},
 		{"/projects/:project/builds", collection},
-		{"/projects/:project/builds/:name", object},
-		{"/projects/:project/builds/:name/status", status},
+		{"/projects/:project/builds/:name", []string{http.MethodGet, http.MethodHead, http.MethodDelete}},
+		{"/projects/:project/builds/:name/status", []string{http.MethodGet, http.MethodHead}},
 		{"/projects/:project/builds/:name/abort", []string{http.MethodPost}},
 		{"/projects/:project/jobs", collection},
 		{"/projects/:project/jobs/:name", object},

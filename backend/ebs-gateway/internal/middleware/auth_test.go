@@ -120,6 +120,50 @@ func TestAuthenticateStopsInvalidToken(t *testing.T) {
 	}
 }
 
+func TestRejectedAccountAuditIdentity(t *testing.T) {
+	now := time.Now()
+	tokens, err := identity.NewTokens(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name         string
+		typ          identity.Type
+		scope        identity.Scope
+		iamStatus    int
+		wantStatus   int
+		auditSubject string
+	}{
+		{"missing user", identity.UserType, identity.UserScope, 404, 403, "account"},
+		{"missing service", identity.ServiceType, "", 404, 401, ""},
+		{"user lookup unavailable", identity.UserType, identity.UserScope, 503, 503, "account"},
+		{"service lookup unavailable", identity.ServiceType, "", 503, 503, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.iamStatus)
+			}))
+			defer server.Close()
+			client, err := upstream.New(server.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			token, err := tokens.Issue("account", "", tc.typ, tc.scope, time.Hour, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(response)
+			c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+			c.Request.Header.Set("Authorization", "Bearer "+token)
+			auth := NewAuth(tokens, iam.New(client), func() time.Time { return now })
+			if auth.VerifyAccess(c) || !c.IsAborted() || response.Code != tc.wantStatus || Principal(c).Subject != tc.auditSubject {
+				t.Fatalf("aborted=%v status=%d audit subject=%q", c.IsAborted(), response.Code, Principal(c).Subject)
+			}
+		})
+	}
+}
+
 func TestPrincipalWithoutAuthentication(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	if got := Principal(c); got != (identity.Principal{}) {

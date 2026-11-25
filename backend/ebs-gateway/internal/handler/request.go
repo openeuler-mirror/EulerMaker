@@ -32,15 +32,23 @@ func (a *Handler) forwardRequest(c *gin.Context, who identity.Principal, route p
 	a.upstream.Forward(c, c.GetBool("public"))
 }
 
-func (a *Handler) limitWriteBody(c *gin.Context) bool {
+func (a *Handler) readWriteBody(c *gin.Context) ([]byte, bool) {
 	defer c.Request.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, a.bodyLimit+1))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unable to read request"})
-		return false
+		return nil, false
 	}
 	if int64(len(raw)) > a.bodyLimit {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+		return nil, false
+	}
+	return raw, true
+}
+
+func (a *Handler) limitWriteBody(c *gin.Context) bool {
+	raw, ok := a.readWriteBody(c)
+	if !ok {
 		return false
 	}
 	c.Request.Body = io.NopCloser(bytes.NewReader(raw))
@@ -49,14 +57,8 @@ func (a *Handler) limitWriteBody(c *gin.Context) bool {
 }
 
 func (a *Handler) prepareCreate(c *gin.Context, who identity.Principal, route policy.Route) bool {
-	defer c.Request.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, a.bodyLimit+1))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unable to read request"})
-		return false
-	}
-	if int64(len(raw)) > a.bodyLimit {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+	raw, ok := a.readWriteBody(c)
+	if !ok {
 		return false
 	}
 	if media := strings.TrimSpace(strings.Split(c.GetHeader("Content-Type"), ";")[0]); media != "application/json" {
@@ -72,10 +74,7 @@ func (a *Handler) prepareCreate(c *gin.Context, who identity.Principal, route po
 		c.JSON(status, gin.H{"error": err.Error()})
 		return false
 	}
-	c.Request.Body = io.NopCloser(bytes.NewReader(encoded))
-	c.Request.ContentLength = int64(len(encoded))
-	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.Header.Del("Content-Length")
+	setJSONBody(c.Request, encoded)
 	return true
 }
 
@@ -99,10 +98,8 @@ func (a *Handler) prepareUpdate(c *gin.Context, who identity.Principal, route po
 		c.JSON(http.StatusBadGateway, gin.H{"error": "current object exceeds body limit"})
 		return false
 	}
-	defer c.Request.Body.Close()
-	incoming, err := io.ReadAll(io.LimitReader(c.Request.Body, a.bodyLimit+1))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unable to read request"})
+	incoming, ok := a.readWriteBody(c)
+	if !ok {
 		return false
 	}
 	encoded, previous, candidate, err := mutation.Prepare(old, incoming, c.Request.Method, c.GetHeader("Content-Type"), a.bodyLimit)
@@ -123,9 +120,13 @@ func (a *Handler) prepareUpdate(c *gin.Context, who identity.Principal, route po
 		return false
 	}
 	c.Request.Method = http.MethodPut
-	c.Request.Body = io.NopCloser(bytes.NewReader(encoded))
-	c.Request.ContentLength = int64(len(encoded))
-	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.Header.Del("Content-Length")
+	setJSONBody(c.Request, encoded)
 	return true
+}
+
+func setJSONBody(request *http.Request, encoded []byte) {
+	request.Body = io.NopCloser(bytes.NewReader(encoded))
+	request.ContentLength = int64(len(encoded))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Del("Content-Length")
 }
