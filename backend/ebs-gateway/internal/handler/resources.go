@@ -113,7 +113,6 @@ func canUsePublicRead(who identity.Principal, route policy.Route) bool {
 
 func (a *Handler) authenticateResource(c *gin.Context, allowAnonymous bool) bool {
 	if c.GetHeader("Authorization") == "" && allowAnonymous {
-		c.Set("anonymous", true)
 		return true
 	}
 	return a.auth.VerifyAccess(c)
@@ -151,9 +150,7 @@ func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
 }
 
 func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route) bool {
-	if !a.limits.Allow(who.Subject + "/" + c.ClientIP()) {
-		c.Header("Retry-After", "1")
-		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+	if !middleware.AllowAuthenticated(c, a.limits) {
 		return false
 	}
 	if err := a.policy.Authorize(c.Request.Context(), who, route); err != nil {

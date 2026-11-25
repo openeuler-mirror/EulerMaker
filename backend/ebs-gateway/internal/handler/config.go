@@ -31,6 +31,13 @@ func (a *Handler) serveConfig(c *gin.Context) {
 		c.Status(response.StatusCode)
 		return
 	}
+	if c.Request.Method == http.MethodHead {
+		if configReadable(c, response.Body, name) {
+			c.Header("Content-Type", response.Header.Get("Content-Type"))
+			c.Status(http.StatusOK)
+		}
+		return
+	}
 	spool, err := os.CreateTemp("", "ebs-gateway-config-*")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Config unavailable"})
@@ -38,14 +45,20 @@ func (a *Handler) serveConfig(c *gin.Context) {
 	}
 	defer os.Remove(spool.Name())
 	defer spool.Close()
-	if _, err := io.Copy(spool, response.Body); err != nil {
+	size, err := io.Copy(spool, response.Body)
+	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Config unavailable"})
 		return
 	}
-	if _, err := spool.Seek(0, io.SeekStart); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Config unavailable"})
+	if !configReadable(c, io.NewSectionReader(spool, 0, size), name) {
 		return
 	}
+	c.Header("Content-Type", response.Header.Get("Content-Type"))
+	c.Status(http.StatusOK)
+	_, _ = io.Copy(c.Writer, io.NewSectionReader(spool, 0, size))
+}
+
+func configReadable(c *gin.Context, body io.Reader, name string) bool {
 	var object struct {
 		Metadata struct {
 			Name string `json:"name"`
@@ -54,25 +67,13 @@ func (a *Handler) serveConfig(c *gin.Context) {
 			Visibility string `json:"visibility"`
 		} `json:"spec"`
 	}
-	if err := json.NewDecoder(spool).Decode(&object); err != nil || object.Metadata.Name != name {
+	if err := json.NewDecoder(body).Decode(&object); err != nil || object.Metadata.Name != name {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid Config response"})
-		return
+		return false
 	}
 	if object.Spec.Visibility != "Public" && !middleware.Principal(c).IsPrivileged() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Config access denied"})
-		return
+		return false
 	}
-	if response.Header.Get("Content-Type") != "" {
-		c.Header("Content-Type", response.Header.Get("Content-Type"))
-	}
-	if c.Request.Method == http.MethodHead {
-		c.Status(http.StatusOK)
-		return
-	}
-	if _, err := spool.Seek(0, io.SeekStart); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Config unavailable"})
-		return
-	}
-	c.Status(http.StatusOK)
-	_, _ = io.Copy(c.Writer, spool)
+	return true
 }

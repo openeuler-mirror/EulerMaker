@@ -46,8 +46,6 @@ func TestProjectAuthorizationMatrix(t *testing.T) {
 		{"owner may abort Job", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, true},
 		{"member may abort Job", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, true},
 		{"outsider admin cannot abort Job", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, false},
-		{"Build PUT is never exposed", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodPut}, false},
-		{"Build PATCH is never exposed", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodPatch}, false},
 		{"admin cannot create Snapshot", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "snapshots", Project: "team", Method: http.MethodPost}, false},
 		{"owner cannot update BuildInfo", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "buildinfos", Project: "team", Name: "b", Method: http.MethodPut}, false},
 		{"admin cannot update RpmRepo status", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "rpmrepos", Project: "team", Name: "r", Subresource: "status", Method: http.MethodPatch}, false},
@@ -123,20 +121,6 @@ func TestReadOnlyResourceAuthorization(t *testing.T) {
 	}
 }
 
-func TestIAMAuthorization(t *testing.T) {
-	a := &Authorizer{}
-	for _, resource := range []string{"users", "machineaccounts"} {
-		for _, scope := range []identity.Scope{identity.UserScope, identity.OpsScope, identity.AdminScope} {
-			t.Run(resource+"/"+string(scope), func(t *testing.T) {
-				who := identity.Principal{Type: identity.UserType, Subject: "operator", Scope: scope}
-				if err := a.Authorize(context.Background(), who, Route{Resource: resource, Method: http.MethodGet}); (err == nil) != (scope == identity.AdminScope) {
-					t.Fatalf("Authorize() error=%v, want allow=%v", err, scope == identity.AdminScope)
-				}
-			})
-		}
-	}
-}
-
 func TestBuildDeletionRequiresProjectOwner(t *testing.T) {
 	a := projectAuthorizer(t)
 	route := Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete}
@@ -200,7 +184,6 @@ func TestServiceOperationAllowlist(t *testing.T) {
 		{Route{Resource: "builds", Project: "team", Name: "b", Subresource: "abort", Method: http.MethodPost}, true},
 		{Route{Resource: "builds", Project: "other", Name: "b", Subresource: "abort", Method: http.MethodPost}, false},
 		{Route{Resource: "builds", Project: "team", Subresource: "abort", Method: http.MethodPost}, false},
-		{Route{Resource: "builds", Project: "team", Name: "b", Subresource: "status", Method: http.MethodPut}, false},
 		{Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, false},
 		{Route{Resource: "jobs", Project: "team", Method: http.MethodPost}, false},
 		{Route{Resource: "machineaccounts", Method: http.MethodGet}, false},

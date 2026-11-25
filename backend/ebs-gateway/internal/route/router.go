@@ -56,7 +56,7 @@ func registerAuth(router *gin.Engine, api *handler.Handler, middleware handler.M
 
 func registerIAM(router *gin.Engine, api *handler.Handler, middleware handler.Middleware) {
 	iam := router.Group("/apis/iam.ebs/v1")
-	iam.Use(middleware.Authenticate, middleware.LimitAuthenticated, middleware.RequireAdmin)
+	iam.Use(middleware.Authenticate, middleware.LimitAuthenticated, middleware.RequireAdmin, handler.RejectIAMWatch)
 
 	iam.Match([]string{http.MethodGet, http.MethodHead}, "/users", api.Users)
 	iam.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/users/:name", api.Users)
@@ -106,10 +106,10 @@ func registerProjectScopedResources(router *gin.Engine, api *handler.Handler) {
 	project := router.Group("/apis/ebs/v1/projects/:project")
 	guard := api.ResourceGuard("builds", "project", "name", "")
 	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/builds", guard, api.ForwardResource)
-	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}, "/builds/:name", guard, api.ForwardResource)
+	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodDelete}, "/builds/:name", guard, api.ForwardResource)
 
 	guard = api.ResourceGuard("builds", "project", "name", "status")
-	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/builds/:name/status", guard, api.ForwardResource)
+	project.Match([]string{http.MethodGet, http.MethodHead}, "/builds/:name/status", guard, api.ForwardResource)
 
 	guard = api.ResourceGuard("builds", "project", "name", "abort")
 	project.POST("/builds/:name/abort", guard, api.ForwardResource)
