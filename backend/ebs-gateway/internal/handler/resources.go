@@ -11,70 +11,108 @@ import (
 	"ebs-gateway/internal/policy"
 )
 
-type resourceRoute struct {
-	resource    string
-	projectKey  string
-	nameKey     string
-	subresource string
+const (
+	apiPrefix         = "/apis/ebs/v1"
+	resourceAccessKey = "ebs-gateway.resourceAccess"
+)
+
+type resourceCheck uint8
+
+const (
+	noPendingCheck resourceCheck = iota
+	runnerJobsListCheck
+	runnerJobReadCheck
+)
+
+type resourceAccess struct {
+	route   policy.Route
+	pending resourceCheck
 }
 
-const apiPrefix = "/apis/ebs/v1"
-
-func (r resourceRoute) at(c *gin.Context) policy.Route {
-	return policy.Route{
-		Resource:    r.resource,
-		Project:     c.Param(r.projectKey),
-		Name:        c.Param(r.nameKey),
-		Subresource: r.subresource,
-		Method:      c.Request.Method,
-	}
-}
-
-// ResourceHandlers returns the guard and final handler for one registered resource path.
-func (a *Handler) ResourceHandlers(resource, projectKey, nameKey, subresource string) (gin.HandlerFunc, gin.HandlerFunc) {
-	route := resourceRoute{
-		resource:    resource,
-		projectKey:  projectKey,
-		nameKey:     nameKey,
-		subresource: subresource,
-	}
-	return a.resourceGuard(route), a.forwardResource(route)
-}
-
-func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
+// ResourceGuard authorizes the route and records any check still required before forwarding.
+func (a *Handler) ResourceGuard(resource, projectKey, nameKey, subresource string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		resolved := route.at(c)
-		public := policy.IsPublicRead(resolved) ||
-			(resolved.Resource == "configs" && resolved.Name != "" && (resolved.Method == http.MethodGet || resolved.Method == http.MethodHead))
-		if policy.HasWatch(c.Request.URL.Query()) {
-			public = false
+		resolved := policy.Route{
+			Resource:    resource,
+			Project:     c.Param(projectKey),
+			Name:        c.Param(nameKey),
+			Subresource: subresource,
+			Method:      c.Request.Method,
 		}
-		if !a.authenticateResource(c, public) {
+		watch := policy.HasWatch(c.Request.URL.Query())
+		allowAnonymous := !watch && (policy.IsPublicRead(resolved) || isNamedConfigRead(resolved))
+		if !a.authenticateResource(c, allowAnonymous) {
 			return
 		}
 		who := middleware.Principal(c)
-		if who.Type == identity.ServiceType || (who.Type == identity.RunnerType && resolved.Resource != "configs") {
-			public = false
-		}
 		if who.Type == identity.ServiceType {
 			prepareServiceAudit(c, resolved)
 		}
-		if !validateResourceRoute(c, resolved) {
+		if watch && !supportsWatch(resolved) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "watch is not supported for this route"})
 			return
 		}
-		if public {
+		if allowAnonymous && canUsePublicRead(who, resolved) {
 			if !a.preparePublicRead(c, resolved) {
 				return
 			}
 		} else if !a.authorizeResource(c, who, resolved) {
 			return
 		}
+		c.Set(resourceAccessKey, &resourceAccess{route: resolved, pending: requiredResourceCheck(resolved)})
 		c.Next()
 	}
 }
 
-func (a *Handler) authenticateResource(c *gin.Context, public bool) bool {
-	if c.GetHeader("Authorization") == "" && public {
+func requiredResourceCheck(route policy.Route) resourceCheck {
+	switch {
+	case route.Resource == "runners" && route.Subresource == "jobs" && route.Method == http.MethodGet:
+		return runnerJobsListCheck
+	case route.Resource == "jobs" && route.Name != "" && route.Subresource == "" &&
+		(route.Method == http.MethodGet || route.Method == http.MethodHead):
+		return runnerJobReadCheck
+	default:
+		return noPendingCheck
+	}
+}
+
+func requireResourceCheck(c *gin.Context, expected resourceCheck) *resourceAccess {
+	value, _ := c.Get(resourceAccessKey)
+	access, ok := value.(*resourceAccess)
+	if !ok || access == nil || access.pending != expected {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "invalid resource guard chain"})
+		return nil
+	}
+	return access
+}
+
+func supportsWatch(route policy.Route) bool {
+	if route.Method != http.MethodGet {
+		return false
+	}
+	switch route.Resource {
+	case "jobs":
+		return route.Project != "" && route.Name == "" && route.Subresource == ""
+	case "runners":
+		return route.Project == "" && route.Name != "" && route.Subresource == "jobs"
+	default:
+		return false
+	}
+}
+
+func canUsePublicRead(who identity.Principal, route policy.Route) bool {
+	switch who.Type {
+	case identity.ServiceType:
+		return false
+	case identity.RunnerType:
+		return isNamedConfigRead(route)
+	default:
+		return true
+	}
+}
+
+func (a *Handler) authenticateResource(c *gin.Context, allowAnonymous bool) bool {
+	if c.GetHeader("Authorization") == "" && allowAnonymous {
 		c.Set("anonymous", true)
 		return true
 	}
@@ -135,23 +173,16 @@ func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, rout
 	return true
 }
 
-func (a *Handler) forwardResource(route resourceRoute) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		resolved := route.at(c)
-		who := middleware.Principal(c)
-		switch resolved.Resource {
-		case "configs":
-			if resolved.Name != "" && (resolved.Method == http.MethodGet || resolved.Method == http.MethodHead) {
-				a.serveConfig(c)
-				return
-			}
-		case "runners":
-			a.forwardRunnerResource(c, who, resolved)
-			return
-		case "jobs":
-			a.forwardJobResource(c, who, resolved)
-			return
-		}
-		a.forwardRequest(c, who, resolved)
+// ForwardResource only forwards after all required guards have passed.
+func (a *Handler) ForwardResource(c *gin.Context) {
+	access := requireResourceCheck(c, noPendingCheck)
+	if access == nil {
+		return
 	}
+	route := access.route
+	if isNamedConfigRead(route) {
+		a.serveConfig(c)
+		return
+	}
+	a.forwardRequest(c, middleware.Principal(c), route)
 }

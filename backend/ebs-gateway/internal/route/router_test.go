@@ -985,24 +985,35 @@ func TestRegisterRejectsUnknownFields(t *testing.T) {
 
 func TestConfigVisibilityUsesOneUpstreamResponse(t *testing.T) {
 	for _, tc := range []struct {
-		visibility string
-		status     int
+		visibility, method string
+		runner             bool
+		status             int
 	}{
-		{"Public", http.StatusOK},
-		{"OpsOnly", http.StatusForbidden},
+		{"Public", http.MethodGet, false, http.StatusOK},
+		{"OpsOnly", http.MethodGet, false, http.StatusForbidden},
+		{"Public", http.MethodHead, true, http.StatusOK},
+		{"OpsOnly", http.MethodHead, true, http.StatusForbidden},
 	} {
-		t.Run(tc.visibility, func(t *testing.T) {
+		t.Run(tc.method+"/"+tc.visibility, func(t *testing.T) {
 			calls := 0
 			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				calls++
-				if r.URL.Path != "/apis/ebs/v1/configs/example" {
-					t.Errorf("unexpected path %s", r.URL.Path)
+				if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/configs/example" {
+					t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
 				}
 				body := `{"metadata":{"name":"example"},"spec":{"visibility":"` + tc.visibility + `","content":"hello"}}`
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
 			recorder := httptest.NewRecorder()
-			api.Router().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/configs/example", nil))
+			request := httptest.NewRequest(tc.method, "/apis/ebs/v1/configs/example", nil)
+			if tc.runner {
+				token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Header.Set("Authorization", "Bearer "+token)
+			}
+			api.Router().ServeHTTP(recorder, request)
 			if calls != 1 || recorder.Code != tc.status {
 				t.Fatalf("calls=%d status=%d body=%q", calls, recorder.Code, recorder.Body.String())
 			}
@@ -1384,8 +1395,12 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		{"runner not public business reader", http.MethodGet, "/apis/ebs/v1/projects/team/jobs", runnerToken, http.StatusForbidden},
 		{"unknown anonymous path", http.MethodGet, "/apis/ebs/v1/secrets", "", http.StatusUnauthorized},
 		{"unknown authenticated path", http.MethodGet, "/apis/ebs/v1/secrets", userToken, http.StatusNotFound},
-		{"abort wrong method", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/job-1/abort", userToken, http.StatusMethodNotAllowed},
-		{"collection update", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", userToken, http.StatusMethodNotAllowed},
+		{"abort wrong method", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/job-1/abort", userToken, http.StatusNotFound},
+		{"collection update", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", userToken, http.StatusNotFound},
+		{"anonymous unsupported method", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", "", http.StatusUnauthorized},
+		{"IAM create is not registered", http.MethodPost, "/apis/iam.ebs/v1/users", userToken, http.StatusNotFound},
+		{"watch on jobs HEAD", http.MethodHead, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusForbidden},
+		{"watch on job creation", http.MethodPost, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusForbidden},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(test.method, test.path, nil)
@@ -1419,6 +1434,7 @@ func TestRunnerJobsIdentityIsCheckedBeforeProxy(t *testing.T) {
 		want int
 	}{
 		{path: "/apis/ebs/v1/runners/runner-1/jobs", want: http.StatusOK},
+		{path: "/apis/ebs/v1/runners/runner-1/jobs?fieldSelector=status.runner=other", want: http.StatusForbidden},
 		{path: "/apis/ebs/v1/runners/runner-2/jobs", want: http.StatusForbidden},
 	} {
 		request := httptest.NewRequest(http.MethodGet, test.path, nil)
@@ -1434,29 +1450,122 @@ func TestRunnerJobsIdentityIsCheckedBeforeProxy(t *testing.T) {
 	}
 }
 
-func TestControllerResourcesRegisterOnlyGet(t *testing.T) {
+func TestForwardResourceWithoutGuard(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("unguarded request reached upstream")
+		return nil, nil
+	}))
+	router := gin.New()
+	router.GET("/projects", api.ForwardResource)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/projects", nil))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d, want 500", response.Code)
+	}
+}
+
+func TestRunnerRoutesRequireMatchingGuard(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("incomplete guard chain reached upstream")
+		return nil, nil
+	}))
+	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := api.ResourceGuard("jobs", "project", "name", "")
+	runners := api.ResourceGuard("runners", "", "runner", "jobs")
+	for _, tc := range []struct {
+		name, method, pattern, path string
+		guards                      []gin.HandlerFunc
+	}{
+		{"missing job read", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs}},
+		{"missing job HEAD", "HEAD", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs}},
+		{"missing runner list", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners}},
+		{"wrong job guard", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs, api.RunnerJobsListGuard}},
+		{"wrong list guard", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners, api.RunnerJobReadGuard}},
+		{"read guard before authorization", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{api.RunnerJobReadGuard, jobs}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			router := gin.New()
+			router.Handle(tc.method, tc.pattern, append(tc.guards, api.ForwardResource)...)
+			request := httptest.NewRequest(tc.method, tc.path, nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("status=%d, want 500", response.Code)
+			}
+		})
+	}
+}
+
+func TestResourceRouteRegistration(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("route registration must not call upstream")
 		return nil, nil
 	}))
-	routes := api.Router().Routes()
+	collection := []string{http.MethodGet, http.MethodHead, http.MethodPost}
+	object := []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}
+	status := []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}
+	expected := map[string]bool{}
+	for _, entry := range []struct {
+		path    string
+		methods []string
+	}{
+		{"/service-endpoints", []string{http.MethodGet}},
+		{"/projects", []string{http.MethodGet, http.MethodHead, http.MethodPost}},
+		{"/projects/:project", []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}},
+		{"/projects/:project/status", []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}},
+		{"/runners", collection},
+		{"/runners/:runner", object},
+		{"/runners/:runner/status", status},
+		{"/runners/:runner/jobs", []string{http.MethodGet}},
+		{"/configs", collection},
+		{"/configs/:name", object},
+		{"/scripts", []string{http.MethodGet, http.MethodPost}},
+		{"/scripts/:name", []string{http.MethodGet, http.MethodPut, http.MethodPatch, http.MethodDelete}},
+		{"/projects/:project/builds", collection},
+		{"/projects/:project/builds/:name", object},
+		{"/projects/:project/builds/:name/status", status},
+		{"/projects/:project/builds/:name/abort", []string{http.MethodPost}},
+		{"/projects/:project/jobs", collection},
+		{"/projects/:project/jobs/:name", object},
+		{"/projects/:project/jobs/:name/status", status},
+		{"/projects/:project/jobs/:name/abort", []string{http.MethodPost}},
+		{"/projects/:project/oldjobs", []string{http.MethodGet}},
+		{"/projects/:project/oldjobs/:name", []string{http.MethodGet}},
+	} {
+		for _, method := range entry.methods {
+			expected[method+" /apis/ebs/v1"+entry.path] = true
+		}
+	}
 	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos"} {
-		prefix := "/apis/ebs/v1/projects/:project/" + resource
-		seen := map[string]bool{}
-		for _, route := range routes {
-			if route.Path != prefix && route.Path != prefix+"/:name" && route.Path != prefix+"/:name/status" {
-				continue
-			}
-			if route.Method != http.MethodGet {
-				t.Errorf("%s %s is registered, want GET only", route.Method, route.Path)
-			}
-			seen[route.Path] = true
+		for _, suffix := range []string{"", "/:name", "/:name/status"} {
+			expected[http.MethodGet+" /apis/ebs/v1/projects/:project/"+resource+suffix] = true
 		}
-		for _, path := range []string{prefix, prefix + "/:name", prefix + "/:name/status"} {
-			if !seen[path] {
-				t.Errorf("GET %s is not registered", path)
-			}
+	}
+	for _, resource := range []string{"users", "machineaccounts"} {
+		path := "/apis/iam.ebs/v1/" + resource
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			expected[method+" "+path] = true
 		}
+		for _, method := range object {
+			expected[method+" "+path+"/:name"] = true
+		}
+	}
+	for _, route := range api.Router().Routes() {
+		if !strings.HasPrefix(route.Path, "/apis/") {
+			continue
+		}
+		key := route.Method + " " + route.Path
+		if !expected[key] {
+			t.Errorf("unexpected route: %s", key)
+		}
+		delete(expected, key)
+	}
+	for key := range expected {
+		t.Errorf("missing route: %s", key)
 	}
 }
 
@@ -1537,30 +1646,5 @@ func TestAdminOwnerProjectPurposePatch(t *testing.T) {
 				t.Fatalf("status=%d writes=%d body=%s", response.Code, writes, response.Body.String())
 			}
 		})
-	}
-}
-
-func TestProjectDeleteRouteRemoved(t *testing.T) {
-	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		t.Fatalf("removed route reached upstream: %s %s", request.Method, request.URL.Path)
-		return nil, nil
-	}))
-	routes := api.Router().Routes()
-	for _, path := range []string{"/apis/ebs/v1/projects", "/apis/ebs/v1/projects/:project", "/apis/ebs/v1/projects/:project/status"} {
-		seenGet := false
-		for _, route := range routes {
-			if route.Path != path {
-				continue
-			}
-			if route.Method == http.MethodDelete {
-				t.Fatalf("DELETE %s is still registered", path)
-			}
-			if route.Method == http.MethodGet {
-				seenGet = true
-			}
-		}
-		if !seenGet {
-			t.Fatalf("GET %s missing", path)
-		}
 	}
 }

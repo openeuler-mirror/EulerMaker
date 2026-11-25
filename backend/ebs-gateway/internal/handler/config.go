@@ -10,7 +10,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ebs-gateway/internal/middleware"
+	"ebs-gateway/internal/policy"
 )
+
+func isNamedConfigRead(route policy.Route) bool {
+	return route.Resource == "configs" && route.Name != "" && (route.Method == http.MethodGet || route.Method == http.MethodHead)
+}
 
 // serveConfig examines visibility and serves the same upstream response. For
 // HEAD it obtains a GET internally so that visibility can still be checked.

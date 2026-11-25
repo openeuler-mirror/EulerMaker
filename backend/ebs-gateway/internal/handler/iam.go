@@ -14,56 +14,59 @@ import (
 	"ebs-gateway/internal/policy"
 )
 
-func (a *Handler) IAM(resource string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		method := c.Request.Method
-		name := c.Param("name")
-		if policy.HasWatch(c.Request.URL.Query()) {
-			c.Status(http.StatusForbidden)
-			return
-		}
-		if method == http.MethodPost {
-			c.Header("Allow", "GET, HEAD, PUT, PATCH, DELETE")
-			c.Status(http.StatusMethodNotAllowed)
-			return
-		}
-		if name == "" && method != http.MethodGet && method != http.MethodHead {
-			c.Status(http.StatusMethodNotAllowed)
-			return
-		}
-		if method != http.MethodGet && method != http.MethodHead && method != http.MethodPut && method != http.MethodPatch && method != http.MethodDelete {
-			c.Status(http.StatusMethodNotAllowed)
-			return
-		}
-		route := policy.Route{
-			Resource: resource,
-			Name:     name,
-			Method:   method,
-		}
-		if err := a.policy.Authorize(c.Request.Context(), middleware.Principal(c), route); err != nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
-			return
-		}
-		if resource == "users" && name == "" {
-			a.listOrdinaryUsers(c)
-			return
-		}
-		if resource == "users" && (method == http.MethodGet || method == http.MethodHead) {
-			a.getOrdinaryUser(c)
-			return
-		}
-		if resource == "users" && method == http.MethodDelete {
-			if !a.ordinaryUserObject(c) {
-				return
-			}
-		}
-		if method == http.MethodPut || method == http.MethodPatch {
-			if !a.prepareUpdate(c, middleware.Principal(c), route) {
-				return
-			}
-		}
-		a.upstream.Forward(c, false)
+func (a *Handler) Users(c *gin.Context) {
+	route, ok := a.authorizeIAM(c, "users")
+	if !ok {
+		return
 	}
+	switch route.Method {
+	case http.MethodGet, http.MethodHead:
+		if route.Name == "" {
+			a.listOrdinaryUsers(c)
+		} else {
+			a.getOrdinaryUser(c)
+		}
+		return
+	case http.MethodDelete:
+		if !a.ordinaryUserObject(c) {
+			return
+		}
+	}
+	a.forwardIAM(c, route)
+}
+
+func (a *Handler) MachineAccounts(c *gin.Context) {
+	route, ok := a.authorizeIAM(c, "machineaccounts")
+	if !ok {
+		return
+	}
+	a.forwardIAM(c, route)
+}
+
+func (a *Handler) authorizeIAM(c *gin.Context, resource string) (policy.Route, bool) {
+	route := policy.Route{
+		Resource: resource,
+		Name:     c.Param("name"),
+		Method:   c.Request.Method,
+	}
+	if policy.HasWatch(c.Request.URL.Query()) {
+		c.Status(http.StatusForbidden)
+		return route, false
+	}
+	if err := a.policy.Authorize(c.Request.Context(), middleware.Principal(c), route); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return route, false
+	}
+	return route, true
+}
+
+func (a *Handler) forwardIAM(c *gin.Context, route policy.Route) {
+	if route.Method == http.MethodPut || route.Method == http.MethodPatch {
+		if !a.prepareUpdate(c, middleware.Principal(c), route) {
+			return
+		}
+	}
+	a.upstream.Forward(c, false)
 }
 
 func (a *Handler) getOrdinaryUser(c *gin.Context) {
