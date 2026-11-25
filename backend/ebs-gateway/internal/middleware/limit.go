@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,7 +24,12 @@ func AllowAuthenticated(c *gin.Context, limits *limit.Buckets) bool {
 	if limits.Allow(Principal(c).Subject + "/" + c.ClientIP()) {
 		return true
 	}
-	c.Header("Retry-After", "1")
-	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+	AbortRateLimited(c, 1, "too many requests")
 	return false
+}
+
+// AbortRateLimited ends the request with a 429 and the caller's retry delay.
+func AbortRateLimited(c *gin.Context, retryAfterSeconds int, message string) {
+	c.Header("Retry-After", strconv.Itoa(retryAfterSeconds))
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": message})
 }

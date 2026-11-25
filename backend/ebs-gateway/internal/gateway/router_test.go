@@ -1,4 +1,4 @@
-package route
+package gateway
 
 import (
 	"bytes"
@@ -19,14 +19,12 @@ import (
 	"k8s.io/klog/v2"
 
 	ebsv1 "ebs-api/ebs/v1"
-	"ebs-gateway/internal/handler"
+	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/oauth"
 	"ebs-gateway/internal/upstream"
 )
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func TestLoginIPLimitAcrossUsernames(t *testing.T) {
 	calls := 0
@@ -57,35 +55,26 @@ func TestLoginIPLimitAcrossUsernames(t *testing.T) {
 	}
 }
 
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
 type testAPI struct {
-	*handler.Handler
-	tokens *identity.Tokens
-	now    func() time.Time
+	*Handler
+	oauthHandler *oauth.Handler
+	tokens       *identity.Tokens
+	now          func() time.Time
 }
 
 func TestAuthenticationMode(t *testing.T) {
-	up, _ := upstream.New("https://api.example", roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("disabled authentication called IAM")
 		return nil, nil
-	}))
-	tokens, _ := identity.NewTokens(base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	api, err := handler.New(handler.Dependencies{Upstream: up, Tokens: tokens, Limits: limit.New(100, 100, time.Now), BodyLimit: 1 << 20})
-	if err != nil {
-		t.Fatal(err)
-	}
-	router := New(api)
+	})
+	router := newTestAPI(t, transport).Router()
 	for _, tc := range []struct {
 		method, path string
 		status       int
 	}{
-		{"GET", "/auth/providers", 200},
 		{"GET", "/auth/oauth/community/login", 404},
 		{"POST", "/auth/oauth/community/callback", 404},
 		{"POST", "/auth/oauth/register", 404},
-		{"POST", "/auth/login", 400},
-		{"POST", "/auth/register", 400},
 	} {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(tc.method, tc.path, nil))
@@ -97,20 +86,26 @@ func TestAuthenticationMode(t *testing.T) {
 		var cfg oauth.Config
 		if enabled {
 			cfg.PublicBaseURL = "https://ebs.example.com"
+			cfg.Provider.ID = "community"
 		}
-		api.OAuth = oauth.New(cfg, nil, tokens, time.Now)
-		router = New(api)
+		router := newTestAPIWithConfig(t, transport, 200, cfg).Router()
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/auth/providers", nil))
 		var providers struct {
 			PasswordLoginEnabled bool `json:"passwordLoginEnabled"`
 			RegistrationEnabled  bool `json:"registrationEnabled"`
+			Providers            []struct {
+				ID string `json:"id"`
+			} `json:"providers"`
 		}
 		if err := json.Unmarshal(response.Body.Bytes(), &providers); err != nil {
 			t.Fatal(err)
 		}
 		if response.Code != 200 || providers.PasswordLoginEnabled != !enabled || providers.RegistrationEnabled != !enabled {
 			t.Fatalf("OAuth enabled=%v: %s", enabled, response.Body.String())
+		}
+		if enabled && (len(providers.Providers) != 1 || providers.Providers[0].ID != "community") || !enabled && len(providers.Providers) != 0 {
+			t.Fatalf("OAuth enabled=%v: unexpected providers %v", enabled, providers.Providers)
 		}
 		for _, path := range []string{"/auth/login", "/auth/register"} {
 			response = httptest.NewRecorder()
@@ -126,7 +121,7 @@ func TestAuthenticationMode(t *testing.T) {
 	}
 }
 
-func (a *testAPI) Router() *gin.Engine { return New(a.Handler) }
+func (a *testAPI) Router() *gin.Engine { return NewRouter(a.Handler, a.oauthHandler) }
 
 func TestPublicOpenAPIRoutes(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -226,10 +221,10 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 
 func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 	t.Helper()
-	return newTestAPIWithBurst(t, transport, 200)
+	return newTestAPIWithConfig(t, transport, 200, oauth.Config{})
 }
 
-func newTestAPIWithBurst(t *testing.T, transport http.RoundTripper, burst int) *testAPI {
+func newTestAPIWithConfig(t *testing.T, transport http.RoundTripper, burst int, cfg oauth.Config) *testAPI {
 	t.Helper()
 	client, err := upstream.New("https://api.example", transport)
 	if err != nil {
@@ -240,11 +235,15 @@ func newTestAPIWithBurst(t *testing.T, transport http.RoundTripper, burst int) *
 		t.Fatal(err)
 	}
 	now := func() time.Time { return time.Unix(1790000000, 0) }
-	api, err := handler.New(handler.Dependencies{Upstream: client, Tokens: tokens, Now: now, Limits: limit.New(100, burst, now), BodyLimit: 1 << 20})
+	accounts := iam.New(client)
+	api, err := NewHandler(Dependencies{
+		Upstream: client, IAM: accounts, Tokens: tokens, Now: now,
+		Limits: limit.New(100, burst, now), BodyLimit: 1 << 20, LocalAuthEnabled: cfg.LocalAuthenticationEnabled(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &testAPI{Handler: api, tokens: tokens, now: now}
+	return &testAPI{Handler: api, oauthHandler: oauth.New(cfg, accounts, tokens, now), tokens: tokens, now: now}
 }
 
 func TestMachineTokenAccountType(t *testing.T) {
@@ -781,12 +780,12 @@ func TestOldJobsReadRoutes(t *testing.T) {
 }
 
 func TestAuthenticatedRoutesShareLimit(t *testing.T) {
-	api := newTestAPIWithBurst(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	api := newTestAPIWithConfig(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/apis/ebs/v1/runners/runner-1/jobs" {
 			t.Fatalf("unexpected upstream request: %s", r.URL)
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
-	}), 1)
+	}), 1, oauth.Config{})
 	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
@@ -1585,21 +1584,7 @@ func TestRunnerJobsIdentityIsCheckedBeforeProxy(t *testing.T) {
 	}
 }
 
-func TestForwardResourceWithoutGuard(t *testing.T) {
-	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
-		t.Fatal("unguarded request reached upstream")
-		return nil, nil
-	}))
-	router := gin.New()
-	router.GET("/projects", api.ForwardResource)
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/projects", nil))
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d, want 500", response.Code)
-	}
-}
-
-func TestRunnerRoutesRequireMatchingGuard(t *testing.T) {
+func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("incomplete guard chain reached upstream")
 		return nil, nil
@@ -1608,22 +1593,23 @@ func TestRunnerRoutesRequireMatchingGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs := api.ResourceGuard("jobs", "project", "name", "")
-	runners := api.ResourceGuard("runners", "", "runner", "jobs")
+	jobs := api.resourceGuard("jobs", "project", "name", "")
+	runners := api.resourceGuard("runners", "", "runner", "jobs")
 	for _, tc := range []struct {
 		name, method, pattern, path string
 		guards                      []gin.HandlerFunc
 	}{
+		{"no guards", "GET", "/projects", "/projects", nil},
 		{"missing job read", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs}},
 		{"missing job HEAD", "HEAD", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs}},
 		{"missing runner list", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners}},
-		{"wrong job guard", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs, api.RunnerJobsListGuard}},
-		{"wrong list guard", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners, api.RunnerJobReadGuard}},
-		{"read guard before authorization", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{api.RunnerJobReadGuard, jobs}},
+		{"wrong job guard", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs, api.runnerJobsListGuard}},
+		{"wrong list guard", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners, api.runnerJobReadGuard}},
+		{"read guard before authorization", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{api.runnerJobReadGuard, jobs}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
-			router.Handle(tc.method, tc.pattern, append(tc.guards, api.ForwardResource)...)
+			router.Handle(tc.method, tc.pattern, append(tc.guards, api.forwardResource)...)
 			request := httptest.NewRequest(tc.method, tc.path, nil)
 			request.Header.Set("Authorization", "Bearer "+token)
 			response := httptest.NewRecorder()
@@ -1632,75 +1618,6 @@ func TestRunnerRoutesRequireMatchingGuard(t *testing.T) {
 				t.Fatalf("status=%d, want 500", response.Code)
 			}
 		})
-	}
-}
-
-func TestResourceRouteRegistration(t *testing.T) {
-	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
-		t.Fatal("route registration must not call upstream")
-		return nil, nil
-	}))
-	collection := []string{http.MethodGet, http.MethodHead, http.MethodPost}
-	object := []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete}
-	status := []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}
-	expected := map[string]bool{}
-	for _, entry := range []struct {
-		path    string
-		methods []string
-	}{
-		{"/service-endpoints", []string{http.MethodGet}},
-		{"/projects", []string{http.MethodGet, http.MethodHead, http.MethodPost}},
-		{"/projects/:project", []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}},
-		{"/projects/:project/status", []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}},
-		{"/runners", collection},
-		{"/runners/:runner", object},
-		{"/runners/:runner/status", status},
-		{"/runners/:runner/jobs", []string{http.MethodGet}},
-		{"/configs", collection},
-		{"/configs/:name", object},
-		{"/scripts", []string{http.MethodGet, http.MethodPost}},
-		{"/scripts/:name", []string{http.MethodGet, http.MethodPut, http.MethodPatch, http.MethodDelete}},
-		{"/projects/:project/builds", collection},
-		{"/projects/:project/builds/:name", []string{http.MethodGet, http.MethodHead, http.MethodDelete}},
-		{"/projects/:project/builds/:name/status", []string{http.MethodGet, http.MethodHead}},
-		{"/projects/:project/builds/:name/abort", []string{http.MethodPost}},
-		{"/projects/:project/jobs", collection},
-		{"/projects/:project/jobs/:name", object},
-		{"/projects/:project/jobs/:name/status", status},
-		{"/projects/:project/jobs/:name/abort", []string{http.MethodPost}},
-		{"/projects/:project/oldjobs", []string{http.MethodGet}},
-		{"/projects/:project/oldjobs/:name", []string{http.MethodGet}},
-	} {
-		for _, method := range entry.methods {
-			expected[method+" /apis/ebs/v1"+entry.path] = true
-		}
-	}
-	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos"} {
-		for _, suffix := range []string{"", "/:name", "/:name/status"} {
-			expected[http.MethodGet+" /apis/ebs/v1/projects/:project/"+resource+suffix] = true
-		}
-	}
-	for _, resource := range []string{"users", "machineaccounts"} {
-		path := "/apis/iam.ebs/v1/" + resource
-		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			expected[method+" "+path] = true
-		}
-		for _, method := range object {
-			expected[method+" "+path+"/:name"] = true
-		}
-	}
-	for _, route := range api.Router().Routes() {
-		if !strings.HasPrefix(route.Path, "/apis/") {
-			continue
-		}
-		key := route.Method + " " + route.Path
-		if !expected[key] {
-			t.Errorf("unexpected route: %s", key)
-		}
-		delete(expected, key)
-	}
-	for key := range expected {
-		t.Errorf("missing route: %s", key)
 	}
 }
 

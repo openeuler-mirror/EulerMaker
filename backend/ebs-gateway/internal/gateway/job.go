@@ -1,4 +1,4 @@
-package handler
+package gateway
 
 import (
 	"encoding/json"
@@ -11,8 +11,8 @@ import (
 	"ebs-gateway/internal/middleware"
 )
 
-// RunnerJobReadGuard verifies assignment before a Runner reads a named Job.
-func (a *Handler) RunnerJobReadGuard(c *gin.Context) {
+// runnerJobReadGuard verifies assignment before a Runner reads a named Job.
+func (a *Handler) runnerJobReadGuard(c *gin.Context) {
 	access := requireResourceCheck(c, runnerJobReadCheck)
 	if access == nil {
 		return

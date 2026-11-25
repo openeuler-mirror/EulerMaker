@@ -1,4 +1,4 @@
-package handler
+package gateway
 
 import (
 	"encoding/json"
@@ -21,8 +21,8 @@ type runnerServiceEndpoint struct {
 	RunnerExternalURL string `json:"runnerExternalURL" yaml:"runnerExternalURL"`
 }
 
-// ServiceEndpoints returns Runner-facing addresses without exposing management URLs or the OpsOnly Config.
-func (a *Handler) ServiceEndpoints(c *gin.Context) {
+// serviceEndpoints returns Runner-facing addresses without exposing management URLs or the OpsOnly Config.
+func (a *Handler) serviceEndpoints(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	if middleware.Principal(c).Type != identity.RunnerType {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Runner identity required"})

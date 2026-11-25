@@ -1,4 +1,4 @@
-package handler
+package gateway
 
 import (
 	"bytes"
@@ -67,11 +67,7 @@ func (a *Handler) prepareCreate(c *gin.Context, who identity.Principal, route po
 	}
 	encoded, err := a.policy.PrepareCreate(c.Request.Context(), who, route, raw)
 	if err != nil {
-		status := http.StatusForbidden
-		if classified, ok := err.(*policy.Error); ok {
-			status = classified.Status
-		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		c.JSON(policyErrorStatus(err), gin.H{"error": err.Error()})
 		return false
 	}
 	setJSONBody(c.Request, encoded)
@@ -112,11 +108,7 @@ func (a *Handler) prepareUpdate(c *gin.Context, who identity.Principal, route po
 		return false
 	}
 	if err := a.policy.ValidateUpdate(c.Request.Context(), who, route, previous, candidate); err != nil {
-		status := http.StatusForbidden
-		if classified, ok := err.(*policy.Error); ok {
-			status = classified.Status
-		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		c.JSON(policyErrorStatus(err), gin.H{"error": err.Error()})
 		return false
 	}
 	c.Request.Method = http.MethodPut

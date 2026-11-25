@@ -1,4 +1,4 @@
-package handler
+package gateway
 
 import (
 	"encoding/base64"
@@ -51,9 +51,9 @@ func (a *Handler) readJSON(c *gin.Context, result any) error {
 func validUsername(name string) bool     { return len(name) <= 63 && dnsLabel.MatchString(name) }
 func validPassword(password string) bool { return len(password) >= 12 && len(password) <= 128 }
 
-// RegisterUser creates a local password account when local registration is enabled.
-func (a *Handler) RegisterUser(c *gin.Context) {
-	if !a.OAuth.LocalAuthenticationEnabled() {
+// registerUser creates a local password account when local registration is enabled.
+func (a *Handler) registerUser(c *gin.Context) {
+	if !a.localAuthEnabled {
 		c.JSON(http.StatusForbidden, gin.H{"error": "password registration disabled"})
 		return
 	}
@@ -76,8 +76,7 @@ func (a *Handler) RegisterUser(c *gin.Context) {
 	}
 	ip := c.ClientIP()
 	if !a.registerIP.Allow(ip) || !a.registrationUserLimit.Allow(input.Username+"/"+ip) {
-		c.Header("Retry-After", "60")
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+		middleware.AbortRateLimited(c, 60, "too many requests")
 		return
 	}
 	status, err := a.iam.RegisterUser(c.Request.Context(), input)
@@ -92,15 +91,14 @@ func (a *Handler) RegisterUser(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"username": input.Username})
 }
 
-// Login exchanges local user credentials for an access token.
-func (a *Handler) Login(c *gin.Context) {
-	if !a.OAuth.LocalAuthenticationEnabled() {
+// login exchanges local user credentials for an access token.
+func (a *Handler) login(c *gin.Context) {
+	if !a.localAuthEnabled {
 		c.JSON(http.StatusForbidden, gin.H{"error": "password login disabled"})
 		return
 	}
 	if !a.loginIP.Allow(c.ClientIP()) {
-		c.Header("Retry-After", "60")
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+		middleware.AbortRateLimited(c, 60, "too many requests")
 		return
 	}
 	var input struct {
@@ -112,8 +110,7 @@ func (a *Handler) Login(c *gin.Context) {
 		return
 	}
 	if !a.loginLimit.Allow(input.Username + "/" + c.ClientIP()) {
-		c.Header("Retry-After", "60")
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+		middleware.AbortRateLimited(c, 60, "too many requests")
 		return
 	}
 	authenticated, status, err := a.iam.AuthenticateUser(c.Request.Context(), input.Username, input.Password)
@@ -148,8 +145,8 @@ func (a *Handler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"token": token, "tokenType": "Bearer", "expiresIn": 86400})
 }
 
-// MachineToken exchanges machine credentials for a Runner or Service token.
-func (a *Handler) MachineToken(c *gin.Context) {
+// machineToken exchanges machine credentials for a Runner or Service token.
+func (a *Handler) machineToken(c *gin.Context) {
 	clientID, secret, ok := c.Request.BasicAuth()
 	if !ok || !validUsername(clientID) || secret == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -163,8 +160,7 @@ func (a *Handler) MachineToken(c *gin.Context) {
 		return
 	}
 	if !a.machineLimit.Allow(clientID + "/" + c.ClientIP()) {
-		c.Header("Retry-After", "60")
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
+		middleware.AbortRateLimited(c, 60, "too many requests")
 		return
 	}
 	spec, authenticated, status, err := a.iam.AuthenticateMachine(c.Request.Context(), clientID, secret)
@@ -204,8 +200,8 @@ func (a *Handler) MachineToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"accessToken": token, "tokenType": "Bearer", "expiresIn": ttl})
 }
 
-// CheckToken returns the identity verified by the authentication middleware.
-func (a *Handler) CheckToken(c *gin.Context) {
+// checkToken returns the identity verified by the authentication middleware.
+func (a *Handler) checkToken(c *gin.Context) {
 	defer c.Request.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(c.Request.Body, 1))
 	if err != nil || len(data) != 0 {
@@ -233,8 +229,8 @@ func (a *Handler) CheckToken(c *gin.Context) {
 	})
 }
 
-// ChangePassword updates the authenticated user's password after verifying the current password.
-func (a *Handler) ChangePassword(c *gin.Context) {
+// changePassword updates the authenticated user's password after verifying the current password.
+func (a *Handler) changePassword(c *gin.Context) {
 	user := middleware.Principal(c)
 	if c.Param("name") != user.Subject || !user.IsUser() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
@@ -269,8 +265,8 @@ func (a *Handler) ChangePassword(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// RegisterMachine registers a machine account behind the Admin middleware guard.
-func (a *Handler) RegisterMachine(c *gin.Context) {
+// registerMachine registers a machine account behind the Admin middleware guard.
+func (a *Handler) registerMachine(c *gin.Context) {
 	var input struct {
 		Name            string                           `json:"name"`
 		ClientSecret    string                           `json:"clientSecret"`

@@ -1,33 +1,33 @@
-package handler
+package gateway
 
 import (
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/middleware"
-	"ebs-gateway/internal/oauth"
 	"ebs-gateway/internal/policy"
 	"ebs-gateway/internal/upstream"
 )
 
 type Dependencies struct {
-	Upstream        *upstream.Client
-	Tokens          *identity.Tokens
-	Now             func() time.Time
-	Limits          *limit.Buckets
-	BodyLimit       int64
-	OAuthConfigFile string
+	Upstream         *upstream.Client
+	Tokens           *identity.Tokens
+	Now              func() time.Time
+	Limits           *limit.Buckets
+	BodyLimit        int64
+	IAM              *iam.Client
+	LocalAuthEnabled bool
 }
 
 // Handler holds the shared dependencies for Gateway request handlers.
 type Handler struct {
-	OAuth                 *oauth.Handler
+	localAuthEnabled      bool
 	upstream              *upstream.Client
 	tokens                *identity.Tokens
 	now                   func() time.Time
@@ -43,11 +43,11 @@ type Handler struct {
 	publicLimit           *limit.Buckets
 	policy                *policy.Authorizer
 	runnerWatchMu         sync.Mutex
-	runnerWatches         map[string]int
+	runnerWatches         sets.Set[string]
 }
 
-func New(deps Dependencies) (*Handler, error) {
-	if deps.Upstream == nil || deps.Tokens == nil || deps.Limits == nil {
+func NewHandler(deps Dependencies) (*Handler, error) {
+	if deps.Upstream == nil || deps.IAM == nil || deps.Tokens == nil || deps.Limits == nil {
 		return nil, fmt.Errorf("gateway dependencies are required")
 	}
 	if deps.Now == nil {
@@ -56,20 +56,15 @@ func New(deps Dependencies) (*Handler, error) {
 	if deps.BodyLimit <= 0 {
 		return nil, fmt.Errorf("request body limit must be positive")
 	}
-	config, err := oauth.Load(deps.OAuthConfigFile)
-	if err != nil {
-		return nil, err
-	}
-	iamClient := iam.New(deps.Upstream)
 	return &Handler{
-		OAuth:                 oauth.New(config, iamClient, deps.Tokens, deps.Now),
+		localAuthEnabled:      deps.LocalAuthEnabled,
 		upstream:              deps.Upstream,
 		tokens:                deps.Tokens,
 		limits:                deps.Limits,
 		now:                   deps.Now,
-		iam:                   iamClient,
+		iam:                   deps.IAM,
 		bodyLimit:             deps.BodyLimit,
-		auth:                  middleware.NewAuth(deps.Tokens, iamClient, deps.Now),
+		auth:                  middleware.NewAuth(deps.Tokens, deps.IAM, deps.Now),
 		registerIP:            limit.New(5.0/60.0, 5, deps.Now),
 		registrationUserLimit: limit.New(3.0/60.0, 3, deps.Now),
 		loginLimit:            limit.New(5.0/60.0, 5, deps.Now),
@@ -77,23 +72,6 @@ func New(deps Dependencies) (*Handler, error) {
 		machineLimit:          limit.New(5.0/60.0, 5, deps.Now),
 		publicLimit:           limit.New(20, 40, deps.Now),
 		policy:                policy.New(deps.Upstream),
-		runnerWatches:         make(map[string]int),
+		runnerWatches:         sets.New[string](),
 	}, nil
-}
-
-// Middleware exposes the shared middleware chain for route registration.
-type Middleware struct {
-	Authenticate       gin.HandlerFunc
-	LimitAuthenticated gin.HandlerFunc
-	Audit              gin.HandlerFunc
-	RequireAdmin       gin.HandlerFunc
-}
-
-func (a *Handler) Middleware() Middleware {
-	return Middleware{
-		Authenticate:       a.auth.Authenticate,
-		LimitAuthenticated: middleware.LimitAuthenticated(a.limits),
-		Audit:              middleware.Audit(a.now),
-		RequireAdmin:       middleware.RequireAdmin,
-	}
 }

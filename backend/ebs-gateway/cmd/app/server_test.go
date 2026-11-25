@@ -153,7 +153,7 @@ func TestRunStartupErrors(t *testing.T) {
 			o.clientCertFile, o.clientKeyFile = "missing-cert", "missing-key"
 		}, "load --apiserver-client-cert and --apiserver-client-key:"},
 		{"upstream URL", func(o *options) { o.apiServer = "invalid" }, "initialize --apiserver-addr client:"},
-		{"OAuth config", func(o *options) { o.oauthConfigFile = "missing-oauth" }, "initialize Gateway handlers:"},
+		{"OAuth config", func(o *options) { o.oauthConfigFile = "missing-oauth" }, "load --oauth-config-file:"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			opts := options{port: port, secretFile: secretFile, apiServer: "https://example.invalid", maxBody: 1, rate: 1, burst: 1}

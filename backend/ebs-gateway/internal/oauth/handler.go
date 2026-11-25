@@ -50,7 +50,7 @@ func New(config Config, accounts accountClient, tokens *identity.Tokens, now fun
 
 // Run warms discovery and retries temporary provider failures without blocking other routes.
 func (h *Handler) Run(ctx context.Context) {
-	if h.LocalAuthenticationEnabled() {
+	if h.config.LocalAuthenticationEnabled() {
 		return
 	}
 	ticker := time.NewTicker(30 * time.Second)
@@ -66,8 +66,6 @@ func (h *Handler) Run(ctx context.Context) {
 		}
 	}
 }
-
-func (h *Handler) LocalAuthenticationEnabled() bool { return h.config.PublicBaseURL == "" }
 
 type apiError struct {
 	status int
@@ -94,16 +92,17 @@ func respondError(c *gin.Context, err error) {
 func (h *Handler) Providers(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	providers := []gin.H{}
-	if !h.LocalAuthenticationEnabled() {
+	localAuth := h.config.LocalAuthenticationEnabled()
+	if !localAuth {
 		providers = append(providers, gin.H{"id": h.config.Provider.ID, "loginURL": "/auth/oauth/" + h.config.Provider.ID + "/login"})
 	}
-	c.JSON(200, gin.H{"passwordLoginEnabled": h.LocalAuthenticationEnabled(), "registrationEnabled": h.LocalAuthenticationEnabled(), "providers": providers})
+	c.JSON(200, gin.H{"passwordLoginEnabled": localAuth, "registrationEnabled": localAuth, "providers": providers})
 }
 
 func (h *Handler) begin(c *gin.Context, login bool) bool {
 	c.Header("Cache-Control", "no-store")
 	c.Header("Referrer-Policy", "no-referrer")
-	if h.LocalAuthenticationEnabled() || (c.Param("provider") != "" && c.Param("provider") != h.config.Provider.ID) {
+	if h.config.LocalAuthenticationEnabled() || (c.Param("provider") != "" && c.Param("provider") != h.config.Provider.ID) {
 		respondError(c, failure(404, "ProviderUnavailable"))
 		return false
 	}

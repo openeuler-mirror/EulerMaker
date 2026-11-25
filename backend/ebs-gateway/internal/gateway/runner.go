@@ -1,4 +1,4 @@
-package handler
+package gateway
 
 import (
 	"net/http"
@@ -11,8 +11,8 @@ import (
 	"ebs-gateway/internal/middleware"
 )
 
-// RunnerJobsListGuard checks Runner list queries and holds the watch slot until forwarding ends.
-func (a *Handler) RunnerJobsListGuard(c *gin.Context) {
+// runnerJobsListGuard checks Runner list queries and holds the watch slot until forwarding ends.
+func (a *Handler) runnerJobsListGuard(c *gin.Context) {
 	access := requireResourceCheck(c, runnerJobsListCheck)
 	if access == nil {
 		return
@@ -25,8 +25,7 @@ func (a *Handler) RunnerJobsListGuard(c *gin.Context) {
 		}
 		if c.Query("watch") == "true" {
 			if !a.acquireRunnerWatch(who.Runner) {
-				c.Header("Retry-After", "5")
-				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many Runner watches"})
+				middleware.AbortRateLimited(c, 5, "too many Runner watches")
 				return
 			}
 			defer a.releaseRunnerWatch(who.Runner)
@@ -38,39 +37,31 @@ func (a *Handler) RunnerJobsListGuard(c *gin.Context) {
 
 func validRunnerJobsQuery(query url.Values) bool {
 	for name, values := range query {
+		if len(values) != 1 {
+			return false
+		}
+		value := values[0]
 		switch name {
 		case "watch", "allowWatchBookmarks":
-			if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+			if value != "true" && value != "false" {
 				return false
 			}
 		case "timeoutSeconds":
-			if len(values) != 1 {
-				return false
-			}
-			seconds, err := strconv.Atoi(values[0])
+			seconds, err := strconv.Atoi(value)
 			if err != nil || seconds < 1 || seconds > 300 {
 				return false
 			}
-		case "resourceVersion":
-			if len(values) != 1 {
-				return false
-			}
 		case "resourceVersionMatch":
-			if len(values) != 1 || (values[0] != "Exact" && values[0] != "NotOlderThan") {
+			if value != "Exact" && value != "NotOlderThan" {
 				return false
 			}
 		case "limit":
-			if len(values) != 1 {
-				return false
-			}
-			limit, err := strconv.Atoi(values[0])
+			limit, err := strconv.Atoi(value)
 			if err != nil || limit < 1 || limit > 500 {
 				return false
 			}
-		case "continue", "labelSelector", "includeFields", "excludeFields":
-			if len(values) != 1 {
-				return false
-			}
+		case "resourceVersion", "continue", "labelSelector", "includeFields", "excludeFields":
+			continue
 		default:
 			return false
 		}
@@ -81,15 +72,15 @@ func validRunnerJobsQuery(query url.Values) bool {
 func (a *Handler) acquireRunnerWatch(name string) bool {
 	a.runnerWatchMu.Lock()
 	defer a.runnerWatchMu.Unlock()
-	if a.runnerWatches[name] >= 1 {
+	if a.runnerWatches.Has(name) {
 		return false
 	}
-	a.runnerWatches[name]++
+	a.runnerWatches.Insert(name)
 	return true
 }
 
 func (a *Handler) releaseRunnerWatch(name string) {
 	a.runnerWatchMu.Lock()
 	defer a.runnerWatchMu.Unlock()
-	delete(a.runnerWatches, name)
+	a.runnerWatches.Delete(name)
 }
