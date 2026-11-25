@@ -104,7 +104,7 @@ func operations() object {
 			}
 			methods := []string{"get"}
 			if !r.readOnly {
-				if r.name != "scripts" && r.name != "runners" {
+				if r.name == "configs" || r.name == "jobs" {
 					methods = append(methods, "head")
 				}
 				switch part {

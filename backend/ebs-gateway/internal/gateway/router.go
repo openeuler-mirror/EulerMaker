@@ -92,11 +92,17 @@ func registerScripts(router *gin.Engine, api *Handler) {
 
 func registerProjects(router *gin.Engine, api *Handler) {
 	guard := api.resourceGuard("projects", "", "project", "")
-	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/apis/ebs/v1/projects", guard, api.forwardResource)
-	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/apis/ebs/v1/projects/:project", guard, api.forwardResource)
+	router.GET("/apis/ebs/v1/projects", guard, api.forwardResource)
+	router.POST("/apis/ebs/v1/projects", guard, api.forwardResource)
+
+	router.GET("/apis/ebs/v1/projects/:project", guard, api.forwardResource)
+	router.PUT("/apis/ebs/v1/projects/:project", guard, api.forwardResource)
+	router.PATCH("/apis/ebs/v1/projects/:project", guard, api.forwardResource)
 
 	guard = api.resourceGuard("projects", "", "project", "status")
-	router.Match([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch}, "/apis/ebs/v1/projects/:project/status", guard, api.forwardResource)
+	router.GET("/apis/ebs/v1/projects/:project/status", guard, api.forwardResource)
+	router.PUT("/apis/ebs/v1/projects/:project/status", guard, api.forwardResource)
+	router.PATCH("/apis/ebs/v1/projects/:project/status", guard, api.forwardResource)
 }
 
 func registerRunners(router *gin.Engine, api *Handler) {
@@ -121,11 +127,14 @@ func registerRunners(router *gin.Engine, api *Handler) {
 func registerProjectScopedResources(router *gin.Engine, api *Handler) {
 	project := router.Group("/apis/ebs/v1/projects/:project")
 	guard := api.resourceGuard("builds", "project", "name", "")
-	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodPost}, "/builds", guard, api.forwardResource)
-	project.Match([]string{http.MethodGet, http.MethodHead, http.MethodDelete}, "/builds/:name", guard, api.forwardResource)
+	project.GET("/builds", guard, api.forwardResource)
+	project.POST("/builds", guard, api.forwardResource)
+
+	project.GET("/builds/:name", guard, api.forwardResource)
+	project.DELETE("/builds/:name", guard, api.forwardResource)
 
 	guard = api.resourceGuard("builds", "project", "name", "status")
-	project.Match([]string{http.MethodGet, http.MethodHead}, "/builds/:name/status", guard, api.forwardResource)
+	project.GET("/builds/:name/status", guard, api.forwardResource)
 
 	guard = api.resourceGuard("builds", "project", "name", "abort")
 	project.POST("/builds/:name/abort", guard, api.forwardResource)
