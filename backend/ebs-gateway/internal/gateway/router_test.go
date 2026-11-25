@@ -193,9 +193,9 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 		"/apis/ebs/v1/scripts/{name}":                          "get put patch delete",
 		"/apis/ebs/v1/runners/{runner}/jobs":                   "get",
 		"/apis/ebs/v1/service-endpoints":                       "get",
-		"/apis/iam.ebs/v1/users":                               "get head",
-		"/apis/iam.ebs/v1/machineaccounts":                     "get head",
-		"/apis/iam.ebs/v1/machineaccounts/{name}":              "get head delete put patch",
+		"/apis/iam.ebs/v1/users":                               "get",
+		"/apis/iam.ebs/v1/machineaccounts":                     "get",
+		"/apis/iam.ebs/v1/machineaccounts/{name}":              "get delete put patch",
 	} {
 		if len(document.Paths[path]) != len(strings.Fields(methods)) {
 			t.Fatalf("methods for %s: %v", path, document.Paths[path])

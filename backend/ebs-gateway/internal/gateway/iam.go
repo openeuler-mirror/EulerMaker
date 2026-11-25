@@ -25,17 +25,13 @@ func rejectIAMWatch(c *gin.Context) {
 
 func (a *Handler) users(c *gin.Context) {
 	switch c.Request.Method {
-	case http.MethodGet, http.MethodHead:
+	case http.MethodGet:
 		if c.Param("name") == "" {
 			a.listOrdinaryUsers(c)
 			return
 		}
 		data, ok := a.readOrdinaryUser(c)
 		if !ok {
-			return
-		}
-		if c.Request.Method == http.MethodHead {
-			c.Status(http.StatusOK)
 			return
 		}
 		c.Data(http.StatusOK, "application/json", data)
@@ -126,10 +122,6 @@ func (a *Handler) listOrdinaryUsers(c *gin.Context) {
 	result["items"], err = json.Marshal(filtered)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User list response"})
-		return
-	}
-	if c.Request.Method == http.MethodHead {
-		c.Status(http.StatusOK)
 		return
 	}
 	c.JSON(http.StatusOK, result)

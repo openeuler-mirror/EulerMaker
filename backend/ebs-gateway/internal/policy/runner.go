@@ -27,7 +27,7 @@ func authorizeRunner(who identity.Principal, route Route) error {
 	}
 	switch route.Subresource {
 	case "":
-		if route.Method == http.MethodGet || route.Method == http.MethodHead || route.Method == http.MethodPut || route.Method == http.MethodPatch {
+		if route.Method == http.MethodGet || route.Method == http.MethodPut || route.Method == http.MethodPatch {
 			return nil
 		}
 	case "status":
