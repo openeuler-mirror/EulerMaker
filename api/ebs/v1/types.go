@@ -16,8 +16,7 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	Visibility ConfigVisibility `json:"visibility"`
-	Content    string           `json:"content"`
+	Content string `json:"content"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -28,14 +27,10 @@ type ConfigList struct {
 	Items           []Config `json:"items"`
 }
 
-type ConfigVisibility string
-
 const (
-	ConfigVisibilityPublic  ConfigVisibility = "Public"
-	ConfigVisibilityOpsOnly ConfigVisibility = "OpsOnly"
-	BuildTargetConfigName                    = "build-target"
-	BuildResourceConfigName                  = "build-resource"
-	ServiceConfigName                        = "services"
+	BuildTargetConfigName   = "build-target"
+	BuildResourceConfigName = "build-resource"
+	ServiceConfigName       = "services"
 )
 
 // +k8s:deepcopy-gen=true

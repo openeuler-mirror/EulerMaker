@@ -89,7 +89,7 @@ apiVersion: ebs/v1
 
 资源契约如下：
 
-集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target`、`build-resource` 和 `services`。Config 创建、更新时完整校验三个内置对象的内容；`services` 固定为 `OpsOnly`，服务地址契约见 [服务配置](data-models~config.md#4-服务配置内容)。Project 创建或修改 buildArches、创建 Build 时读取 `build-target`，检查 distro 与目标 arch 的映射。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与可见性)。
+集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target`、`build-resource` 和 `services`。Config 创建、更新时完整校验三个内置对象的内容；服务地址契约见 [服务配置](data-models~config.md#4-服务配置内容)。Project 创建或修改 buildArches、创建 Build 时读取 `build-target`，检查 distro 与目标 arch 的映射。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与访问权限)。
 
 | 资源 | 主存储 | Project API | 全局 API | Watch | 子资源 |
 |------|--------|-------------|----------|-------|--------|
@@ -1399,9 +1399,8 @@ curl -k --get \
 2. ES 文档以 `data` 保存完整 API 对象，因此对象字段 `spec`、`status.phase` 分别映射为 `_source` 路径 `data.spec`、`data.status.phase`。具名 GET 使用 `_source_includes` / `_source_excludes`，PIT Search 使用请求体的 `_source.includes` / `_source.excludes`。例如 `excludeFields=spec` 可让 ES 不返回 `data.spec`；`includeFields=metadata.name,status.phase` 只请求对应 `data` 字段及解码必需字段。`_seq_no`、`_primary_term`、排序值、总数和分页 token 不依赖这些 `_source` 字段，必须照常返回。
 3. 部分 `_source` 必须足以构造合法的只读对象：保留类型和对象身份所需字段，resourceVersion 仍由 ES 命中版本设置；不得把客户端排除的字段作为零值重新序列化到响应。响应端继续应用原有的先 include 后 exclude 规则，并移除仅为内部解码而读取的字段。ES 原始文档及写入、删除、冲突校验所用的完整读取路径不变。
 4. 当前下推顶层 `spec` 排除，以及 `apiVersion`、`kind`、`metadata`、顶层 `spec/status` 和 `status.phase/stage` 的选择；`metadata` 为对象解码完整读取，但响应端仍只显示请求的子字段。数组内对象、含点号的 map key、其他嵌套路径及无法安全转换的组合回退为完整 ES 读取，再由响应端裁剪。扩展路径前需增加等价性测试。
-5. Gateway 具名 Config GET 当前为了判断 `spec.visibility` 会自行向 apiserver 读取不带客户端投影参数的完整对象；这一路径不能直接套用客户端的 ES 投影，以免丢失鉴权字段。需先保证 Gateway 在鉴权后按请求裁剪返回值，再单独设计不会绕开可见性判断的下推方案。
 
-验证需比较下推和完整读取后的 GET/LIST JSON（含空值、数组、include/exclude 同时使用）、分页与选择器结果，并覆盖 Config 可见性和写入并发；另统计 ES 响应字节数。`_source` filtering 主要减少 ES 到 apiserver 的响应传输及解码量，不承诺减少 ES 对完整 `_source` 的加载和解析。
+验证需比较下推和完整读取后的 GET/LIST JSON（含空值、数组、include/exclude 同时使用）、分页与选择器结果，并覆盖 Config 字段选择和写入并发；另统计 ES 响应字节数。`_source` filtering 主要减少 ES 到 apiserver 的响应传输及解码量，不承诺减少 ES 对完整 `_source` 的加载和解析。
 
 所有 ES-backed 资源默认按创建时间倒序，因此通过 `ebs.io/target-arch` 完整指定构建目标后配合 `limit=1` 可以取得该 target 最新创建的 Build。Project status 不缓存最新 Build 或其状态，调用方应使用该查询读取最新 Build，并以返回对象的 `status` 为准。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
 

@@ -2,7 +2,7 @@
 
 ## 一、文档状态
 
-构建配置支持运维编辑发行版/架构/镜像映射；工程统一选择发行版，构建目标仅选择架构，选项解析 `spec.content`，并保留旧工程已失效的目标值；规则见 [构建配置设计](data-models~config.md#26-前端与-ebsctl)。Project 的 `distro` 字段在前端统一显示为“发行版”。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](data-models~script.md)。
+构建配置支持运维编辑发行版/架构/镜像映射；工程统一选择发行版，构建目标仅选择架构，选项读取 Gateway 的 `/apis/ebs/v1/build-targets` 投影，并保留旧工程已失效的目标值；规则见 [构建配置设计](data-models~config.md#26-前端与-ebsctl)。Project 的 `distro` 字段在前端统一显示为“发行版”。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](data-models~script.md)。
 
 本文定义 EulerMaker Web 控制台的首版产品范围、技术架构、页面结构、权限行为、API 对接、实时日志、安全边界、部署方式和验收标准。
 
@@ -105,7 +105,7 @@ ebs.io/member-user.<username>: "true"
 | 管理 Project 成员 | 否 | 是 | 否 | 仅自己拥有的 Project | 否 |
 | 创建/修改 Project 子资源 | 否 | 是 | 是 | 按 owner/member 关系同普通用户 | 是 |
 | 删除 Project 子资源 | 否 | 是 | 否 | 仅自己拥有的 Project | 是 |
-| 读取 Config | 仅具名 Public | 仅具名 Public | 仅具名 Public | 全部（含 list） | 全部（含 list） |
+| 读取 Config | 不允许 | 不允许 | 不允许 | 全部（含 list） | 全部（含 list） |
 | 修改 Config | 否 | 否 | 否 | 是 | 是 |
 | 查看 Runner | 否 | 否 | 否 | 是 | 是 |
 | 管理 Runner | 否 | 否 | 否 | 是 | 是 |
@@ -192,7 +192,7 @@ Spec 状态列表展示包的 Commit ID：从 `BuildInfo.status.specResults` 条
 
 软件包仓库列表中的名称可选中，选中后列表收窄到左侧，右侧显示 RPM 下载地址与对应 Job 历史。历史查询仅使用 `ebs.io/package-name` label selector：客户端使用[标签约定](labels.md#7-job-构建归属标签)中的规则从 `PackageRepo.name` 计算查询值，直接请求所属工程的 Job 列表并处理分页；界面显示 Project 中的完整名称，不显示截断或编码后的 label 值。没有该标签的存量 Job 不出现在包级历史中。
 
-一个 Project 对应一套发行版构建环境。工程创建时选择 `spec.distro`，创建后的工程配置仅以“发行版”只读展示，构建架构列表读写 `spec.buildArches` 字符串数组；架构选项取所选 distro 的 Config 映射。仅工程 owner 可修改架构列表，至少保留一个非空且不重复的架构，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
+一个 Project 对应一套发行版构建环境。工程创建时选择 `spec.distro`，创建后的工程配置仅以“发行版”只读展示，构建架构列表读写 `spec.buildArches` 字符串数组；架构选项取构建目标投影中该 distro 的 arches。仅工程 owner 可修改架构列表，至少保留一个非空且不重复的架构，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
 
 非 single 构建弹窗在每个架构目标旁显示“发布”及勾选框，每次打开默认勾选；所选目标各自创建 Build，独立的发布选项写入对应 `Build.spec.publish`，不写入 Project。single 弹窗不显示该选项，请求不携带 `publish`。
 
@@ -286,7 +286,7 @@ MachineAccount 页面支持通过专用接口创建账号、列出和删除账�
 
 运维页面提供集群级 `Config/build-resource` 的资源配置页签，解析和编辑其 `spec.content` 中的软件包、架构规则；另有 `Config/build-target` 的构建目标编辑和全局 Script 列表、名称搜索、刷新、创建、正文编辑及删除。Ops 和 Admin 可管理脚本，但默认 `rpmbuild` 不显示删除入口；其他脚本删除前需要确认，并携带 UID/resourceVersion 前置条件。脚本正文按原文保存，不在浏览器中执行，不应包含凭据。
 
-“服务配置”页签管理 `Config/services`，将 Git Server 与 Artifact Manager 实例列表作为同级区域展示，分别编辑控制面地址、内网 Runner 访问地址和外网 Runner 访问地址；支持增删 Artifact Manager 实例。该 Config 固定为 `OpsOnly`，仅 Ops/Admin 可管理；服务地址不包含认证凭据。字段及消费契约见 [服务配置](data-models~config.md#4-服务配置内容)。
+“服务配置”页签管理 `Config/services`，将 Git Server 与 Artifact Manager 实例列表作为同级区域展示，分别编辑控制面地址、内网 Runner 访问地址和外网 Runner 访问地址；支持增删 Artifact Manager 实例。原始配置仅 Ops/Admin 可管理；服务地址不包含认证凭据。字段及消费契约见 [服务配置](data-models~config.md#4-服务配置内容)。
 
 编辑前读取最新对象并确认 UID，保存时携带读取到的 resourceVersion；冲突时保留草稿并提示重新打开，不自动重放更新。前端对三份内置 Config 的 YAML 内容做保存前预检；apiserver 在创建、更新时完整校验通用字段与对应业务内容，Gateway 负责访问权限。消费方读取并反序列化已校验的配置，不重复执行完整业务校验；仍处理接口读取失败、响应契约异常和实际使用项缺失。
 

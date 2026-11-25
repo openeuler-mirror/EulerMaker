@@ -406,7 +406,7 @@ func TestBuildTargetConfigCreateHook(t *testing.T) {
 
 func configForTest(spec ebsv1.BuildTargetContent) *ebsv1.Config {
 	content, _ := json.Marshal(spec)
-	return &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: string(content)}}
+	return &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName}, Spec: ebsv1.ConfigSpec{Content: string(content)}}
 }
 
 type projectGetter struct {

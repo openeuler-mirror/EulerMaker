@@ -79,7 +79,7 @@ function editor() {
   const requests = [];
   let conflict = false;
   const original = { metadata: { name: 'services', uid: 'config-uid', resourceVersion: '1' },
-    spec: { visibility: 'OpsOnly', content: stringify({ artifactManagers: { 'art-01': { internalURL: 'http://art:8081' } },
+    spec: { content: stringify({ artifactManagers: { 'art-01': { internalURL: 'http://art:8081' } },
       gitServer: { internalURL: 'http://git:8080', runnerInternalURL: 'http://git.internal:8084',
         runnerExternalURL: 'https://git.external' } }) } };
   class ApiError extends Error { constructor(status) { super(); this.status = status; } }
@@ -113,7 +113,6 @@ test('editor loads and saves services with current metadata and both service sec
   assert.deepEqual(requests.map(r => r.path), ['/apis/ebs/v1/configs/services', '/apis/ebs/v1/configs/services']);
   const body = JSON.parse(requests[1].options.body);
   assert.equal(body.metadata.resourceVersion, '1');
-  assert.equal(body.spec.visibility, 'OpsOnly');
   assert.equal(parse(body.spec.content).gitServer.internalURL, 'https://git.example/prefix');
   assert.deepEqual(parse(body.spec.content).gitServer, state.gitServer.value);
   assert.equal(parse(body.spec.content).artifactManagers['art-01'].runnerExternalURL, 'http://runner.example:8081');

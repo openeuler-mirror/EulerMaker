@@ -6,19 +6,19 @@
 
 | 对象 | 配置内容 | 作用域 | Job 中的结果 |
 |------|----------|--------|-------------|
-| `Config/build-target` | 发行版标识（distro）、Arch 和构建镜像映射 | 集群级，`Public` | `BuildInfo.spec.image` → `Job.spec.runtimeSpec.image` |
-| `Config/build-resource` | spec 软件包及架构的 CPU、内存规则 | 集群级，`OpsOnly` | `spec.resources` |
-| `Config/services` | Artifact Manager 实例地址和 Git Server 管理地址 | 集群级，`OpsOnly` | 仅固化 Artifact 实例标识和 Git 逻辑克隆地址，不复制配置全文 |
+| `Config/build-target` | 发行版标识（distro）、Arch 和构建镜像映射 | 集群级，Ops/Admin | `BuildInfo.spec.image` → `Job.spec.runtimeSpec.image` |
+| `Config/build-resource` | spec 软件包及架构的 CPU、内存规则 | 集群级，Ops/Admin | `spec.resources` |
+| `Config/services` | Artifact Manager 实例地址和 Git Server 管理地址 | 集群级，Ops/Admin | 仅固化 Artifact 实例标识和 Git 逻辑克隆地址，不复制配置全文 |
 
-`Config` 对象验证通用元数据、可见性和内容格式；apiserver 还在创建、更新 `Config/build-target`、`Config/build-resource` 和 `Config/services` 时解析并校验业务内容。使用方必须处理读取和解析错误；具体业务校验职责及配置结构见第 2～4 章，公共资源字段见 [数据模型](data-models.md)。
+`Config` 对象验证通用元数据和内容格式；apiserver 还在创建、更新 `Config/build-target`、`Config/build-resource` 和 `Config/services` 时解析并校验业务内容。使用方必须处理读取和解析错误；具体业务校验职责及配置结构见第 2～4 章，公共资源字段见 [数据模型](data-models.md)。
 
 - [构建目标内容](#2-构建目标内容)
 - [构建资源内容](#3-构建资源内容)
 - [服务配置内容](#4-服务配置内容)
 
-### 1.1 Config 公共资源与可见性
+### 1.1 Config 公共资源与访问权限
 
-`Config` 是集群级 `ebs/v1` 资源，复数为 `configs`。对象名称在集群内唯一，不设置 namespace、status 或 Project 覆盖。内置对象为 `build-target`、`build-resource` 和 `services`，各自的 `spec.content` 是非空 UTF-8 YAML 文本；内容可以使用 YAML 兼容的 JSON 语法。`spec.visibility` 只允许 `Public` 和 `OpsOnly`：前者允许匿名及所有身份具名读取，后者仅允许 Ops/Admin 读取。
+`Config` 是集群级 `ebs/v1` 资源，复数为 `configs`。对象名称在集群内唯一，不设置 namespace、status 或 Project 覆盖。内置对象为 `build-target`、`build-resource` 和 `services`，各自的 `spec.content` 是非空 UTF-8 YAML 文本；内容可以使用 YAML 兼容的 JSON 语法。Gateway 只允许 Ops/Admin 读写原始 Config。
 
 ```yaml
 apiVersion: ebs/v1
@@ -26,39 +26,38 @@ kind: Config
 metadata:
   name: build-target
 spec:
-  visibility: Public
   content: |
     targets: {}
 ```
 
-`Config` 只负责持久化原文、并发版本和访问控制，不携带业务类型字段，也不将 YAML 内容展开为独立 API 字段。对象名称决定使用方采用哪种解析器。Gateway 对具名 `GET/HEAD` 只读取一次 apiserver 对象，并基于同一份响应的 `visibility` 决定是否返回。匿名、普通登录用户和 Runner 身份不允许 `list`，也不能读取 `OpsOnly` 对象；仅 Ops/Admin 可 `list`、创建和修改。`visibility` 只能由 Ops/Admin 修改，Gateway 不接受客户端自行声明“本次请求公开”；apiserver 校验枚举和资源版本。
+`Config` 只负责持久化原文、并发版本和访问控制，不携带业务类型字段，也不将 YAML 内容展开为独立 API 字段。对象名称决定使用方采用哪种解析器。公开的构建目标由 Gateway 单独投影，不返回原始配置。
 
 ```text
-GET/HEAD /apis/ebs/v1/configs
+GET /apis/ebs/v1/configs
 POST     /apis/ebs/v1/configs
-GET/HEAD /apis/ebs/v1/configs/{name}
+GET /apis/ebs/v1/configs/{name}
 PUT      /apis/ebs/v1/configs/{name}
 PATCH    /apis/ebs/v1/configs/{name}
 ```
 
-上述 HEAD 由 Gateway 内部读取 Config 后响应；apiserver 通用资源路由本身不注册 HEAD。非运维身份只允许具名 `GET/HEAD` 且对象为 `Public`；集合 `GET/HEAD` 仅允许 Ops/Admin。三个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容或可见性改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
+三个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
 
-apiserver 校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及请求大小上限；对 `Config/build-target`、`Config/build-resource` 和 `Config/services` 分别执行第 2.2.1、3.2、4 章的内容校验。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖；首次模板分别设置相应可见性。其他 Config 的业务内容错误仍可能成功保存：使用方必须在消费时按对象名称解析和校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
+apiserver 校验名称、`content` 非空、UTF-8、无 NUL 及请求大小上限；对 `Config/build-target`、`Config/build-resource` 和 `Config/services` 分别执行第 2.2.1、3.2、4 章的内容校验。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖。其他 Config 的业务内容错误仍可能成功保存：使用方必须在消费时按对象名称解析和校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
 
 ## 2. 构建目标内容
 
 ### 2.1 目标与范围
 
-`Config/build-target` 的 `spec.content` 提供 OS、架构和镜像映射，为前端和任务创建方提供同一份数据。
+`Config/build-target` 的 `spec.content` 提供 OS、架构和镜像映射，是前端构建目标选项和控制器镜像选择的共同来源。
 
-- 前端从配置生成 Project 的 distro 选项，再根据所选发行版生成 buildArches 的架构选项。
+- 前端从构建目标投影生成 Project 的 distro 选项，再根据所选发行版生成 buildArches 的架构选项。
 - Project 的 distro 创建后不可变，Build 不重复保存。
 - Build Controller 根据 Project.spec.distro、Build.spec.arch 选择镜像并固化到 BuildInfo；BuildInfo Controller 直接复用该镜像创建 Job。
 - Ops、Admin 可以通过 Gateway 修改配置，无需重启服务。
 
 ### 2.2 对象
 
-对象的名称固定为 `build-target`，默认 `visibility: Public`。以下展示完整对象；业务结构从 `content` 中解码，不是 `Config.spec.targets`。
+对象的名称固定为 `build-target`。以下展示完整对象；业务结构从 `content` 中解码，不是 `Config.spec.targets`。
 
 ```yaml
 apiVersion: ebs/v1
@@ -66,7 +65,6 @@ kind: Config
 metadata:
   name: build-target
 spec:
-  visibility: Public
   content: |
     targets:
       openEuler-24.03-LTS-SP4:
@@ -99,7 +97,7 @@ spec:
 
 ### 2.3 API 与权限
 
-使用 1.1 节的 `/apis/ebs/v1/configs/build-target`。匿名具名读取仅在当前对象 `spec.visibility=Public` 时允许；写入仅允许 Ops/Admin。apiserver 在创建、更新时按 2.2.1 严格解析并校验 `content.targets`，拒绝未知字段、重复键和非法目标配置，返回 422。`PUT/PATCH` 冲突时运维客户端重新读取并提示合并，不能仅替换 resourceVersion 后盲目重放旧内容。
+使用 1.1 节的 `/apis/ebs/v1/configs/build-target`。仅运维读取和写入该对象。工程表单使用 `GET /apis/ebs/v1/build-targets`，响应为 `{"items":[{"distro":"openEuler-24.03-LTS","arches":["aarch64","x86_64"]}]}`，不返回镜像及配置原文。apiserver 在创建、更新时按 2.2.1 严格解析并校验 `content.targets`，拒绝未知字段、重复键和非法目标配置，返回 422。`PUT/PATCH` 冲突时运维客户端重新读取并提示合并，不能仅替换 resourceVersion 后盲目重放旧内容。
 
 ### 2.4 存储与初始化
 
@@ -162,7 +160,7 @@ BuildInfo Controller 直接把 `BuildInfo.spec.image` 写入 `Job.spec.runtimeSp
 
 工程创建及工程目标编辑页面：
 
-- 从 `Config/build-target.spec.content` 解析工程级 distro 选项，前端标签显示为“发行版”，选择后展示其 arches；选项按名称排序，不维护第二份前端列表。
+- 从 `/apis/ebs/v1/build-targets` 获取工程级 distro 和架构选项，前端标签显示为“发行版”，选择后展示其 arches；选项按名称排序，不维护第二份前端列表。
 - distro 仅在创建 Project 时选择，创建后只读展示为“发行版”；目标列表仍可增删架构，同一架构不得重复。全局配置变更导致已有架构不受支持时保留原值并提示，不静默改写。
 - 空配置显示“暂无可用构建目标”；配置请求失败显示错误并支持重试，不回退到硬编码选项。
 - 旧工程不受支持的目标仍显示原值并标注“不再支持”；不静默删除或替换。未修改的旧目标不阻止保存其他工程配置。
@@ -176,7 +174,7 @@ ebsctl 注册集群级 Config 的 get/list/create/replace/patch；`-p/-n` 不改
 |------|----------|
 | 公共 api | Config 类型、List、scheme/deepcopy 注册；业务内容结构作为使用方解析类型 |
 | apiserver | Config storage、通用与内置构建配置内容校验、初始化、ES alias、OpenAPI、Build create 时检查目标映射 |
-| gateway | 按 visibility 授权具名读取、禁止匿名 list、Ops 及以上写权限 |
+| gateway | Config 仅 Ops/Admin 可读写；公开发行版及架构投影 |
 | controller-manager | 读取 Config 并解析对应 content，创建 Job 时固化镜像 |
 | frontend | 运维配置编辑、工程级 distro 与架构选项、不可用目标提示 |
 | ebsctl | 集群级资源与允许操作注册 |
@@ -189,7 +187,7 @@ ebsctl 注册集群级 Config 的 get/list/create/replace/patch；`-p/-n` 不改
 
 ### 3.1 对象与内容格式
 
-`Config/build-resource` 是全部 Project 共用的资源规则表，默认 `visibility: OpsOnly`。BuildInfo Controller 在创建 Job 时读取该对象，以 spec 包名和架构解析资源，并固化到 `Job.spec.resources`；Scheduler、Runner 不读取 Config。包名指 spec 包名（如 `gcc`），不是二进制 RPM 子包名。规则与目标 OS 无关。
+`Config/build-resource` 是全部 Project 共用的资源规则表。BuildInfo Controller 在创建 Job 时读取该对象，以 spec 包名和架构解析资源，并固化到 `Job.spec.resources`；Scheduler、Runner 不读取 Config。包名指 spec 包名（如 `gcc`），不是二进制 RPM 子包名。规则与目标 OS 无关。
 
 ```yaml
 apiVersion: ebs/v1
@@ -197,7 +195,6 @@ kind: Config
 metadata:
   name: build-resource
 spec:
-  visibility: OpsOnly
   content: |
     default:
       requests:
@@ -256,7 +253,7 @@ apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存�
 
 ### 4.1 对象与公共类型
 
-`Config/services` 统一保存服务访问地址，固定 `visibility: OpsOnly`。按业务分为 `artifactManagers` 和 `gitServer` 两部分：前者支持多个实例，后者只配置一个服务入口，不增加 Git Server 实例选择或 Project annotation。
+`Config/services` 统一保存服务访问地址。按业务分为 `artifactManagers` 和 `gitServer` 两部分：前者支持多个实例，后者只配置一个服务入口，不增加 Git Server 实例选择或 Project annotation。
 
 公共 `ebs/v1` 定义以下内容类型，apiserver、Controller Manager 和 Gateway 共用；这些结构只用于解析 `Config.spec.content`，不注册为独立 API 资源：
 
@@ -300,7 +297,6 @@ Git Server 返回与部署地址无关的 `clone_path`（`/git/...`）。Control
 
 apiserver 在创建和更新时通过 `ValidateConfig` 完整校验：
 
-- `visibility` 必须为 `OpsOnly`，不能改为 `Public`。
 - `artifactManagers` 必须非空，实例名符合 DNS1123 label 规则；所有实例的 `internalURL` 必填。不强制包含 `default`，使用该实例的 Project 仍需通过存在性检查。
 - `gitServer` 和 `gitServer.internalURL` 必填。
 - 所有非空地址必须是带主机名的绝对 HTTP(S) URL，显式端口为 1～65535，不包含凭据、query、fragment 或空白；允许路径前缀，拼接接口路径时必须保留前缀。Git Server 和各 Artifact Manager 的两个 Runner 地址均可省略或为空，内外网均允许 HTTP 或 HTTPS。
@@ -318,7 +314,6 @@ kind: Config
 metadata:
   name: services
 spec:
-  visibility: OpsOnly
   content: |
     artifactManagers:
       default:
@@ -369,4 +364,4 @@ Runner 从 Gateway 读取地址投影。刷新周期、Job 地址快照、缺失
 | Controller Manager | 公共配置提供者；两个 Git 消费者按轮取客户端；Artifact 地址解析读取新结构；删除 Git 地址参数 |
 | 部署及运维文档 | 初始化 services、填写各访问地址；移除 Controller Manager 的 Git 地址参数 |
 
-验收覆盖默认对象初始化与并发创建、更新不覆盖、两类服务字段校验、OpsOnly 保护、Project 实例检查、Runner 投影不包含管理地址、一轮多服务访问只读一次 Config、地址更新生效、在途调用地址固定、不同 Git Server 同步缓存隔离及配置异常不触发业务失败。部署模板不作为动态配置的覆盖源。
+验收覆盖默认对象初始化与并发创建、更新不覆盖、两类服务字段校验、Config 访问权限、Project 实例检查、Runner 投影不包含管理地址、一轮多服务访问只读一次 Config、地址更新生效、在途调用地址固定、不同 Git Server 同步缓存隔离及配置异常不触发业务失败。部署模板不作为动态配置的覆盖源。

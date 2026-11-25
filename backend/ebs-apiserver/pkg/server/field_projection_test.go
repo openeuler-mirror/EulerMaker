@@ -34,9 +34,9 @@ func TestFieldProjectionGETAndLIST(t *testing.T) {
 		},
 		{
 			name: "exclude only",
-			path: "/apis/ebs/v1/configs/default?excludeFields=spec.content,metadata.annotations",
-			body: `{"apiVersion":"ebs/v1","kind":"Config","metadata":{"name":"default","annotations":{"secret":"value"}},"spec":{"content":"large","visibility":"Public"}}`,
-			want: map[string]interface{}{"apiVersion": "ebs/v1", "kind": "Config", "metadata": map[string]interface{}{"name": "default"}, "spec": map[string]interface{}{"visibility": "Public"}},
+			path: "/apis/ebs/v1/configs/default?excludeFields=spec,metadata.annotations",
+			body: `{"apiVersion":"ebs/v1","kind":"Config","metadata":{"name":"default","annotations":{"secret":"value"}},"spec":{"content":"large"}}`,
+			want: map[string]interface{}{"apiVersion": "ebs/v1", "kind": "Config", "metadata": map[string]interface{}{"name": "default"}},
 		},
 		{
 			name: "exclude BuildInfo spec results",

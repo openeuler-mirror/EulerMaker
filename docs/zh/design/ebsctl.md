@@ -77,7 +77,7 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 
 首版使用编译期静态资源表，不依赖 Kubernetes discovery API。客户端版本新增资源时同步更新资源表；遇到未知 `apiVersion` 或 Kind 必须报错，不能猜测请求路径。
 
-Config 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路径；不支持 watch。匿名、普通用户和 Runner 只能具名读取 `Public` 对象；`OpsOnly` 读取、list 和写入要求 Ops/Admin，更新保留最新 `metadata.resourceVersion`。当前 CLI 禁用所有 Config 的删除；Gateway 的内置对象保护规则见 [Gateway 设计](ebs-gateway.md)。
+Config 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路径；不支持 watch。所有 Config 操作要求 Ops/Admin，更新保留最新 `metadata.resourceVersion`。当前 CLI 禁用所有 Config 的删除；Gateway 的内置对象保护规则见 [Gateway 设计](ebs-gateway.md)。
 
 ### 3.2 登录与 Context
 
@@ -126,7 +126,7 @@ ebsctl get configs
 ebsctl get cfg build-resource -o yaml
 ```
 
-非运维身份仅可具名读取 `Public` 对象，不可 list 或读取 `OpsOnly` 对象。
+非运维身份不可读取 Config。
 
 ### 3.4 创建和更新
 
@@ -147,12 +147,12 @@ ebsctl delete job build-kernel -p openeuler-mainline
 - `patch --type merge --patch <JSON>` 使用 `application/merge-patch+json`；首版只支持 merge patch。`-p` 已作为全局 Project 参数，不复用于 patch 内容；
 - `delete` 默认要求交互确认仅限危险的批量删除；指定单个名称直接删除，`--all` 必须显式给出，并支持 `--yes` 跳过确认。
 
-`Config` 在当前 CLI 中支持 create、replace、patch，不提供 delete；Gateway 对非内置 Config 的删除能力尚未接入 CLI。普通用户仅能具名读取 `Public` 对象，写入仅允许 Ops 或 Admin 身份执行。例如：
+`Config` 在当前 CLI 中支持 create、replace、patch，不提供 delete；Gateway 对非内置 Config 的删除能力尚未接入 CLI。仅 Ops/Admin 可读写。例如：
 
 ```bash
 ebsctl create -f config.yaml
 ebsctl replace -f config.yaml
-ebsctl patch cfg custom-config --type merge --patch '{"spec":{"visibility":"OpsOnly"}}'
+ebsctl patch cfg custom-config --type merge --patch '{"spec":{"content":"example: true"}}'
 ```
 
 `ebsctl` 不提供 `apply`。声明式对象的创建和更新分别使用 `create` 与 `replace`，局部字段更新使用 `patch`。
@@ -224,7 +224,7 @@ credentials:
 | BuildInfo | NAME、STATUS、AGE |
 | BuildGraph | NAME、AGE |
 | RpmRepo | NAME、STATUS、AGE |
-| Config | NAME、VISIBILITY、AGE |
+| Config | NAME、AGE |
 
 ### 5.2 退出码
 
@@ -261,7 +261,7 @@ Token 失效后的处理以 Gateway 返回的 HTTP 状态为准，不在客户�
 
 - 普通 `get`、`describe` 读取 Project、Snapshot、Build、Job、BuildInfo、RpmRepo，携带 Token 的请求返回 401 时，向 stderr 提示认证失败及重新登录方式，然后移除该次重试的认证头，以相同路径和查询参数匿名重试一次。
 - 匿名重试成功按正常读取输出并返回 0；失败直接返回其错误，不再进入网络或状态码重试循环。
-- 写操作、Watch/`wait`（包括初始 GET/LIST 和 relist）、`--mine` 及受保护资源访问不降级。Config 的可见性取决于对象内容，认证失败时无法确认是否 Public，因此 Config get/list/describe 均不自动降级。
+- 写操作、Watch/`wait`（包括初始 GET/LIST 和 relist）、`--mine` 及受保护资源访问不降级。Config 读取要求运维权限，因此不自动降级。
 - 403 按权限错误处理，不视为 Token 过期，也不匿名重试。原请求未携带 Token 时，401 直接返回。
 - 401 错误提示执行 `ebsctl login`，不使用密码静默重新登录；不删除已保存 Token、不修改环境变量和当前 context。匿名重试使用临时客户端副本，不改变原客户端凭据。
 - 提示仅写入 stderr，不污染 stdout 的 JSON/YAML 等机器可读输出，不输出 Token 内容。
@@ -317,4 +317,4 @@ YAML 转 JSON 时保留整数精度。任何输出都不得包含 IAM credential
 | 安全 | TLS CA、insecure 警告、URL 校验、敏感字段脱敏、响应体上限 |
 | 兼容性 | 新增未知响应字段、旧配置迁移、客户端与服务端 API 版本不匹配 |
 
-端到端测试使用真实 Gateway 和 apiserver，至少覆盖：登录后创建 Project、创建并 watch Job、普通用户具名读取 Public 对象但不能读取 OpsOnly 或 list、Ops 管理 Config、匿名具名读取 Public 对象、非运维身份 list 被拒绝，以及未经授权的写入或受保护资源访问被拒绝。
+端到端测试使用真实 Gateway 和 apiserver，至少覆盖：登录后创建 Project、创建并 watch Job、Ops 管理 Config、非运维身份读取 Config 被拒绝，以及未经授权的写入或受保护资源访问被拒绝。

@@ -679,7 +679,7 @@ type RpmRepoList struct {
 
 ## 六、Config（集群级配置）
 
-**API**：`/apis/ebs/v1/configs`；**Elasticsearch**：alias `ebs-configs`，文档 ID `{name}`。不提供 Project-scoped API、Watch 或 `/status`。资源生命周期、可见性及消费规则见 [构建配置设计](./data-models~config.md#11-config-公共资源与可见性)。
+**API**：`/apis/ebs/v1/configs`；**Elasticsearch**：alias `ebs-configs`，文档 ID `{name}`。不提供 Project-scoped API、Watch 或 `/status`。资源生命周期、访问权限及消费规则见 [构建配置设计](./data-models~config.md#11-config-公共资源与访问权限)。
 
 ```go
 type Config struct {
@@ -689,16 +689,9 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-    Visibility ConfigVisibility `json:"visibility"`
-    Content    string           `json:"content"`
+    Content string `json:"content"`
 }
 
-type ConfigVisibility string
-
-const (
-    ConfigVisibilityPublic  ConfigVisibility = "Public"
-    ConfigVisibilityOpsOnly ConfigVisibility = "OpsOnly"
-)
 
 type ConfigList struct {
     metav1.TypeMeta `json:",inline"`
@@ -710,10 +703,9 @@ type ConfigList struct {
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `metadata.name` | 是 | 集群唯一；内置对象为 `build-target`、`build-resource` 和 `services` |
-| `spec.visibility` | 是 | `Public` 允许所有身份及匿名具名读取；`OpsOnly` 仅 Ops/Admin 读取 |
 | `spec.content` | 是 | 非空 UTF-8 YAML 文本；apiserver 按内置对象名称校验业务结构，消费方解析使用 |
 
-`Config` 不设置 namespace、status 或业务类型字段。Gateway 仅允许 Ops/Admin list；匿名、普通用户和 Runner 只能具名读取 `Public` 对象，`OpsOnly` 仅 Ops/Admin 可读。Ops/Admin 可创建更新，三个内置对象不可经 Gateway 删除。apiserver 校验公共字段、资源版本及内置对象的业务内容；`services` 固定为 `OpsOnly`。
+`Config` 不设置 namespace、status 或业务类型字段。Gateway 仅允许 Ops/Admin 读写 Config，三个内置对象不可经 Gateway 删除。apiserver 校验公共字段、资源版本及内置对象的业务内容。
 
 ### 内置内容格式
 

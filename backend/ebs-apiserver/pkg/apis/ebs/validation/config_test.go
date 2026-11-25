@@ -47,7 +47,7 @@ func TestValidateBuildResourceContent(t *testing.T) {
 			if !reflect.DeepEqual(&content, before) {
 				t.Fatal("validation modified content")
 			}
-			obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildResourceConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityOpsOnly, Content: tc.content}}
+			obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildResourceConfigName}, Spec: ebsv1.ConfigSpec{Content: tc.content}}
 			if errs := ValidateConfig(obj); (len(errs) != 0) != tc.wantError {
 				t.Fatalf("Config errors=%v", errs)
 			}
@@ -62,7 +62,7 @@ func TestBuildResourceConfigStrictDecoding(t *testing.T) {
 		"default: {requests: {cpu: '4', cpu: '8', memory: 8Gi}}",
 		"default: {requests: {cpu: '4', memory: 8Gi}}\npackages: {gcc: {}, gcc: {}}",
 	} {
-		obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildResourceConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityOpsOnly, Content: content}}
+		obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildResourceConfigName}, Spec: ebsv1.ConfigSpec{Content: content}}
 		if errs := ValidateConfig(obj); len(errs) != 1 || errs[0].Field != "spec.content" {
 			t.Fatalf("errors=%v", errs)
 		}
@@ -127,7 +127,7 @@ func TestValidateServiceConfigContent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			config := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ServiceConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityOpsOnly, Content: string(content)}}
+			config := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ServiceConfigName}, Spec: ebsv1.ConfigSpec{Content: string(content)}}
 			if errs := ValidateConfig(config); (len(errs) != 0) != (tc.wantField != "") {
 				t.Fatalf("Config errors=%v", errs)
 			}
@@ -193,7 +193,7 @@ func TestServiceConfigStrictDecoding(t *testing.T) {
 		"gitServer: {internalURL: 'http://git', internalURL: 'http://other'}",
 		"gitServer: {internalURL: 'http://git'}\ngitServer: {internalURL: 'http://other'}",
 	} {
-		obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ServiceConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityOpsOnly, Content: content}}
+		obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ServiceConfigName}, Spec: ebsv1.ConfigSpec{Content: content}}
 		if errs := ValidateConfig(obj); len(errs) != 1 || errs[0].Field != "spec.content" {
 			t.Fatalf("errors=%v", errs)
 		}
@@ -202,7 +202,7 @@ func TestServiceConfigStrictDecoding(t *testing.T) {
 
 func TestValidateConfig(t *testing.T) {
 	valid := func() *ebsv1.Config {
-		return &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: "build-target"}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: "targets: {}\n"}}
+		return &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: "build-target"}, Spec: ebsv1.ConfigSpec{Content: "targets: {}\n"}}
 	}
 	for _, tc := range []struct {
 		name      string
@@ -216,8 +216,6 @@ func TestValidateConfig(t *testing.T) {
 		{"missing name", func(c *ebsv1.Config) { c.Name = "" }, true},
 		{"namespace", func(c *ebsv1.Config) { c.Namespace = "project" }, true},
 		{"generateName", func(c *ebsv1.Config) { c.GenerateName = "cfg-" }, true},
-		{"empty visibility", func(c *ebsv1.Config) { c.Spec.Visibility = "" }, true},
-		{"unknown visibility", func(c *ebsv1.Config) { c.Spec.Visibility = "Private" }, true},
 		{"empty content", func(c *ebsv1.Config) { c.Spec.Content = "" }, true},
 		{"NUL", func(c *ebsv1.Config) { c.Spec.Content = "a\x00b" }, true},
 		{"invalid UTF-8", func(c *ebsv1.Config) { c.Spec.Content = string([]byte{0xff}) }, true},
@@ -262,7 +260,7 @@ func TestBuildTargetContentValidation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: string(content)}}
+			obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName}, Spec: ebsv1.ConfigSpec{Content: string(content)}}
 			if errs := ValidateConfig(obj); (len(errs) > 0) != test.invalid {
 				t.Fatalf("Config errors=%v", errs)
 			}
@@ -283,7 +281,7 @@ func TestBuildTargetConfigStrictDecoding(t *testing.T) {
 		"targets: {}\nunknown: true",
 		"targets: {os: {arches: {x86_64: {image: build:v1, image: build:v2}}}}",
 	} {
-		obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: content}}
+		obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName}, Spec: ebsv1.ConfigSpec{Content: content}}
 		if errs := ValidateConfig(obj); len(errs) != 1 || errs[0].Field != "spec.content" {
 			t.Fatalf("errors=%v", errs)
 		}

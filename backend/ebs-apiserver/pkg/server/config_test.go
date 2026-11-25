@@ -140,10 +140,7 @@ func testConfigHTTPCreateUpdateAndRead(t *testing.T, name, initialContent, updat
 	candidate := ebsv1.Config{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Config"},
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: initialContent},
-	}
-	if name == ebsv1.ServiceConfigName {
-		candidate.Spec.Visibility = ebsv1.ConfigVisibilityOpsOnly
+		Spec:       ebsv1.ConfigSpec{Content: initialContent},
 	}
 	encode := func(obj ebsv1.Config) string {
 		data, err := json.Marshal(obj)
@@ -153,11 +150,6 @@ func testConfigHTTPCreateUpdateAndRead(t *testing.T, name, initialContent, updat
 		return string(data)
 	}
 	invalid := candidate
-	if name == ebsv1.ServiceConfigName {
-		invalid.Spec.Visibility = ebsv1.ConfigVisibilityPublic
-		call(http.MethodPost, encode(invalid), http.StatusUnprocessableEntity)
-		invalid = candidate
-	}
 	invalid.Spec.Content = "{}"
 	call(http.MethodPost, encode(invalid), http.StatusUnprocessableEntity)
 	obj := call(http.MethodPost, encode(candidate), http.StatusCreated)
@@ -168,9 +160,6 @@ func testConfigHTTPCreateUpdateAndRead(t *testing.T, name, initialContent, updat
 	call(http.MethodPut, encode(candidate), http.StatusConflict)
 	invalid = obj
 	if name == ebsv1.ServiceConfigName {
-		invalid.Spec.Visibility = ebsv1.ConfigVisibilityPublic
-		call(http.MethodPut, encode(invalid), http.StatusUnprocessableEntity)
-		invalid = obj
 		invalid.Spec.Content = "artifactManagers: {default: {internalURL: 'http://artifact-manager:8081'}}"
 		call(http.MethodPut, encode(invalid), http.StatusUnprocessableEntity)
 		invalid.Spec.Content += "\ngitServer: {internalURL: 'file:///tmp/git'}"
@@ -239,8 +228,8 @@ func TestEnsureDefaultConfigConcurrentCreate(t *testing.T) {
 	winner := &ebsv1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ServiceConfigName},
 		Spec: ebsv1.ConfigSpec{
-			Visibility: ebsv1.ConfigVisibilityOpsOnly,
-			Content:    "artifactManagers: {default: {internalURL: 'http://art:8081'}}\ngitServer: {internalURL: 'http://git:8080'}",
+
+			Content: "artifactManagers: {default: {internalURL: 'http://art:8081'}}\ngitServer: {internalURL: 'http://git:8080'}",
 		},
 	}
 	store := &configBootstrapRaceStore{
@@ -275,10 +264,6 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	serviceConfig := store.objects[ebsv1.ServiceConfigName]
 	if errs := validation.ValidateConfig(serviceConfig); len(errs) != 0 {
 		t.Fatalf("default services Config: %v", errs)
-	}
-	if target.Spec.Visibility != ebsv1.ConfigVisibilityPublic || resource.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly ||
-		serviceConfig.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
-		t.Fatal("incorrect default visibility")
 	}
 	var targets ebsv1.BuildTargetContent
 	if err := yaml.UnmarshalStrict([]byte(target.Spec.Content), &targets); err != nil || len(targets.Targets) == 0 {
