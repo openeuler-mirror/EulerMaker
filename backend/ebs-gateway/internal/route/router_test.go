@@ -901,13 +901,58 @@ func TestLoginAndCheck(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedRequestsRequireCurrentUser(t *testing.T) {
+	for _, tc := range []struct {
+		name, body      string
+		iamStatus, want int
+	}{
+		{"disabled", `{"metadata":{"name":"alice"},"spec":{"enabled":false,"scopes":["ebs:user"]}}`, http.StatusOK, http.StatusForbidden},
+		{"role changed", `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:ops"]}}`, http.StatusOK, http.StatusForbidden},
+		{"deleted", "", http.StatusNotFound, http.StatusForbidden},
+		{"IAM unavailable", "", http.StatusServiceUnavailable, http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lookups := 0
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/users/alice" {
+					t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+				}
+				lookups++
+				return &http.Response{StatusCode: tc.iamStatus, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			}))
+			token, err := api.tokens.Issue("alice", "", identity.UserType, identity.UserScope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := api.Router()
+			for _, endpoint := range []struct{ method, path string }{
+				{http.MethodGet, "/apis/iam.ebs/v1/users"},
+				{http.MethodGet, "/apis/ebs/v1/projects"},
+				{http.MethodPost, "/auth/check"},
+			} {
+				before := lookups
+				req := httptest.NewRequest(endpoint.method, endpoint.path, nil)
+				req.Header.Set("Authorization", "Bearer "+token)
+				res := httptest.NewRecorder()
+				router.ServeHTTP(res, req)
+				if res.Code != tc.want || lookups != before+1 {
+					t.Errorf("%s %s: status=%d lookups=%d, want %d and one User lookup", endpoint.method, endpoint.path, res.Code, lookups-before, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestCheckTokenUsesScopesForUserPermissions(t *testing.T) {
-	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
-		t.Fatal("token check must not call upstream")
-		return nil, nil
-	}))
 	for _, scope := range []identity.Scope{identity.UserScope, identity.OpsScope, identity.AdminScope} {
 		t.Run(string(scope), func(t *testing.T) {
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/users/alice" {
+					t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+				}
+				body := fmt.Sprintf(`{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":[%q]}}`, scope)
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
 			token, err := api.tokens.Issue("alice", "", identity.UserType, scope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
