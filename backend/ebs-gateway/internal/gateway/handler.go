@@ -20,6 +20,7 @@ type Dependencies struct {
 	Tokens           *identity.Tokens
 	Now              func() time.Time
 	Limits           *limit.Buckets
+	IPLimits         *limit.Buckets
 	BodyLimit        int64
 	IAM              *iam.Client
 	LocalAuthEnabled bool
@@ -32,6 +33,7 @@ type Handler struct {
 	tokens                *identity.Tokens
 	now                   func() time.Time
 	limits                *limit.Buckets
+	ipLimits              *limit.Buckets
 	iam                   *iam.Client
 	auth                  *middleware.Auth
 	bodyLimit             int64
@@ -40,14 +42,13 @@ type Handler struct {
 	loginLimit            *limit.Buckets
 	loginIP               *limit.Buckets
 	machineLimit          *limit.Buckets
-	publicLimit           *limit.Buckets
 	policy                *policy.Authorizer
 	runnerWatchMu         sync.Mutex
 	runnerWatches         sets.Set[string]
 }
 
 func NewHandler(deps Dependencies) (*Handler, error) {
-	if deps.Upstream == nil || deps.IAM == nil || deps.Tokens == nil || deps.Limits == nil {
+	if deps.Upstream == nil || deps.IAM == nil || deps.Tokens == nil || deps.Limits == nil || deps.IPLimits == nil {
 		return nil, fmt.Errorf("gateway dependencies are required")
 	}
 	if deps.Now == nil {
@@ -61,6 +62,7 @@ func NewHandler(deps Dependencies) (*Handler, error) {
 		upstream:              deps.Upstream,
 		tokens:                deps.Tokens,
 		limits:                deps.Limits,
+		ipLimits:              deps.IPLimits,
 		now:                   deps.Now,
 		iam:                   deps.IAM,
 		bodyLimit:             deps.BodyLimit,
@@ -70,7 +72,6 @@ func NewHandler(deps Dependencies) (*Handler, error) {
 		loginLimit:            limit.New(5.0/60.0, 5, deps.Now),
 		loginIP:               limit.New(20.0/60.0, 20, deps.Now),
 		machineLimit:          limit.New(5.0/60.0, 5, deps.Now),
-		publicLimit:           limit.New(20, 40, deps.Now),
 		policy:                policy.New(deps.Upstream),
 		runnerWatches:         sets.New[string](),
 	}, nil

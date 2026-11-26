@@ -12,17 +12,20 @@ import (
 	"ebs-gateway/internal/limit"
 )
 
-func TestLimitAuthenticated(t *testing.T) {
+func TestLimitIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	clock := time.Unix(1790000000, 0)
-	limiter := LimitAuthenticated(limit.New(1, 1, func() time.Time { return clock }))
+	now := func() time.Time { return clock }
+	limiter := LimitIdentity(limit.New(1, 1, now))
 	router := gin.New()
 	if err := router.SetTrustedProxies(nil); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
-	router.GET("/:user", func(c *gin.Context) {
-		c.Set(principalKey, identity.Principal{Subject: c.Param("user")})
+	router.GET("/:kind/:user", func(c *gin.Context) {
+		if c.Param("kind") != "anonymous" {
+			c.Set(principalKey, identity.Principal{Type: identity.Type(c.Param("kind")), Subject: c.Param("user")})
+		}
 	}, limiter, func(c *gin.Context) {
 		calls++
 		c.Status(http.StatusNoContent)
@@ -32,11 +35,16 @@ func TestLimitAuthenticated(t *testing.T) {
 		advance       time.Duration
 		status        int
 	}{
-		{"alice", "192.0.2.1:1234", 0, http.StatusNoContent},
-		{"alice", "192.0.2.1:1234", 0, http.StatusTooManyRequests},
-		{"bob", "192.0.2.1:1234", 0, http.StatusNoContent},
-		{"alice", "192.0.2.2:1234", 0, http.StatusNoContent},
-		{"alice", "192.0.2.1:1234", time.Second, http.StatusNoContent},
+		{"user/alice", "192.0.2.1:1234", 0, http.StatusNoContent},
+		{"user/alice", "192.0.2.1:1234", 0, http.StatusTooManyRequests},
+		{"user/bob", "192.0.2.1:1234", 0, http.StatusNoContent},
+		{"service/alice", "192.0.2.1:1234", 0, http.StatusNoContent},
+		{"runner/alice", "192.0.2.1:1234", 0, http.StatusNoContent},
+		{"anonymous/one", "192.0.2.1:1234", 0, http.StatusNoContent},
+		{"anonymous/two", "192.0.2.1:1234", 0, http.StatusTooManyRequests},
+		{"anonymous/two", "192.0.2.2:1234", 0, http.StatusNoContent},
+		{"user/alice", "192.0.2.2:1234", 0, http.StatusNoContent},
+		{"user/alice", "192.0.2.1:1234", time.Second, http.StatusNoContent},
 	} {
 		clock = clock.Add(tc.advance)
 		request := httptest.NewRequest(http.MethodGet, "/"+tc.user, nil)
@@ -46,6 +54,49 @@ func TestLimitAuthenticated(t *testing.T) {
 		router.ServeHTTP(response, request)
 		if response.Code != tc.status || (calls == before+1) != (tc.status == http.StatusNoContent) {
 			t.Fatalf("user=%s address=%s status=%d calls=%d", tc.user, tc.address, response.Code, calls-before)
+		}
+		if tc.status == http.StatusTooManyRequests && response.Header().Get("Retry-After") != "1" {
+			t.Fatal("missing retry delay")
+		}
+	}
+}
+
+func TestLimitIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	clock := time.Unix(1790000000, 0)
+	router := gin.New()
+	router.RedirectTrailingSlash = false
+	_ = router.SetTrustedProxies(nil)
+	router.Use(LimitIP(limit.New(1, 1, func() time.Time { return clock })))
+	calls := 0
+	endpoint := func(c *gin.Context) {
+		calls++
+		c.Status(http.StatusNoContent)
+	}
+	router.POST("/resource", endpoint)
+	router.GET("/resource", endpoint)
+	router.NoRoute(func(c *gin.Context) { c.Status(http.StatusNotFound) })
+	for _, tc := range []struct {
+		method, path, address string
+		advance               time.Duration
+		status                int
+	}{
+		{"GET", "/resource", "192.0.2.1:1234", 0, 204},
+		{"GET", "/resource", "192.0.2.1:5678", 0, 429},
+		{"POST", "/resource", "192.0.2.1:1234", 0, 429},
+		{"GET", "/missing", "192.0.2.1:1234", 0, 429},
+		{"GET", "/resource", "192.0.2.2:1234", 0, 204},
+		{"GET", "/resource", "192.0.2.1:1234", time.Second, 204},
+	} {
+		clock = clock.Add(tc.advance)
+		request := httptest.NewRequest(tc.method, tc.path, nil)
+		request.RemoteAddr = tc.address
+		request.Header.Set("X-Forwarded-For", "203.0.113.1")
+		response := httptest.NewRecorder()
+		before := calls
+		router.ServeHTTP(response, request)
+		if response.Code != tc.status || (calls == before+1) != (tc.status == http.StatusNoContent) {
+			t.Fatalf("%s %s: status=%d calls=%d, want %d", tc.method, tc.path, response.Code, calls-before, tc.status)
 		}
 		if tc.status == http.StatusTooManyRequests && response.Header().Get("Retry-After") != "1" {
 			t.Fatal("missing retry delay")

@@ -116,10 +116,6 @@ func prepareServiceAudit(c *gin.Context, route policy.Route) {
 }
 
 func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
-	if !a.publicLimit.Allow(c.ClientIP()) {
-		middleware.AbortRateLimited(c, 1, "too many requests")
-		return false
-	}
 	if route.Name == "" && route.Subresource == "" {
 		query := c.Request.URL.Query()
 		limit, err := strconv.Atoi(query.Get("limit"))
@@ -133,9 +129,6 @@ func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
 }
 
 func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route, rule resourceRule) bool {
-	if !middleware.AllowAuthenticated(c, a.limits) {
-		return false
-	}
 	if err := rule(c.Request.Context(), who, route); err != nil {
 		c.AbortWithStatusJSON(policyErrorStatus(err), gin.H{"error": err.Error()})
 		return false

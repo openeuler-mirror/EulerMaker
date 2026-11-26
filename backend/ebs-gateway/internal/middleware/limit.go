@@ -9,23 +9,31 @@ import (
 	"ebs-gateway/internal/limit"
 )
 
-// LimitAuthenticated applies the shared per-identity and client-IP request limit.
-func LimitAuthenticated(limits *limit.Buckets) gin.HandlerFunc {
+// LimitIP bounds requests before token verification and account lookups.
+func LimitIP(limits *limit.Buckets) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !AllowAuthenticated(c, limits) {
+		if !limits.Allow(c.ClientIP()) {
+			AbortRateLimited(c, 1, "too many requests")
 			return
 		}
 		c.Next()
 	}
 }
 
-// AllowAuthenticated consumes one request from the same bucket used by LimitAuthenticated.
-func AllowAuthenticated(c *gin.Context, limits *limit.Buckets) bool {
-	if limits.Allow(Principal(c).Subject + "/" + c.ClientIP()) {
-		return true
+// LimitIdentity uses separate keys for authenticated identities and anonymous clients.
+func LimitIdentity(limits *limit.Buckets) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		who := Principal(c)
+		key := "anonymous/" + c.ClientIP()
+		if who.Type != "" {
+			key = string(who.Type) + "/" + who.Subject + "/" + c.ClientIP()
+		}
+		if !limits.Allow(key) {
+			AbortRateLimited(c, 1, "too many requests")
+			return
+		}
+		c.Next()
 	}
-	AbortRateLimited(c, 1, "too many requests")
-	return false
 }
 
 // AbortRateLimited ends the request with a 429 and the caller's retry delay.

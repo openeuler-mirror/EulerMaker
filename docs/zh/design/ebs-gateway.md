@@ -154,9 +154,10 @@ Gateway 不开放 Project 删除路由，工程删除由内部运维通过 apise
 ```text
 Request
   -> Audit
-  -> PublicRead / Auth
-  -> UserResolve（认证用户）
-  -> RateLimit
+  -> ValidateWatchRoute
+  -> LimitIP（认证前按客户端 IP）
+  -> AuthenticateRequest（按路由认证模式解析当前身份）
+  -> LimitIdentity（身份/IP 或匿名 IP）
   -> ProjectAuthorize
   -> AccessLabels
   -> ReverseProxy
@@ -180,7 +181,7 @@ Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 
 | Job | `/apis/ebs/v1/projects/{project}/jobs[/{name}]`、`/projects/{project}/jobs/{name}/status` |
 | 历史 Job | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]`，仅 GET，无 `/status` |
 
-`GET /apis/ebs/v1/build-targets` 仅供已认证用户读取可选的发行版及其架构，与 `service-endpoints` 通过全局请求认证及各自的限流链。限流未触发时，非 Watch 请求携带无效 Token 或未登录时返回 401；Watch 请求由全局 `ValidateWatchRoute` 在认证前拒绝并返回 403，Handler 保留 Runner、Service 身份限制。Gateway 读取内置构建配置，仅返回按名称排序的 `items[].distro` 和 `items[].arches`，不返回镜像地址、Config 元数据或原文。配置不可用时返回 503。Config 不应存放凭据。
+`GET /apis/ebs/v1/build-targets` 仅供已认证用户读取可选的发行版及其架构，与 `service-endpoints` 通过全局请求认证和限流。限流未触发时，非 Watch 请求携带无效 Token 或未登录时返回 401；Watch 请求由全局 `ValidateWatchRoute` 在认证前拒绝并返回 403，Handler 保留 Runner、Service 身份限制。Gateway 读取内置构建配置，仅返回按名称排序的 `items[].distro` 和 `items[].arches`，不返回镜像地址、Config 元数据或原文。配置不可用时返回 503。Config 不应存放凭据。
 
 Runner 通过专用服务地址投影接口读取 Artifact Manager 和 Git Server 的 Runner 地址，不改变上述 Config 读取权限。接口、授权和响应契约见 4.11 节。
 
@@ -190,7 +191,7 @@ Runner 通过专用服务地址投影接口读取 Artifact Manager 和 Git Serve
 
 Gateway 管理 API 不注册 HEAD。公开 GET 可以保留 `Content-Type`、缓存策略和 requestID；不得透传内部 ETag、resourceVersion 或上游身份 header。
 
-匿名请求按客户端 IP 使用独立令牌桶，额度应低于认证调用方；collection 必须设置服务端允许的 `limit` 上限，禁止匿名调用方请求无界列表。Gateway 不注入最终用户身份，使用自身内部身份读取 apiserver 并原样转发对象响应。审计日志使用固定身份 `anonymous`，记录资源、verb、客户端地址、响应数量和 requestID。
+匿名请求与已认证请求共用限流器和额度配置，按 `anonymous/{clientIP}` 隔离计数；collection 必须设置服务端允许的 `limit` 上限，禁止匿名调用方请求无界列表。Gateway 不注入最终用户身份，使用自身内部身份读取 apiserver 并原样转发对象响应。审计日志使用固定身份 `anonymous`，记录资源、verb、客户端地址、响应数量和 requestID。
 
 ### 4.2 Audit
 
@@ -405,7 +406,7 @@ POST /auth/check
 Authorization: Bearer <token>
 ```
 
-该接口不要求 mTLS 客户端证书、服务凭据或其他服务身份。Gateway 验证 JWT 签名、issuer、audience、时间字段和 scope 结构；成功返回认证身份、Token scopes 和过期时间，调用方根据自身需求检查主体类型及权限。Token 非法返回 401，携带非空请求正文返回 400，超过按 `{sub}/{clientIP}` 计算的限流返回 429。接口只确认身份，不执行资源授权。
+该接口不要求 mTLS 客户端证书、服务凭据或其他服务身份。Gateway 验证 JWT 签名、issuer、audience、时间字段和 scope 结构；成功返回认证身份、Token scopes 和过期时间，调用方根据自身需求检查主体类型及权限。Token 非法返回 401，携带非空请求正文返回 400，触发全局 IP 或 `{type}/{sub}/{clientIP}` 限流时返回 429。接口只确认身份，不执行资源授权。
 
 - User：查询当前 IAM User，确认账号名称匹配、已启用且角色与 Token 一致。账号不存在、已禁用或角色不匹配时返回 403。
 - Runner：不查询 User、Runner 或 Job。
@@ -530,30 +531,39 @@ User API 的内部查询不能使用正在校验的普通用户 token，避免�
 
 ### 4.6 RateLimit
 
-gateway 按调用方和客户端地址限流：
+通用限流在全局请求链执行，两层使用独立令牌桶，不在路由或业务 Guard 中重复扣减：
 
-```text
-{sub}/{clientIP}
-```
+- `LimitIP` 位于 Watch 检查之后、认证之前，按客户端 IP 汇总请求，覆盖无效 Token、匿名写请求和未知路径，保护 Token 验证及 IAM 查询。额度耗尽返回 429，不再进入认证。
+- `LimitIdentity` 位于认证之后，匿名和已认证请求统一复用 `limits` 及相同的额度配置。已认证请求使用 `{type}/{sub}/{clientIP}`，没有认证身份的请求使用 `anonymous/{clientIP}`，不同 key 独立计数。此层覆盖公开资源、OpenAPI、providers、登录及注册入口；已认证用户读取公开资源也使用身份 key。认证失败不进入此层，但已消耗前置 IP 额度。
+- `GET /healthz` 使用独立链路，不进入认证或限流；限流器不包含健康检查特判。其他方法、相似路径仍走业务链。业务链中不支持的 Watch 在限流前返回 403。允许的 Watch 仅在建连时扣减请求额度，事件流不逐条扣减，Runner 并发 Watch 限制独立保留。
 
-如果请求未通过认证，不进入业务反向代理。
-
-建议配置：
+配置：
 
 | 配置 | 默认值 | 说明 |
 |------|--------|------|
-| `--rate-limit-per-sec` | `100` | 每秒补充令牌数 |
-| `--rate-limit-burst` | `200` | 突发桶容量 |
+| `--ip-rate-limit-per-sec` | `1000` | 认证前，每个客户端 IP 每秒补充令牌数 |
+| `--ip-rate-limit-burst` | `2000` | 认证前，每个客户端 IP 的突发桶容量 |
+| `--ip-rate-limit-per-sec` | `1000` | 认证前，每个客户端 IP 每秒补充令牌数 |
+| `--ip-rate-limit-burst` | `2000` | 认证前，每个客户端 IP 的突发桶容量 |
+| `--rate-limit-per-sec` | `100` | 每个身份/IP 或匿名 IP key 每秒补充令牌数 |
+| `--rate-limit-burst` | `200` | 每个身份/IP 或匿名 IP key 的桶容量 |
+| `--rate-limit-per-sec` | `100` | 否 | 身份/IP 与匿名 IP key 的每秒令牌数，必须是有限正数 |
+| `--rate-limit-burst` | `200` | 否 | 身份/IP 与匿名 IP key 的桶容量 |
+| `--ip-rate-limit-per-sec` | `1000` | 否 | 认证前每个 IP 每秒令牌数，必须是有限正数 |
+| `--ip-rate-limit-burst` | `2000` | 否 | 认证前 IP 桶容量 |
 
 超过限流返回：
 
 ```text
 HTTP 429 Too Many Requests
+Retry-After: 1
 ```
 
 通用令牌桶按实例、按限流器最多保留 4096 个键；容量用尽时拒绝新键，已有键继续按原额度计算，不驱逐活跃记录。
 请求触发的过期扫描最多每分钟执行一次，清理空闲至少 10 分钟且额度已完全恢复的记录，避免清理导致额度提前重置。
-本地密码登录同时限制每个 IP 每分钟 20 次（桶容量 20）及每个用户名/IP 组合每分钟 5 次（桶容量 5），IP 限流在正文解析和 IAM 查询前执行。
+限流按 Gateway 副本独立计算，不提供集群全局配额。当前不信任转发头，客户端 IP 取自直接连接；位于 Nginx、NAT 或共享代理后的请求可能共用一个 IP 桶，部署时应按汇总流量调整前置 IP 额度，不能直接信任外部传入的 `X-Forwarded-For`。
+
+登录、注册、机器换 Token、OAuth 的专用限制继续由各 Handler 执行，不因全局限流而删除。本地密码登录同时限制每个 IP 每分钟 20 次（桶容量 20）及每个用户名/IP 组合每分钟 5 次（桶容量 5），专用 IP 限流在正文解析和 IAM 查询前执行。专用限制保留各自的 `Retry-After`；通用额度通过不代表专用额度通过。
 
 ### 4.7 上游请求头
 
@@ -771,7 +781,7 @@ Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回任何�
 
 ## 五、路由设计
 
-Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；中间件按顺序执行认证、用户状态确认、限流及资源授权；Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。审计日志覆盖整个请求链。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
+Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch 路由检查 → IP 限流 → 请求认证 → 身份/匿名限流 → 路由授权 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；`AuthenticateRequest` 统一完成 Token 校验和当前账号身份解析，路由及业务 Guard 不重复认证或通用限流。Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。业务链保留审计在外、Recovery 在内的顺序，后续处理 panic 被恢复后，审计仍记录最终响应状态。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
 
 路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/gateway` 在 `router.go` 注册路径、组装中间件，同包的资源 Handler 协调匿名访问、Policy 授权、请求准备及最终响应或代理；`internal/middleware` 负责 Bearer JWT 校验、Service 账号实时核验、User 状态确认、Admin 门卫、已认证请求限流和审计。Policy 的公共入口负责分派，Project、Runner 的授权及写入规则分别集中在各自的业务文件。全局路由链挂载审计与 panic 恢复。身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iam`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
 
@@ -928,7 +938,7 @@ MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 
 ### 7.1 健康检查
 
-仅 `GET /healthz` 直接由 Handler 返回 `200` 和 `text/plain` 正文 `ok\n`，不经过中间件，不检查 Token 或查询参数；例如携带无效 Token 或 `watch=true` 仍返回普通健康响应，不建立 Watch。`POST /healthz`、`/healthz/` 等未注册方法和路径沿用业务链及 NoRoute 处理，不作为探针入口。
+仅 `GET /healthz` 直接由 Handler 返回 `200` 和 `text/plain` 正文 `ok\n`，不经过中间件，不检查 Token 或查询参数；例如携带无效 Token 或 `watch=true` 仍返回普通健康响应，不建立 Watch。`POST /healthz`、`/healthz/` 等未注册方法和路径走业务链的认证、限流及 NoRoute 处理，不作为探针入口。
 
 ```bash
 curl http://localhost:8080/healthz
@@ -1008,7 +1018,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 |------|------|
 | 未认证请求访问业务 API | 仅4.1节白名单资源及其单对象 `/status` 的已注册读取方法进入匿名读取流程；不支持 Watch 的已匹配路由返回403，支持 Watch 的列表、Runner、IAM、写请求和未知资源要求认证，匿名返回401 |
 | 公开对象包含敏感信息 | 匿名接口返回完整对象；公开资源的数据结构和写入校验必须禁止保存密码、Token、私钥等秘密，敏感数据使用非公开资源或独立受控存储 |
-| 匿名批量抓取 | 按客户端IP独立低额度限流，限制collection分页大小，禁止无界list和watch |
+| 匿名批量抓取 | 按 anonymous/IP key 独立计数限流，限制collection分页大小，禁止无界list和watch |
 | 注册接口被滥用或批量占用用户名 | 按客户端 IP 和用户名/IP 组合独立限流；限制请求体和字段；多实例生产部署使用共享计数 |
 | User凭据泄漏 | User REST响应不包含credential字段，密码和哈希不写入日志、审计事件或错误响应 |
 | 登录接口泄漏密码 | 登录请求体不记录日志，gateway 与 apiserver 之间使用 TLS，错误响应不回显输入 |
@@ -1053,7 +1063,8 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | AccessLabels | 普通用户、Ops 和 Admin 创建 Project 时统一写入当前 Token 的 owner user label；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护由运维管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
 | RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、spec 或 metadata |
-| RateLimit | 超过令牌桶容量后返回 429 |
+| RateLimit | 认证前 IP 限流保护 IAM、认证后身份与匿名额度隔离、公开读取不重复扣减、429 和 Retry-After，以及登录/OAuth/Watch 专用限制 |
+| MiddlewareChains | 健康检查独立链路、不消耗额度或产生审计、不访问 IAM；非探针路径仍受保护；业务 panic 恢复后仍记录一次含最终状态的审计 |
 | Proxy | `/apis/ebs/v1/*` 原样透传 |
 | Watch | 已授权用户的 Project 范围 Job Watch 和已授权调用方的 Runner 范围 Job Watch 能够流式转发；校验强制过滤、fieldSelector 注入、BOOKMARK、410 重建、timeoutSeconds 和每 Runner 单连接限制；Runner 列表及其他非允许列表路由的 Watch 均拒绝 |
 | Audit | 请求结束后记录 method/path/status/latency/user |
