@@ -110,7 +110,7 @@ Runner 是集群级资源，`metadata.name` 在集群内唯一。Runner token �
 
 Runner 采用受限自注册模型。Runner 在首次启动时生成 UUID v4 作为安装实例 ID，以小写规范形式持久化到 `--root-dir/runner-instance-id`；文件必须使用原子创建并限制为 Runner 运行用户读写。进程重启和镜像升级必须复用该值，不能按进程重新生成，也不能在多个 Runner 实例之间复制同一数据目录。`instanceID` 只是实例标识，不是认证凭据，不能替代 MachineAccount token，也不得用于授权判断。
 
-对象不存在时通过 collection `POST` 创建；对象已存在时先 GET 最新对象并比较 `spec.instanceID`：相同才视为同一安装实例并允许受限更新，不同则本地终止注册并报告同名冲突，不能覆盖已有对象。创建冲突和并发更新冲突返回 409，Runner 必须重新读取：若最新对象的 `instanceID` 与本地相同，视为前一次创建已成功或同实例并发注册并继续；不同则终止。gateway 不自动重放写请求。
+对象不存在时使用 Runner Token 通过 collection `POST` 自行注册；Gateway 不允许普通用户、Ops/Admin 或 Service Token 代为创建 Runner。对象已存在时先 GET 最新对象并比较 `spec.instanceID`：相同才视为同一安装实例并允许受限更新，不同则本地终止注册并报告同名冲突，不能覆盖已有对象。创建冲突和并发更新冲突返回 409，Runner 必须重新读取：若最新对象的 `instanceID` 与本地相同，视为前一次创建已成功或同实例并发注册并继续；不同则终止。gateway 不自动重放写请求。
 
 `spec.instanceID` 创建后不可修改或清空。若本地 ID 文件丢失，Runner 必须停止并要求恢复原文件或由管理员删除旧 Runner 后重新注册，不能自动接管。删除旧对象前须使其处于 Offline 或 Evicted，其他状态由 apiserver 拒绝，详见 [apiserver 校验规则](ebs-apiserver.md)。删除对象不停止 Runner 进程；未停用的进程重启后仍可重新注册。
 

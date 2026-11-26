@@ -181,7 +181,7 @@ Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 
 | Job | `/apis/ebs/v1/projects/{project}/jobs[/{name}]`、`/projects/{project}/jobs/{name}/status` |
 | 历史 Job | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]`，仅 GET，无 `/status` |
 
-`GET /apis/ebs/v1/build-targets` 仅供已认证用户读取可选的发行版及其架构，与 `service-endpoints` 通过全局请求认证和限流。限流未触发时，非 Watch 请求携带无效 Token 或未登录时返回 401；Watch 请求由全局 `ValidateWatchRoute` 在认证前拒绝并返回 403，Handler 保留 Runner、Service 身份限制。Gateway 读取内置构建配置，仅返回按名称排序的 `items[].distro` 和 `items[].arches`，不返回镜像地址、Config 元数据或原文。配置不可用时返回 503。Config 不应存放凭据。
+`GET /apis/ebs/v1/build-targets` 仅供已认证用户读取可选的发行版及其架构，与 `service-endpoints` 通过全局请求认证和限流。限流未触发时，非 Watch 请求携带无效 Token 或未登录时返回 401；Watch 请求由全局 `ValidateWatchRoute` 在认证前拒绝并返回 403，全局准入规则拒绝 Runner、Service 身份。Gateway 读取内置构建配置，仅返回按名称排序的 `items[].distro` 和 `items[].arches`，不返回镜像地址、Config 元数据或原文。配置不可用时返回 503。Config 不应存放凭据。
 
 Runner 通过专用服务地址投影接口读取 Artifact Manager 和 Git Server 的 Runner 地址，不改变上述 Config 读取权限。接口、授权和响应契约见 4.11 节。
 
@@ -569,7 +569,7 @@ Runner 范围的 Job list-watch 请求还需校验 token 中的 Runner 名与路
 
 gateway 在转发前进行用户级 Project 鉴权。
 
-Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行以下检查：
+Runner 创建接口仅允许有效的 Runner Token 自行注册，普通用户、Ops/Admin 和 Service Token 均不得创建 Runner。全局身份准入依据路由规则限制身份，路由使用 `prepareRunnerCreate → forward`；正文准备阶段必须解析完整 JSON 对象并执行以下检查：
 
 - JWT `sub` 和 `metadata.name` 完全一致；请求不能使用 `generateName`。
 - 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.instanceID`、`spec.type`、`spec.arch`、初始 `spec.taints`。污点仅在创建时允许声明，已有对象的污点由 Ops/Admin 管理，Runner 更新仍须保留原值。
@@ -590,8 +590,8 @@ apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 40
 | 集群级 Config | 禁止 | 同 Owner | `get/list/create/update/patch/delete`，内置对象禁止删除 | 禁止 | 同 Ops |
 | Project 子资源：Job（不含 `/abort`） | 主资源全部支持的 verb，禁止 `/status` 写入 | 主资源 `get/list/create/update/patch`，禁止 `delete` 和 `/status` 写入 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 主资源全部支持的 verb，禁止 `/status` 写入 |
 | Job `/abort` | 本工程 POST | 本工程 POST | 仅 owner/member 工程 POST | 禁止 | 仅 owner/member 工程 POST |
-| Runner 范围 Job list/watch | 禁止 | 禁止 | 允许 | 自身路径 `get/list/watch`，由 apiserver 按 `status.runner` 强制过滤 | 允许 |
-| Runner | 禁止 | 禁止 | `get/list/create/update/patch/delete`，包括 `/status` 读写；禁止 Watch | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 同 Ops |
+| Runner 范围 Job list/watch | 禁止 | 禁止 | 禁止 | 自身路径 `get/list/watch`，由 apiserver 按 `status.runner` 强制过滤 | 禁止 |
+| Runner | 禁止 | 禁止 | `get/list/update/patch/delete`，禁止创建，包括 `/status` 读写；禁止 Watch | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 同 Ops |
 | User 与用户密码 | 仅本人修改密码，禁止 User API | 仅本人修改密码，禁止 User API | 仅修改本人密码，禁止 User API | 禁止 | 非 Admin User 支持 `get/list/update/patch/delete`，另可修改本人密码 |
 | MachineAccount | 禁止 | 禁止 | 禁止 | 禁止 | 通过专用接口 `create`；资源 API 支持 `get/list/delete`，两类账号允许更新 Token 有效期，service 账号还允许更新工程范围和权限 |
 
@@ -628,7 +628,7 @@ Project 或 Runner Job 查询确认对象不存在时返回 404；连接失败�
 
 公开 `GET` 不查询 Project owner/member。普通用户修改 Project 或其他 Project 子资源时，gateway 先读取 Project 并校验 owner/member 权限；需要区分 owner 与 member 的写操作继续按矩阵限制。
 
-Runner 范围 Job list/watch 只允许 GET，拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver 从可信路径生成。
+Runner 范围 Job list/watch 仅允许 Runner Token 对自身路径执行 GET，普通用户、Ops/Admin 和 Service Token 均拒绝；拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver 从可信路径生成。
 
 ### 4.8.1 Job 主动中止授权
 
@@ -781,13 +781,13 @@ Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回任何�
 
 ## 五、路由设计
 
-Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch 路由检查 → IP 限流 → 请求认证 → 身份/匿名限流 → 路由授权 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；`AuthenticateRequest` 统一完成 Token 校验和当前账号身份解析，路由及业务 Guard 不重复认证或通用限流。Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。业务链保留审计在外、Recovery 在内的顺序，后续处理 panic 被恢复后，审计仍记录最终响应状态。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
+Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch 路由检查 → IP 限流 → 请求认证 → 身份/匿名限流 → 身份准入 → 业务授权 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；`AuthenticateRequest` 统一完成 Token 校验和当前账号身份解析，路由及业务 Guard 不重复认证或通用限流。Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。业务链保留审计在外、Recovery 在内的顺序，后续处理 panic 被恢复后，审计仍记录最终响应状态。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
 
 健康检查在业务 `router.Use` 之前直接注册 Handler，返回固定文本，不挂载 `gin.Recovery()`，不产生审计日志，不进入 Watch 检查、认证或限流。Gin 在注册路由时确定中间件链，因此无需在认证白名单和限流器中另行豁免 `/healthz`。
 
 `AuthenticateRequest` 按 HTTP 方法和 Gin `c.FullPath()` 精确分类，未列出的路由默认必须认证，不按 URL 前缀放行：
 
-规则统一维护于 `internal/middleware/routes.go`，以 `routeKey{Method, Path}` 为键，分别定义 `unauthenticatedRoutes`、`optionalAuthenticationRoutes` 和 `watchRoutes` 三份列表。前两份列表互斥；Watch 列表只声明接口能力，不跳过认证或授权。`auth.go`、`watch.go` 查询列表并执行请求检查，不再各自维护路径分支；健康检查在业务链外注册，不加入这些列表。
+规则统一维护于 `internal/middleware/routes.go` 的 `routePolicies`，以 `routeKey{Method, Path}` 为键，每行声明认证模式、允许身份集合和 Watch 能力。身份区分匿名、普通用户、Ops、Admin、Runner、Service；User 角色只在身份类型为 User 时生效。`AuthenticateRequest`、`AdmitIdentity` 和 `ValidateWatchRoute` 读取同一张表，不各自维护路径分支。健康检查在业务链外注册，不加入规则表。
 
 | 认证模式 | 路由范围 | 行为 |
 |----------|----------|------|
@@ -795,13 +795,15 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 | 可选认证 | Project 的 GET 集合、对象和 `/status`；Project 范围 Build、Job、Snapshot、BuildInfo、BuildGraph、RpmRepo 的 GET 集合、对象和 `/status`；OldJob 的 GET 集合和对象 | 无 Authorization 时匿名；携带 Token 必须验证，失败不得降级匿名；允许的 Watch 请求升级为必须认证 |
 | 必须认证 | 其余路由，包括 Config、Script、Runner、IAM、配置投影、业务写操作、`/auth/check` 和密码修改 | 校验 Token 并解析身份后才进入限流和授权 |
 
-未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。全局认证只确认调用方身份，不授予权限；公开 GET 的 Runner/Service Token 仍经过各自授权，角色、工程归属、Runner Job 归属与 Watch 并发限制由后续中间件或 Handler 执行。无需 Bearer 认证的接口不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由其 Handler 处理。
+未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。已注册路由没有配置准入规则，或调用方身份不在允许集合时，`AdmitIdentity` 返回 403，Service 拒绝记录审计结果；不能因 GET 或管理员身份而绕过规则。无需 Bearer 认证的接口按匿名身份准入，不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由 Handler 处理。
 
-Runner 路由统一执行公共认证和限流，Watch 路由范围由全局 `ValidateWatchRoute` 判断，不再单独分组或重复校验。列表、创建、读取、更新、删除、状态读取、状态更新和任务列表分别使用具名业务 Guard，完成该操作的授权和正文检查，失败立即中止，全部通过才进入纯代理 `forward`。更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；任务列表保留查询参数检查，Watch 名额持有到转发结束。公共业务检查通过普通函数复用，不通过上下文记录跨中间件的检查进度。路由测试覆盖每个入口的认证、授权和 Watch 边界。
+全局身份准入只决定能否进入业务处理：Runner 仍须匹配路径名称及 Job 分配关系；Project owner/member、Service 的工程范围和 permission、更新字段权限均由后续业务校验处理。公开读取携带无效 Token 不降级匿名；公开 Job Watch 仍检查工程成员权限，Runner 通过自身任务列表 Watch。
 
-路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/gateway` 在 `router.go` 注册路径、组装中间件，同包的资源 Handler 协调匿名访问、Policy 授权、请求准备及最终响应或代理；`internal/middleware` 负责 Bearer JWT 校验、Service 账号实时核验、User 状态确认、Admin 门卫、已认证请求限流和审计。Policy 的公共入口负责分派，Project、Runner 的授权及写入规则分别集中在各自的业务文件。全局路由链挂载审计与 panic 恢复。身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iam`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
+Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和 `/status` 读取只允许 Ops/Admin；普通对象读取、更新和状态更新允许 Ops/Admin 或 Runner。路由不再挂载重复的身份门卫。`prepareRunnerCreate` 校验注册正文；具名 Runner 读取、更新仍校验 Runner Token 的 Subject 与路径名称一致；更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；`prepareRunnerJobs` 保留路径归属、查询参数和 Watch 并发检查，名额持有到转发结束。通过这些检查后才进入 `forward`。
 
-认证后的用户公开读取仍使用公开读取 Handler；Runner/Service 身份先执行各自授权规则。其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
+路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/gateway` 在 `router.go` 注册路径、组装中间件，同包的资源 Handler 协调匿名访问、Policy 授权、请求准备及最终响应或代理；`internal/middleware` 负责 Bearer JWT 校验、Service 账号实时核验、User 状态确认、路由身份准入、已认证请求限流和审计。Policy 的公共入口负责分派，Project、Runner 的授权及写入规则分别集中在各自的业务文件。全局路由链挂载审计与 panic 恢复。身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iam`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
+
+认证后的用户公开读取仍使用公开读取 Handler；Runner 读取指定 Job 须通过分配关系校验，Service 只在规则允许的业务写入口继续检查工程范围与操作权限。其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
 
 对外注册范围包括：Project 的集合、对象和 `/status`；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
 
@@ -826,7 +828,8 @@ Service Token 的资源权限仅按 4.3.1，不继承下表中的公开读取或
 | `/apis/ebs/v1/projects/{project}/jobs[/{name}][/status]` | 匿名及已认证用户可读取；Runner 仅可读取已分配的具名 Job；watch 需认证并授权 | owner/member 可按 Project 权限写主资源，但不能写 `/status`；Admin 可写主资源；Runner 仅可更新已分配 Job 的 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs/{name}/abort` | 无 | 仅本 Project 的 owner/member 用户可 POST |
 | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]` | 匿名及已认证用户仅可 GET；Runner 不开放 | 无；只注册 GET |
-| `/apis/ebs/v1/runners[/{name}][/status]`、`/apis/ebs/v1/runners/{name}/jobs` | Ops/Admin 可读；Runner 仅可读自身对象及自身范围 Job | Ops/Admin 可管理 Runner；Runner 仅可创建、受限修改自身对象和 `/status`，不得删除 |
+| `/apis/ebs/v1/runners[/{name}][/status]` | Ops/Admin 可读；Runner 仅可读自身普通对象 | 仅 Runner Token 可创建自身对象；Ops/Admin 可管理已有 Runner，但不得创建；Runner 可受限修改自身对象和 `/status`，不得删除 |
+| `/apis/ebs/v1/runners/{name}/jobs` | 仅 Runner Token 可读取或 Watch 自身任务；Ops/Admin 不允许 | 无 |
 | `/apis/ebs/v1/build-targets` | 已认证用户可读取发行版及架构列表；机器身份不可读 | 无 |
 | `/apis/ebs/v1/configs[/{name}]` | 仅 Ops/Admin 可读 | 仅 Ops/Admin 可写；内置 `build-target`、`build-resource`、`services` 不可删除 |
 | `/apis/ebs/v1/service-endpoints` | 仅 Runner Token 可读取各实例的 Runner 地址投影 | 无 |
@@ -848,7 +851,7 @@ GET /apis/ebs/v1/projects/{project}/jobs?watch=true
 
 全局 `ValidateWatchRoute` 按 HTTP 方法和 `c.FullPath()` 精确匹配上述两类 GET 路由模板，不按原始 URL 前缀放行。非 Watch 请求直接继续；其他已匹配路由的 Watch 请求在认证、限流前返回 403，无论是否携带有效 Token。未匹配路由交给既有 `NoRoute`，匿名返回 401、认证成功后返回 404。允许列表只确认接口支持 Watch，不授予访问权限：两类列表仍执行认证、资源授权、查询参数和适用的并发检查，匿名请求返回 401。Runner token 通过自身 Runner 范围接口 Watch Job；用户通过已授权的 Job 列表建立 Watch。
 
-每个 Runner token 同时最多建立一个 Runner 范围 Job watch。超过限制返回429并包含 `Retry-After`；连接正常结束、上游失败或客户端断开时必须释放计数。Runner watch建议使用不超过300秒的 `timeoutSeconds` 定期重连，使 token和权限能够重新校验。
+每个 Gateway 实例内，同一 Runner 同时最多建立一个 Runner 范围 Job watch。超过限制返回429并包含 `Retry-After`；连接正常结束、上游失败或客户端断开时必须释放计数。Runner watch建议使用不超过300秒的 `timeoutSeconds` 定期重连，使 token和权限能够重新校验。
 
 gateway 需要支持流式响应：
 
@@ -1064,15 +1067,16 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | ServiceAuthz | 工程范围与 projects:update/builds:create/builds:abort 独立授权、空授权及跨工程拒绝、匿名读不继承、owner及元数据保护、门禁标签保护、JSON Patch版本冲突、Build中止复用原协议、账号删除及同名重建后按当前授权处理、IAM异常拒绝、不查询同名User |
 | Admin | 普通 user、runner 和 service 均不能管理 MachineAccount，仅 `ebs:admin` 可以创建、查询、删除对象及更新有效期和 service 授权；覆盖 PUT/两类 PATCH、有效期范围、既有 Token 到期时间不变、字段保护、UID/版本冲突及凭据不变 |
 | AdminUser | Admin 只能 get/list/update/patch/delete 非管理员 User，list 不返回管理员，禁止 create、把用户提升为 `ebs:admin`、操作管理员 User 和重置他人密码 |
-| Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许集群级 Config 写操作及 Runner 管理（包含普通对象写入、`/status` 和 Runner 范围 Job list/watch，不开放 Runner 对象 Watch） |
+| Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许集群级 Config 写操作及 Runner 管理（不含创建和 Runner 范围 Job list/watch，包含普通对象更新、`/status`，不开放 Runner 对象 Watch） |
 | ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |
 | AccessLabels | 普通用户、Ops 和 Admin 创建 Project 时统一写入当前 Token 的 owner user label；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
-| RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护由运维管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
+| RunnerObject | 仅 Runner Token 可创建；普通用户、Ops/Admin、Service 拒绝且不得转发；创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护由运维管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
 | RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、spec 或 metadata |
 | RateLimit | 认证前 IP 限流保护 IAM、认证后身份与匿名额度隔离、公开读取不重复扣减、429 和 Retry-After，以及登录/OAuth/Watch 专用限制 |
+| RouteIdentityAdmission | 全部已注册业务路由有规则、方法与模板精确匹配、未配置默认拒绝、角色与机器身份隔离、Service 拒绝审计，以及准入后仍执行对象归属和字段权限检查 |
 | MiddlewareChains | 健康检查独立链路、不消耗额度或产生审计、不访问 IAM；非探针路径仍受保护；业务 panic 恢复后仍记录一次含最终状态的审计 |
 | Proxy | `/apis/ebs/v1/*` 原样透传 |
-| Watch | 已授权用户的 Project 范围 Job Watch 和已授权调用方的 Runner 范围 Job Watch 能够流式转发；校验强制过滤、fieldSelector 注入、BOOKMARK、410 重建、timeoutSeconds 和每 Runner 单连接限制；Runner 列表及其他非允许列表路由的 Watch 均拒绝 |
+| Watch | 已授权用户的 Project 范围 Job Watch 和 Runner Token 自身的 Runner 范围 Job Watch 能够流式转发；校验强制过滤、fieldSelector 注入、BOOKMARK、410 重建、timeoutSeconds 和每 Runner 单连接限制；Runner 列表及其他非允许列表路由的 Watch 均拒绝 |
 | Audit | 请求结束后记录 method/path/status/latency/user |
 
 <a id="oauth-login"></a>

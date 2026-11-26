@@ -6,8 +6,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	ebsv1 "ebs-api/ebs/v1"
-	"ebs-gateway/internal/identity"
-	"ebs-gateway/internal/middleware"
 )
 
 type runnerServiceEndpoint struct {
@@ -18,10 +16,6 @@ type runnerServiceEndpoint struct {
 // serviceEndpoints returns Runner-facing addresses without exposing management URLs or the raw Config.
 func (a *Handler) serviceEndpoints(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
-	if middleware.Principal(c).Type != identity.RunnerType {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Runner identity required"})
-		return
-	}
 	if c.Request.URL.RawQuery != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query parameters are not supported"})
 		return

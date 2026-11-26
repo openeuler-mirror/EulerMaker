@@ -152,7 +152,7 @@ func operations() object {
 		}
 	}
 	op := operation("getRunnerJobs", "Runner", "List or watch assigned Jobs",
-		"Runner may read only its own assignments; Ops/Admin may read the list. Server fixes the Runner filter. "+
+		"Runner tokens only; the path Runner name must match the token subject. User tokens (including Ops/Admin) and Service tokens are forbidden. Server fixes the Runner filter. "+
 			"Watch requires authentication and uses newline-delimited Kubernetes WatchEvent JSON (ADDED/MODIFIED/DELETED/BOOKMARK/ERROR). "+
 			"Runner watch permits one connection per Runner, timeoutSeconds 1–300. Resume with resourceVersion; restart List after 410.",
 		bearer, resourceRef("JobList"), "200")
@@ -287,6 +287,9 @@ func permissions(resource, part, method string) ([]object, string) {
 		return bearer, "Ops/Admin only. Use UID and resourceVersion preconditions when deleting."
 	}
 	if resource == "runners" {
+		if method == "post" {
+			return bearer, "Runner tokens only. Register the Runner whose metadata.name matches the token subject. Ops/Admin and Service tokens cannot create Runners."
+		}
 		return bearer, "Ops/Admin manage Runners; Runner tokens can register/update their own Runner and heartbeat via /status. Runner cannot delete or list all Runners. Deletion requires Offline or Evicted state. Eviction and cancellation use ordinary Runner updates."
 	}
 	if read {

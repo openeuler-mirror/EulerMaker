@@ -229,7 +229,7 @@ func (a *Handler) checkToken(c *gin.Context) {
 // changePassword updates the authenticated user's password after verifying the current password.
 func (a *Handler) changePassword(c *gin.Context) {
 	user := middleware.Principal(c)
-	if c.Param("name") != user.Subject || !user.IsUser() {
+	if c.Param("name") != user.Subject {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		return
 	}
@@ -262,7 +262,7 @@ func (a *Handler) changePassword(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// registerMachine registers a machine account behind the Admin middleware guard.
+// registerMachine registers a machine account after global Admin admission.
 func (a *Handler) registerMachine(c *gin.Context) {
 	var input struct {
 		Name            string                           `json:"name"`

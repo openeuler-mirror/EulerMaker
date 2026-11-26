@@ -1,46 +1,12 @@
 package policy
 
 import (
-	"net/http"
 	"reflect"
 	"strings"
 
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/mutation"
 )
-
-func authorizeRunner(who identity.Principal, route Route) error {
-	if who.IsPrivileged() {
-		return nil
-	}
-	if who.Type != identity.RunnerType || who.Subject == "" {
-		return deny("Runner access denied")
-	}
-	if route.Name == "" {
-		if route.Method == http.MethodPost && route.Subresource == "" {
-			return nil
-		}
-		return deny("Runner collection access denied")
-	}
-	if route.Name != who.Subject {
-		return deny("Runner identity mismatch")
-	}
-	switch route.Subresource {
-	case "":
-		if route.Method == http.MethodGet || route.Method == http.MethodPut || route.Method == http.MethodPatch {
-			return nil
-		}
-	case "status":
-		if route.Method == http.MethodPut || route.Method == http.MethodPatch {
-			return nil
-		}
-	case "jobs":
-		if route.Method == http.MethodGet {
-			return nil
-		}
-	}
-	return deny("Runner operation denied")
-}
 
 func validateRunnerCreate(object mutation.Object, runner string) error {
 	meta := objectMap(object["metadata"])

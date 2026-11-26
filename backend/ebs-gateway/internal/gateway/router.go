@@ -25,6 +25,7 @@ func NewRouter(api *Handler, oauthHandler *oauth.Handler) *gin.Engine {
 		middleware.LimitIP(api.ipLimits),
 		api.auth.AuthenticateRequest,
 		middleware.LimitIdentity(api.limits),
+		middleware.AdmitIdentity,
 	)
 
 	registerAuth(router, api)
@@ -60,12 +61,11 @@ func registerAuth(router *gin.Engine, api *Handler) {
 	router.PUT("/auth/users/:name/password", api.changePassword)
 	router.POST("/auth/machine-token", api.machineToken)
 
-	router.POST("/auth/machineaccounts", middleware.RequireAdmin, api.registerMachine)
+	router.POST("/auth/machineaccounts", api.registerMachine)
 }
 
 func registerIAM(router *gin.Engine, api *Handler) {
 	iam := router.Group("/apis/iam.ebs/v1")
-	iam.Use(middleware.RequireAdmin)
 
 	iam.GET("/users", api.users)
 	iam.GET("/users/:name", api.users)
@@ -89,7 +89,6 @@ func registerConfigProjections(router *gin.Engine, api *Handler) {
 
 func registerConfigs(router *gin.Engine, api *Handler) {
 	configs := router.Group("/apis/ebs/v1/configs")
-	configs.Use(middleware.RequirePrivileged)
 
 	configs.GET("", api.forward)
 	configs.POST("", api.forward)
@@ -103,11 +102,8 @@ func registerConfigs(router *gin.Engine, api *Handler) {
 func registerScripts(router *gin.Engine, api *Handler) {
 	scripts := router.Group("/apis/ebs/v1/scripts")
 	scripts.GET("", api.forward)
-	scripts.GET("/:name", api.forward)
-
-	scripts.Use(middleware.RequirePrivileged)
-
 	scripts.POST("", api.forward)
+	scripts.GET("/:name", api.forward)
 	scripts.PUT("/:name", api.forward)
 	scripts.PATCH("/:name", api.forward)
 	scripts.DELETE("/:name", api.forward)
@@ -132,19 +128,19 @@ func registerProjects(router *gin.Engine, api *Handler) {
 func registerRunners(router *gin.Engine, api *Handler) {
 	runners := router.Group("/apis/ebs/v1/runners")
 
-	runners.GET("/:runner/jobs", api.runnerJobsGuard, api.forward)
-
-	runners.GET("", api.runnerListGuard, api.forward)
-	runners.POST("", api.runnerCreateGuard, api.forward)
+	runners.GET("", api.forward)
+	runners.POST("", api.prepareRunnerCreate, api.forward)
 
 	runners.GET("/:runner", api.runnerReadGuard, api.forward)
 	runners.PUT("/:runner", api.runnerUpdateGuard, api.forward)
 	runners.PATCH("/:runner", api.runnerUpdateGuard, api.forward)
 	runners.DELETE("/:runner", api.runnerDeleteGuard, api.forward)
 
-	runners.GET("/:runner/status", api.runnerStatusReadGuard, api.forward)
+	runners.GET("/:runner/status", api.forward)
 	runners.PUT("/:runner/status", api.runnerStatusUpdateGuard, api.forward)
 	runners.PATCH("/:runner/status", api.runnerStatusUpdateGuard, api.forward)
+
+	runners.GET("/:runner/jobs", api.prepareRunnerJobs, api.forward)
 }
 
 func registerProjectScopedResources(router *gin.Engine, api *Handler) {

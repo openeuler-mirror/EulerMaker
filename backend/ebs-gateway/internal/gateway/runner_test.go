@@ -96,29 +96,28 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		query           string
-		user            bool
 		active          bool
 		upstreamFailure bool
 		wantStatus      int
 		wantCalls       int
 	}{
-		{"runner watch", "watch=true", false, false, false, 200, 1},
-		{"upstream failure releases watch", "watch=true", false, false, true, 502, 1},
-		{"second watch denied", "watch=true", false, true, false, 429, 0},
-		{"query checked before quota", "watch=true&fieldSelector=status.runner=other", false, true, false, 403, 0},
-		{"list does not acquire watch", "watch=false", false, true, false, 200, 1},
-		{"user is not subject to Runner restrictions", "watch=true&fieldSelector=status.runner=other", true, true, false, 200, 1},
+		{"runner list", "", false, false, 200, 1},
+		{"list rejects field selector", "fieldSelector=status.runner=other", false, false, 403, 0},
+		{"runner watch", "watch=true", false, false, 200, 1},
+		{"upstream failure releases watch", "watch=true", false, true, 502, 1},
+		{"second watch denied", "watch=true", true, false, 429, 0},
+		{"query checked before quota", "watch=true&fieldSelector=status.runner=other", true, false, 403, 0},
+		{"list does not acquire watch", "watch=false", true, false, 200, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			var api *Handler
 			client, err := upstream.New("https://api.example", roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				if tc.user && r.URL.Path == "/apis/iam.ebs/v1/users/admin" {
-					body := `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`
-					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+				if r.URL.Path != "/apis/ebs/v1/runners/runner-1/jobs" {
+					t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 				}
 				calls++
-				if !tc.user && tc.query == "watch=true" && !api.runnerWatches.Has("runner-1") {
+				if tc.query == "watch=true" && !api.runnerWatches.Has("runner-1") {
 					t.Error("watch forwarded without holding its quota")
 				}
 				if tc.upstreamFailure {
@@ -137,9 +136,6 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 				api.runnerWatches.Insert("runner-1")
 			}
 			who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}
-			if tc.user {
-				who = identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}
-			}
 			token, err := tokens.Issue(who.Subject, who.Type, who.Scope, time.Hour, time.Now())
 			if err != nil {
 				t.Fatal(err)
@@ -218,6 +214,61 @@ func TestRunnerRoutesRequireAuthorization(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPrivilegedRunnerAccess(t *testing.T) {
+	for _, scope := range []identity.Scope{identity.OpsScope, identity.AdminScope} {
+		t.Run(string(scope), func(t *testing.T) {
+			listed := 0
+			statusReads := 0
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method == http.MethodGet && r.URL.Path == "/apis/ebs/v1/runners" {
+					listed++
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
+				}
+				if r.Method == http.MethodGet && r.URL.Path == "/apis/ebs/v1/runners/runner-1/status" {
+					statusReads++
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"metadata":{"name":"runner-1"},"status":{"phase":"Online"}}`))}, nil
+				}
+				if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/users/runner-1" {
+					t.Fatalf("denied request reached upstream: %s %s", r.Method, r.URL)
+				}
+				body := `{"metadata":{"name":"runner-1"},"spec":{"enabled":true,"scopes":["` + string(scope) + `"]}}`
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			token, err := api.tokens.Issue("runner-1", identity.UserType, scope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := api.Router()
+			for _, tc := range []struct {
+				method, suffix string
+				status         int
+				body           string
+			}{
+				{http.MethodGet, "", http.StatusOK, `{"items":[]}`},
+				{http.MethodGet, "/runner-1/status", http.StatusOK, `{"metadata":{"name":"runner-1"},"status":{"phase":"Online"}}`},
+				{http.MethodPost, "", http.StatusForbidden, `{"error":"identity is not allowed for this route"}`},
+				{http.MethodGet, "/runner-1/jobs", http.StatusForbidden, `{"error":"identity is not allowed for this route"}`},
+				{http.MethodGet, "/runner-1/jobs?watch=true", http.StatusForbidden, `{"error":"identity is not allowed for this route"}`},
+			} {
+				req := httptest.NewRequest(tc.method, "/apis/ebs/v1/runners"+tc.suffix, strings.NewReader(`{"metadata":{"name":"runner-1"}}`))
+				req.Header.Set("Authorization", "Bearer "+token)
+				req.Header.Set("Content-Type", "application/json")
+				res := httptest.NewRecorder()
+				router.ServeHTTP(res, req)
+				if res.Code != tc.status || res.Body.String() != tc.body {
+					t.Fatalf("%s: status=%d body=%s", tc.method, res.Code, res.Body)
+				}
+			}
+			if listed != 1 {
+				t.Fatalf("list requests=%d, want 1", listed)
+			}
+			if statusReads != 1 {
+				t.Fatalf("status requests=%d, want 1", statusReads)
+			}
+		})
 	}
 }
 
