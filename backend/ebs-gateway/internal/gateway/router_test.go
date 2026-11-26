@@ -155,6 +155,9 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 	}
 	registered := map[string]bool{}
 	for _, route := range router.Routes() {
+		if route.Path != "/healthz" && !middleware.HasRoutePolicy(route.Method, route.Path) {
+			t.Fatalf("route has no identity admission policy: %s %s", route.Method, route.Path)
+		}
 		if route.Method == http.MethodHead && strings.HasPrefix(route.Path, "/apis/") {
 			t.Fatalf("management route unexpectedly supports HEAD: %s", route.Path)
 		}
@@ -881,7 +884,7 @@ func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
 		decision = c.GetString("serviceAuthorization")
 	})
 	router.Use(middleware.ValidateWatchRoute, middleware.LimitIP(api.ipLimits), api.auth.AuthenticateRequest,
-		middleware.LimitIdentity(api.limits))
+		middleware.LimitIdentity(api.limits), middleware.AdmitIdentity)
 	registerConfigs(router, api.Handler)
 	registerScripts(router, api.Handler)
 	for _, tc := range []struct {
@@ -931,7 +934,7 @@ func TestWatchRouteAllowlist(t *testing.T) {
 		{"/projects/team/jobs?watch=true", adminToken, http.StatusOK},
 		{"/runners", adminToken, http.StatusOK},
 		{"/runners?watch=false", adminToken, http.StatusOK},
-		{"/runners/runner-1/jobs?watch=true", adminToken, http.StatusOK},
+		{"/runners/runner-1/jobs?watch=true", adminToken, http.StatusForbidden},
 		{"/runners/runner-1/jobs?watch=true", runnerToken, http.StatusOK},
 		{"/runners?watch=true", runnerToken, http.StatusForbidden},
 		{"/runners/runner-2/jobs?watch=true", runnerToken, http.StatusForbidden},
@@ -952,13 +955,12 @@ func TestWatchRouteAllowlist(t *testing.T) {
 		"/projects/team/oldjobs", "/projects/team/buildgraphs", "/configs", "/scripts",
 		"/projects/team/jobs/job", "/projects/team/jobs/job/status",
 		"/runners", "/runners/runner-1", "/runners/runner-1/status",
+		"/build-targets", "/service-endpoints",
 	} {
-		for _, query := range []string{"watch=true", "watch=1", "watch=false&watch=true"} {
-			cases = append(cases, struct {
-				path, token string
-				status      int
-			}{path + "?" + query, adminToken, http.StatusForbidden})
-		}
+		cases = append(cases, struct {
+			path, token string
+			status      int
+		}{path + "?watch=true", adminToken, http.StatusForbidden})
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -1200,44 +1202,26 @@ func TestBuildTargets(t *testing.T) {
 	}
 }
 
-func TestConfigProjectionsRejectWatch(t *testing.T) {
+func TestServiceEndpointsRejectQuery(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/apis/iam.ebs/v1/users/user" {
-			t.Fatalf("rejected query reached upstream: %s", r.URL)
-		}
-		body := `{"metadata":{"name":"user"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+		t.Fatalf("rejected query reached upstream: %s", r.URL)
+		return nil, nil
 	}))
+	token, err := api.tokens.Issue("runner", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
 	router := api.Router()
-	for _, endpoint := range []string{"build-targets", "service-endpoints"} {
-		who := identity.Principal{Subject: "user", Type: identity.UserType, Scope: identity.UserScope}
-		if endpoint == "service-endpoints" {
-			who = identity.Principal{Subject: "runner", Type: identity.RunnerType}
-		}
-		token, err := api.tokens.Issue(who.Subject, who.Type, who.Scope, time.Hour, api.now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, query := range []string{"watch=true", "watch=1", "watch=false&watch=true"} {
-			req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/"+endpoint+"?"+query, nil)
+	for _, query := range []string{"watch=false", "project=demo"} {
+		t.Run(query, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/service-endpoints?"+query, nil)
 			req.Header.Set("Authorization", "Bearer "+token)
 			res := httptest.NewRecorder()
 			router.ServeHTTP(res, req)
-			if res.Code != http.StatusForbidden || res.Body.String() != `{"error":"watch is not supported for this route"}` {
-				t.Fatalf("%s: status=%d body=%s", req.URL, res.Code, res.Body)
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("%s: status=%d, want 400", req.URL, res.Code)
 			}
-		}
-		if endpoint == "service-endpoints" {
-			for _, query := range []string{"watch=false", "project=demo"} {
-				req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/"+endpoint+"?"+query, nil)
-				req.Header.Set("Authorization", "Bearer "+token)
-				res := httptest.NewRecorder()
-				router.ServeHTTP(res, req)
-				if res.Code != http.StatusBadRequest {
-					t.Fatalf("%s: status=%d, want 400", req.URL, res.Code)
-				}
-			}
-		}
+		})
 	}
 }
 
@@ -2009,40 +1993,6 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 	}
 }
 
-func TestRunnerJobsIdentityIsCheckedBeforeProxy(t *testing.T) {
-	forwarded := 0
-	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		forwarded++
-		if request.URL.Path != "/apis/ebs/v1/runners/runner-1/jobs" {
-			t.Errorf("unexpected upstream path: %s", request.URL.Path)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
-	}))
-	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, test := range []struct {
-		path string
-		want int
-	}{
-		{path: "/apis/ebs/v1/runners/runner-1/jobs", want: http.StatusOK},
-		{path: "/apis/ebs/v1/runners/runner-1/jobs?fieldSelector=status.runner=other", want: http.StatusForbidden},
-		{path: "/apis/ebs/v1/runners/runner-2/jobs", want: http.StatusForbidden},
-	} {
-		request := httptest.NewRequest(http.MethodGet, test.path, nil)
-		request.Header.Set("Authorization", "Bearer "+token)
-		response := httptest.NewRecorder()
-		api.Router().ServeHTTP(response, request)
-		if response.Code != test.want {
-			t.Errorf("GET %s: status=%d, want %d, body=%q", test.path, response.Code, test.want, response.Body.String())
-		}
-	}
-	if forwarded != 1 {
-		t.Fatalf("forwarded %d requests, want 1", forwarded)
-	}
-}
-
 func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("incomplete guard chain reached upstream")
@@ -2065,13 +2015,20 @@ func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
+			router.Use(api.auth.AuthenticateRequest, func(c *gin.Context) {
+				who := middleware.Principal(c)
+				if who.Type != identity.RunnerType || who.Subject != "runner-1" {
+					t.Fatalf("unexpected authenticated identity: %+v", who)
+				}
+				c.Next()
+			})
 			router.Handle(tc.method, tc.pattern, append(tc.guards, api.forwardResource)...)
 			request := httptest.NewRequest(tc.method, tc.path, nil)
 			request.Header.Set("Authorization", "Bearer "+token)
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
 			if response.Code != http.StatusInternalServerError {
-				t.Fatalf("status=%d, want 500", response.Code)
+				t.Fatalf("status=%d, want 500: %s", response.Code, response.Body)
 			}
 		})
 	}

@@ -22,14 +22,15 @@ func TestRouteAuthentication(t *testing.T) {
 			t.Errorf("%s %s: mode=%v, want %v", tc.route.Method, tc.route.Path, got, tc.mode)
 		}
 	}
-	for route := range unauthenticatedRoutes {
-		if _, overlap := optionalAuthenticationRoutes[route]; overlap {
-			t.Errorf("route has conflicting authentication modes: %+v", route)
+	for route, rule := range routePolicies {
+		if rule.Identities == 0 {
+			t.Errorf("route has no allowed identities: %+v", route)
 		}
-	}
-	for route := range watchRoutes {
-		if route.Method != http.MethodGet || routeAuthentication(route.Method, route.Path) == authenticationNone {
+		if rule.Watch && (route.Method != http.MethodGet || rule.Authentication == authenticationNone) {
 			t.Errorf("Watch must use GET and cannot bypass authentication: %+v", route)
+		}
+		if (rule.Authentication != authenticationRequired) != (rule.Identities&allowAnonymous != 0) {
+			t.Errorf("anonymous admission and authentication disagree: %+v", route)
 		}
 	}
 }

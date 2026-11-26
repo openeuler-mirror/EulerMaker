@@ -12,19 +12,8 @@ import (
 	"ebs-gateway/internal/policy"
 )
 
-func (a *Handler) runnerListGuard(c *gin.Context) {
-	route := policy.Route{Resource: "runners", Method: http.MethodGet}
-	if !a.checkRunnerAccess(c, route) {
-		return
-	}
-	c.Next()
-}
-
-func (a *Handler) runnerCreateGuard(c *gin.Context) {
+func (a *Handler) prepareRunnerCreate(c *gin.Context) {
 	route := policy.Route{Resource: "runners", Method: http.MethodPost}
-	if !a.checkRunnerAccess(c, route) {
-		return
-	}
 	if !a.prepareCreate(c, middleware.Principal(c), route) {
 		c.Abort()
 		return
@@ -33,12 +22,7 @@ func (a *Handler) runnerCreateGuard(c *gin.Context) {
 }
 
 func (a *Handler) runnerReadGuard(c *gin.Context) {
-	route := policy.Route{
-		Resource: "runners",
-		Name:     c.Param("runner"),
-		Method:   http.MethodGet,
-	}
-	if !a.checkRunnerAccess(c, route) {
+	if !checkRunnerOwnership(c) {
 		return
 	}
 	c.Next()
@@ -50,7 +34,7 @@ func (a *Handler) runnerUpdateGuard(c *gin.Context) {
 		Name:     c.Param("runner"),
 		Method:   c.Request.Method,
 	}
-	if !a.checkRunnerAccess(c, route) {
+	if !checkRunnerOwnership(c) {
 		return
 	}
 	if !a.prepareUpdate(c, middleware.Principal(c), route) {
@@ -61,29 +45,8 @@ func (a *Handler) runnerUpdateGuard(c *gin.Context) {
 }
 
 func (a *Handler) runnerDeleteGuard(c *gin.Context) {
-	route := policy.Route{
-		Resource: "runners",
-		Name:     c.Param("runner"),
-		Method:   http.MethodDelete,
-	}
-	if !a.checkRunnerAccess(c, route) {
-		return
-	}
 	if !a.limitWriteBody(c) {
 		c.Abort()
-		return
-	}
-	c.Next()
-}
-
-func (a *Handler) runnerStatusReadGuard(c *gin.Context) {
-	route := policy.Route{
-		Resource:    "runners",
-		Name:        c.Param("runner"),
-		Subresource: "status",
-		Method:      http.MethodGet,
-	}
-	if !a.checkRunnerAccess(c, route) {
 		return
 	}
 	c.Next()
@@ -96,7 +59,7 @@ func (a *Handler) runnerStatusUpdateGuard(c *gin.Context) {
 		Subresource: "status",
 		Method:      c.Request.Method,
 	}
-	if !a.checkRunnerAccess(c, route) {
+	if !checkRunnerOwnership(c) {
 		return
 	}
 	if !a.prepareUpdate(c, middleware.Principal(c), route) {
@@ -106,44 +69,35 @@ func (a *Handler) runnerStatusUpdateGuard(c *gin.Context) {
 	c.Next()
 }
 
-// runnerJobsGuard holds the Runner watch slot until forwarding ends.
-func (a *Handler) runnerJobsGuard(c *gin.Context) {
-	route := policy.Route{
-		Resource:    "runners",
-		Name:        c.Param("runner"),
-		Subresource: "jobs",
-		Method:      http.MethodGet,
-	}
-	if !a.checkRunnerAccess(c, route) {
+// prepareRunnerJobs validates assignment queries and holds the watch slot until forwarding ends.
+func (a *Handler) prepareRunnerJobs(c *gin.Context) {
+	who := middleware.Principal(c)
+	if c.Param("runner") != who.Subject {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Runner identity mismatch"})
 		return
 	}
-	who := middleware.Principal(c)
-	if who.Type == identity.RunnerType {
-		if !validRunnerJobsQuery(c.Request.URL.Query()) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unsupported Runner Jobs query"})
+	if !validRunnerJobsQuery(c.Request.URL.Query()) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unsupported Runner Jobs query"})
+		return
+	}
+	if c.Query("watch") == "true" {
+		if !a.acquireRunnerWatch(who.Subject) {
+			middleware.AbortRateLimited(c, 5, "too many Runner watches")
 			return
 		}
-		if c.Query("watch") == "true" {
-			if !a.acquireRunnerWatch(who.Subject) {
-				middleware.AbortRateLimited(c, 5, "too many Runner watches")
-				return
-			}
-			defer a.releaseRunnerWatch(who.Subject)
-		}
+		defer a.releaseRunnerWatch(who.Subject)
 	}
 	c.Next()
 }
 
-func (a *Handler) checkRunnerAccess(c *gin.Context, route policy.Route) bool {
+// checkRunnerOwnership supplements global identity admission with object ownership.
+func checkRunnerOwnership(c *gin.Context) bool {
 	who := middleware.Principal(c)
-	if who.Type == "" {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "missing authenticated principal"})
+	if who.Type == identity.RunnerType && c.Param("runner") != who.Subject {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Runner identity mismatch"})
 		return false
 	}
-	if who.Type == identity.ServiceType {
-		prepareServiceAudit(c, route)
-	}
-	return authorizeResource(c, who, route, a.policy.Authorize)
+	return true
 }
 
 func validRunnerJobsQuery(query url.Values) bool {

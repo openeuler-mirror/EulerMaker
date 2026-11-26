@@ -8445,7 +8445,7 @@
         ]
       },
       "post": {
-        "description": "Ops/Admin manage Runners; Runner tokens can register/update their own Runner and heartbeat via /status. Runner cannot delete or list all Runners. Deletion requires Offline or Evicted state. Eviction and cancellation use ordinary Runner updates. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Runner tokens only. Register the Runner whose metadata.name matches the token subject. Ops/Admin and Service tokens cannot create Runners. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "postRunnersList",
         "requestBody": {
           "content": {
@@ -8918,7 +8918,7 @@
     },
     "/apis/ebs/v1/runners/{runner}/jobs": {
       "get": {
-        "description": "Runner may read only its own assignments; Ops/Admin may read the list. Server fixes the Runner filter. Watch requires authentication and uses newline-delimited Kubernetes WatchEvent JSON (ADDED/MODIFIED/DELETED/BOOKMARK/ERROR). Runner watch permits one connection per Runner, timeoutSeconds 1–300. Resume with resourceVersion; restart List after 410.",
+        "description": "Runner tokens only; the path Runner name must match the token subject. User tokens (including Ops/Admin) and Service tokens are forbidden. Server fixes the Runner filter. Watch requires authentication and uses newline-delimited Kubernetes WatchEvent JSON (ADDED/MODIFIED/DELETED/BOOKMARK/ERROR). Runner watch permits one connection per Runner, timeoutSeconds 1–300. Resume with resourceVersion; restart List after 410.",
         "operationId": "getRunnerJobs",
         "parameters": [
           {

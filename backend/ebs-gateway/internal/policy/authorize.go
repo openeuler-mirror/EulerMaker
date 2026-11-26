@@ -44,8 +44,6 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 		return authorizeService(who, route)
 	}
 	switch route.Resource {
-	case "runners":
-		return authorizeRunner(who, route)
 	case "projects":
 		return a.authorizeProject(ctx, who, route)
 	case "builds":

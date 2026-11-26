@@ -232,10 +232,6 @@ func TestRunnerAuthorization(t *testing.T) {
 		route Route
 		allow bool
 	}{
-		{Route{Resource: "runners", Name: "runner-1", Method: http.MethodPatch}, true},
-		{Route{Resource: "runners", Name: "runner-2", Method: http.MethodPatch}, false},
-		{Route{Resource: "runners", Method: http.MethodGet}, false},
-		{Route{Resource: "runners", Name: "runner-1", Subresource: "jobs", Method: http.MethodGet}, true},
 		{Route{Resource: "jobs", Project: "team", Name: "job-1", Method: http.MethodGet}, true},
 		{Route{Resource: "jobs", Project: "team", Name: "job-1", Subresource: "status", Method: http.MethodPatch}, true},
 		{Route{Resource: "jobs", Project: "team", Name: "job-1", Subresource: "status", Method: http.MethodGet}, false},

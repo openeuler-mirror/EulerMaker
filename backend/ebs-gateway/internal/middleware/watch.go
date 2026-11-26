@@ -15,7 +15,7 @@ func ValidateWatchRoute(c *gin.Context) {
 		c.Next()
 		return
 	}
-	if _, ok := watchRoutes[routeKey{Method: c.Request.Method, Path: path}]; ok {
+	if routePolicies[routeKey{Method: c.Request.Method, Path: path}].Watch {
 		c.Next()
 		return
 	}

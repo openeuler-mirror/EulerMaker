@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 
@@ -25,8 +24,6 @@ type resourceAccess struct {
 	route   policy.Route
 	pending resourceCheck
 }
-
-type resourceRule func(context.Context, identity.Principal, policy.Route) error
 
 func (a *Handler) projectGuard(subresource string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -107,7 +104,7 @@ func (a *Handler) authorizeAuthenticatedRoute(c *gin.Context, route policy.Route
 	if who.Type == identity.ServiceType {
 		prepareServiceAudit(c, route)
 	}
-	if authorizeResource(c, who, route, a.policy.Authorize) {
+	if a.authorizeResource(c, who, route) {
 		allowResource(c, route)
 	}
 }
@@ -142,8 +139,8 @@ func preparePublicRead(c *gin.Context, route policy.Route) {
 	c.Set("public", true)
 }
 
-func authorizeResource(c *gin.Context, who identity.Principal, route policy.Route, rule resourceRule) bool {
-	if err := rule(c.Request.Context(), who, route); err != nil {
+func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route) bool {
+	if err := a.policy.Authorize(c.Request.Context(), who, route); err != nil {
 		if who.Type == identity.ServiceType {
 			c.Set("serviceAuthorization", "denied")
 		}
