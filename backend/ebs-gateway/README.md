@@ -18,13 +18,13 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/upstream` | 可信内部读取和流式反向代理 |
 | `internal/limit` | 请求令牌桶 |
 
-从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的授权和公开读取处理。
-全局 [ValidateWatchRoute](internal/middleware/watch.go) 按 [routes.go](internal/middleware/routes.go) 中的方法及 Gin 路由模板允许列表检查 Watch，仅开放 Project Job 列表和 Runner 任务列表。其他已匹配路由的 Watch 在认证前返回 403；允许的 Watch 仍须通过认证、授权、查询及并发检查。
-`GET /healthz` 在业务中间件挂载前直接注册 Handler，不经过审计、Recovery 或 Watch 检查。
-全局 [AuthenticateRequest](internal/middleware/auth.go) 按 [routes.go](internal/middleware/routes.go) 的方法及路由模板列表处理无需认证、可选认证和必须认证的请求，未列出的路由默认必须认证。公开 GET 携带 Token 时必须验证，不能降级匿名；允许的 Watch 必须认证。资源 Guard 仅复用解析后的身份，不重复认证。
+从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的授权和公开读取处理。全局 [ValidateWatchRoute](internal/middleware/watch.go) 按 GET 方法和 Gin 路由模板仅允许 Project Job 列表、Runner 任务列表请求 Watch；其他已匹配路由在认证前返回 403，未匹配路由沿用 NoRoute。允许的 Watch 仍须通过后续认证、授权和查询检查。
+全局 [AuthenticateRequest](internal/middleware/auth.go) 按方法和路由模板处理无需 Bearer 认证、可选认证和必须认证三类请求，默认必须认证。登录等凭据入口和 OpenAPI 不解析 Bearer Token；现有公开 GET 可匿名，但带 Token 时必须验证，Watch 必须认证。各路由不重复认证或通用限流，只负责业务授权；未触发限流时，未知路径匿名返回 401，认证成功后返回 404。
+认证与 Watch 路由规则集中在 [routes.go](internal/middleware/routes.go)：`unauthenticatedRoutes`、`optionalAuthenticationRoutes`、`watchRoutes` 分别列出无需认证、可选认证和允许 Watch 的路由，每行一个方法/路径组合。未列出的业务路由默认必须认证、默认不支持 Watch；`auth.go` 和 `watch.go` 仅执行规则。
+`GET /healthz` 在业务中间件挂载前直接注册 Handler，返回固定文本，不挂载 Recovery，也不经过审计、Watch 检查、认证和限流。业务链保持 Audit 在外、Recovery 在内，后续处理 panic 恢复后仍记录最终状态；认证和限流不包含健康检查特判。
 通用限流由 [limit.go](internal/middleware/limit.go) 在业务链全局执行：认证前按 IP 限流，认证后按身份类型/名称/IP 或匿名 IP 限流。登录、注册、机器换 Token、OAuth 和 Watch 并发限制继续保留，通用限流返回 429 和 `Retry-After: 1`。
-指定 Job 的 GET 路由显式挂载 `runnerJobReadGuard` 检查 Runner 归属；Runner 任务列表的 GET 路由挂载 `runnerJobsListGuard` 检查查询参数和 Watch 并发。漏挂所需 guard 时返回 500，不转发。
-Config 的读写统一要求 Ops/Admin，`GET /apis/ebs/v1/build-targets` 仅向已认证用户投影发行版及架构；公共写请求处理放在 `request.go`。
+指定 Job 的 GET 路由显式挂载 `runnerJobReadGuard` 检查 Runner 归属，漏挂时拒绝转发。Runner 各路由使用独立的业务 Guard，在公共认证和限流之后完成该操作的全部检查，再交给 `forward`；任务列表的 `runnerJobsGuard` 同时检查授权、查询参数和 Watch 并发。Runner 路由不使用检查完成标记，Guard 挂载由路由权限测试覆盖。
+Config 的读写统一要求 Ops/Admin，`GET /apis/ebs/v1/build-targets` 向已认证用户单独投影发行版及架构，与 `service-endpoints` 共用认证和限流中间件，各自的身份限制由 Handler 校验；公共写请求处理放在 `request.go`。
 Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
 测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
 Handler 私有逻辑测试放在对应文件中，真实 HTTP 请求链、路由注册和 OpenAPI 路由契约测试放在 [router_test.go](internal/gateway/router_test.go)。

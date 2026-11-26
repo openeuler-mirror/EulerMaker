@@ -185,7 +185,7 @@ Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 
 
 Runner 通过专用服务地址投影接口读取 Artifact Manager 和 Git Server 的 Runner 地址，不改变上述 Config 读取权限。接口、授权和响应契约见 4.11 节。
 
-匿名请求不开放 Runner、Runner 子资源、User、MachineAccount、非白名单资源的 `/status` 或其他未列入白名单的新资源。公开对象的 `/status` 仅允许单对象读取并返回完整对象；collection 不存在 `/status`。所有 POST、PUT、PATCH、DELETE 均先认证，因此匿名调用方不能借公开 `/status` 修改状态。只要查询参数中出现非 `false` 的 `watch` 值就返回 401；匿名请求不能用 `watch=1`、重复 query 参数或其他等价值绕过。Project、Snapshot、Build、BuildInfo、BuildGraph 和 RpmRepo 本身不支持 watch，也不能由 Gateway 模拟轮询。
+匿名请求不开放 Runner、Runner 子资源、User、MachineAccount、非白名单资源的 `/status` 或其他未列入白名单的新资源。公开对象的 `/status` 仅允许单对象读取并返回完整对象；collection 不存在 `/status`。写操作必须通过认证，因此匿名调用方不能借公开 `/status` 修改状态。查询参数中出现非 `false` 的 `watch` 值即按 Watch 请求处理；不支持 Watch 的已匹配路由直接返回 403，支持 Watch 的列表路由仍要求认证，匿名请求返回 401。`watch=1`、空值或重复参数不能绕过检查。Project、Snapshot、Build、BuildInfo、BuildGraph 和 RpmRepo 本身不支持 watch，也不能由 Gateway 模拟轮询。
 
 公开读取直接透传 apiserver 返回的完整单对象或 List，不解码、删除或重写对象字段。公开范围内的 `metadata`、`spec` 和 `status` 均可被匿名或已认证调用方读取，包括对象后续新增的字段。因此 Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo 和 Job 的 API 数据结构不得保存密码、Token、私钥或其他不应公开的信息；需要保密的数据必须存放在非公开资源或独立的受控存储中。
 
@@ -543,14 +543,8 @@ User API 的内部查询不能使用正在校验的普通用户 token，避免�
 |------|--------|------|
 | `--ip-rate-limit-per-sec` | `1000` | 认证前，每个客户端 IP 每秒补充令牌数 |
 | `--ip-rate-limit-burst` | `2000` | 认证前，每个客户端 IP 的突发桶容量 |
-| `--ip-rate-limit-per-sec` | `1000` | 认证前，每个客户端 IP 每秒补充令牌数 |
-| `--ip-rate-limit-burst` | `2000` | 认证前，每个客户端 IP 的突发桶容量 |
 | `--rate-limit-per-sec` | `100` | 每个身份/IP 或匿名 IP key 每秒补充令牌数 |
 | `--rate-limit-burst` | `200` | 每个身份/IP 或匿名 IP key 的桶容量 |
-| `--rate-limit-per-sec` | `100` | 否 | 身份/IP 与匿名 IP key 的每秒令牌数，必须是有限正数 |
-| `--rate-limit-burst` | `200` | 否 | 身份/IP 与匿名 IP key 的桶容量 |
-| `--ip-rate-limit-per-sec` | `1000` | 否 | 认证前每个 IP 每秒令牌数，必须是有限正数 |
-| `--ip-rate-limit-burst` | `2000` | 否 | 认证前 IP 桶容量 |
 
 超过限流返回：
 
@@ -769,6 +763,8 @@ gateway 使用反向代理将请求转发到 `ebs-apiserver`。
 
 固定路径为 `GET /apis/ebs/v1/service-endpoints`。仅 `type=runner` 的有效 Token 可调用，所有 Runner 获取同一份地址列表，无需在路径或参数中指定 Runner 名。Gateway 每次读取 `Config/services`，返回 `artifactManagers` 和 `gitServer` 两个同级字段，仅包含 Runner 内外网地址；接口不接收 Job 或 Project 参数，也不查询 Job、Project 或选择上传实例。Runner 无需获得 原始 Config 的直接读取权限。
 
+Watch 请求由全局 `ValidateWatchRoute` 在认证前返回 403；Runner 请求通过认证和限流后，携带其他查询参数（包括 `watch=false`）时，Handler 返回 400。
+
 响应示例：
 
 ```json
@@ -787,13 +783,7 @@ Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回任何�
 
 Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch 路由检查 → IP 限流 → 请求认证 → 身份/匿名限流 → 路由授权 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；`AuthenticateRequest` 统一完成 Token 校验和当前账号身份解析，路由及业务 Guard 不重复认证或通用限流。Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。业务链保留审计在外、Recovery 在内的顺序，后续处理 panic 被恢复后，审计仍记录最终响应状态。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
 
-路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/gateway` 在 `router.go` 注册路径、组装中间件，同包的资源 Handler 协调匿名访问、Policy 授权、请求准备及最终响应或代理；`internal/middleware` 负责 Bearer JWT 校验、Service 账号实时核验、User 状态确认、Admin 门卫、已认证请求限流和审计。Policy 的公共入口负责分派，Project、Runner 的授权及写入规则分别集中在各自的业务文件。全局路由链挂载审计与 panic 恢复。身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iam`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
-
-认证后的用户公开读取仍使用公开读取 Handler；Runner/Service 身份先执行各自授权规则。其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
-
-对外注册范围包括：Project 的集合、对象和 `/status`；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
-
-另注册固定路径 `GET /apis/ebs/v1/service-endpoints`，仅供 Runner 身份读取地址投影，不作为 apiserver 资源代理。
+健康检查在业务 `router.Use` 之前直接注册 Handler，返回固定文本，不挂载 `gin.Recovery()`，不产生审计日志，不进入 Watch 检查、认证或限流。Gin 在注册路由时确定中间件链，因此无需在认证白名单和限流器中另行豁免 `/healthz`。
 
 `AuthenticateRequest` 按 HTTP 方法和 Gin `c.FullPath()` 精确分类，未列出的路由默认必须认证，不按 URL 前缀放行：
 
@@ -806,6 +796,16 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 | 必须认证 | 其余路由，包括 Config、Script、Runner、IAM、配置投影、业务写操作、`/auth/check` 和密码修改 | 校验 Token 并解析身份后才进入限流和授权 |
 
 未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。全局认证只确认调用方身份，不授予权限；公开 GET 的 Runner/Service Token 仍经过各自授权，角色、工程归属、Runner Job 归属与 Watch 并发限制由后续中间件或 Handler 执行。无需 Bearer 认证的接口不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由其 Handler 处理。
+
+Runner 路由统一执行公共认证和限流，Watch 路由范围由全局 `ValidateWatchRoute` 判断，不再单独分组或重复校验。列表、创建、读取、更新、删除、状态读取、状态更新和任务列表分别使用具名业务 Guard，完成该操作的授权和正文检查，失败立即中止，全部通过才进入纯代理 `forward`。更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；任务列表保留查询参数检查，Watch 名额持有到转发结束。公共业务检查通过普通函数复用，不通过上下文记录跨中间件的检查进度。路由测试覆盖每个入口的认证、授权和 Watch 边界。
+
+路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/gateway` 在 `router.go` 注册路径、组装中间件，同包的资源 Handler 协调匿名访问、Policy 授权、请求准备及最终响应或代理；`internal/middleware` 负责 Bearer JWT 校验、Service 账号实时核验、User 状态确认、Admin 门卫、已认证请求限流和审计。Policy 的公共入口负责分派，Project、Runner 的授权及写入规则分别集中在各自的业务文件。全局路由链挂载审计与 panic 恢复。身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iam`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
+
+认证后的用户公开读取仍使用公开读取 Handler；Runner/Service 身份先执行各自授权规则。其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
+
+对外注册范围包括：Project 的集合、对象和 `/status`；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
+
+另注册固定路径 `GET /apis/ebs/v1/service-endpoints`，仅供 Runner 身份读取地址投影，不作为 apiserver 资源代理。
 
 ### 5.1 路由与权限速览
 
@@ -918,8 +918,10 @@ bash backend/ebs-gateway/hacks/update-openapi.sh --check
 | `--insecure-skip-verify` | `false` | 否 | 是否跳过 apiserver TLS 校验，仅测试环境使用 |
 | `--apiserver-ca` | 空 | 否 | apiserver CA 文件路径 |
 | `--apiserver-client-cert` / `--apiserver-client-key` | 空 | 否 | apiserver 客户端证书与私钥，启用内部证书认证时成对提供 |
-| `--rate-limit-per-sec` | `100` | 否 | 每秒令牌数，必须是有限正数 |
-| `--rate-limit-burst` | `200` | 否 | 令牌桶容量 |
+| `--rate-limit-per-sec` | `100` | 否 | 身份/IP 与匿名 IP key 的每秒令牌数，必须是有限正数 |
+| `--rate-limit-burst` | `200` | 否 | 身份/IP 与匿名 IP key 的桶容量 |
+| `--ip-rate-limit-per-sec` | `1000` | 否 | 认证前每个 IP 每秒令牌数，必须是有限正数 |
+| `--ip-rate-limit-burst` | `2000` | 否 | 认证前 IP 桶容量 |
 | `--v` | `0` | 否 | klog verbosity |
 | `--vmodule` | 空 | 否 | 按 Go 文件名模式配置 klog verbosity |
 | `--logtostderr` | `true` | 否 | klog 日志输出到 stderr |

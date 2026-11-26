@@ -53,19 +53,6 @@ func (a *Auth) AuthenticateRequest(c *gin.Context) {
 	c.Next()
 }
 
-// RequirePrivileged restricts the route chain to Ops and Admin users.
-func RequirePrivileged(c *gin.Context) {
-	who := Principal(c)
-	if !who.IsPrivileged() {
-		if who.Type == identity.ServiceType {
-			c.Set("serviceAuthorization", "denied")
-		}
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Ops or Admin required"})
-		return
-	}
-	c.Next()
-}
-
 func (a *Auth) verifyToken(header string) (identity.Principal, bool) {
 	parts := strings.Fields(header)
 	if len(parts) != 2 || parts[0] != "Bearer" {
@@ -127,6 +114,19 @@ func (a *Auth) verifyUser(c *gin.Context, who identity.Principal) bool {
 func RequireAdmin(c *gin.Context) {
 	if Principal(c).Scope != identity.AdminScope {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+	c.Next()
+}
+
+// RequirePrivileged restricts the route chain to Ops and Admin users.
+func RequirePrivileged(c *gin.Context) {
+	who := Principal(c)
+	if !who.IsPrivileged() {
+		if who.Type == identity.ServiceType {
+			c.Set("serviceAuthorization", "denied")
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "Ops or Admin required"})
 		return
 	}
 	c.Next()

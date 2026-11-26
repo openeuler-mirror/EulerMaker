@@ -9,12 +9,112 @@ import (
 
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/middleware"
+	"ebs-gateway/internal/policy"
 )
 
-// runnerJobsListGuard checks Runner list queries and holds the watch slot until forwarding ends.
-func (a *Handler) runnerJobsListGuard(c *gin.Context) {
-	access := requireResourceCheck(c, runnerJobsListCheck)
-	if access == nil {
+func (a *Handler) runnerListGuard(c *gin.Context) {
+	route := policy.Route{Resource: "runners", Method: http.MethodGet}
+	if !a.checkRunnerAccess(c, route) {
+		return
+	}
+	c.Next()
+}
+
+func (a *Handler) runnerCreateGuard(c *gin.Context) {
+	route := policy.Route{Resource: "runners", Method: http.MethodPost}
+	if !a.checkRunnerAccess(c, route) {
+		return
+	}
+	if !a.prepareCreate(c, middleware.Principal(c), route) {
+		c.Abort()
+		return
+	}
+	c.Next()
+}
+
+func (a *Handler) runnerReadGuard(c *gin.Context) {
+	route := policy.Route{
+		Resource: "runners",
+		Name:     c.Param("runner"),
+		Method:   http.MethodGet,
+	}
+	if !a.checkRunnerAccess(c, route) {
+		return
+	}
+	c.Next()
+}
+
+func (a *Handler) runnerUpdateGuard(c *gin.Context) {
+	route := policy.Route{
+		Resource: "runners",
+		Name:     c.Param("runner"),
+		Method:   c.Request.Method,
+	}
+	if !a.checkRunnerAccess(c, route) {
+		return
+	}
+	if !a.prepareUpdate(c, middleware.Principal(c), route) {
+		c.Abort()
+		return
+	}
+	c.Next()
+}
+
+func (a *Handler) runnerDeleteGuard(c *gin.Context) {
+	route := policy.Route{
+		Resource: "runners",
+		Name:     c.Param("runner"),
+		Method:   http.MethodDelete,
+	}
+	if !a.checkRunnerAccess(c, route) {
+		return
+	}
+	if !a.limitWriteBody(c) {
+		c.Abort()
+		return
+	}
+	c.Next()
+}
+
+func (a *Handler) runnerStatusReadGuard(c *gin.Context) {
+	route := policy.Route{
+		Resource:    "runners",
+		Name:        c.Param("runner"),
+		Subresource: "status",
+		Method:      http.MethodGet,
+	}
+	if !a.checkRunnerAccess(c, route) {
+		return
+	}
+	c.Next()
+}
+
+func (a *Handler) runnerStatusUpdateGuard(c *gin.Context) {
+	route := policy.Route{
+		Resource:    "runners",
+		Name:        c.Param("runner"),
+		Subresource: "status",
+		Method:      c.Request.Method,
+	}
+	if !a.checkRunnerAccess(c, route) {
+		return
+	}
+	if !a.prepareUpdate(c, middleware.Principal(c), route) {
+		c.Abort()
+		return
+	}
+	c.Next()
+}
+
+// runnerJobsGuard holds the Runner watch slot until forwarding ends.
+func (a *Handler) runnerJobsGuard(c *gin.Context) {
+	route := policy.Route{
+		Resource:    "runners",
+		Name:        c.Param("runner"),
+		Subresource: "jobs",
+		Method:      http.MethodGet,
+	}
+	if !a.checkRunnerAccess(c, route) {
 		return
 	}
 	who := middleware.Principal(c)
@@ -31,8 +131,19 @@ func (a *Handler) runnerJobsListGuard(c *gin.Context) {
 			defer a.releaseRunnerWatch(who.Subject)
 		}
 	}
-	access.pending = noPendingCheck
 	c.Next()
+}
+
+func (a *Handler) checkRunnerAccess(c *gin.Context, route policy.Route) bool {
+	who := middleware.Principal(c)
+	if who.Type == "" {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "missing authenticated principal"})
+		return false
+	}
+	if who.Type == identity.ServiceType {
+		prepareServiceAudit(c, route)
+	}
+	return authorizeResource(c, who, route, a.policy.Authorize)
 }
 
 func validRunnerJobsQuery(query url.Values) bool {
