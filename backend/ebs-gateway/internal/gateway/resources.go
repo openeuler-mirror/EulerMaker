@@ -40,11 +40,6 @@ const (
 
 type resourceRule func(context.Context, identity.Principal, policy.Route) error
 
-func (a *Handler) scriptGuard(c *gin.Context) {
-	route := policy.Route{Resource: "scripts", Name: c.Param("name"), Method: c.Request.Method}
-	a.checkResourceAccess(c, route, authenticatedOnly, policy.AuthorizeScript, noPendingCheck)
-}
-
 // resourceGuard authorizes the route and records any check still required before forwarding.
 func (a *Handler) resourceGuard(resource, projectKey, nameKey, subresource string) gin.HandlerFunc {
 	return func(c *gin.Context) {

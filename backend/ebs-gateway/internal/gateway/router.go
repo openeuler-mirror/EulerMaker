@@ -88,28 +88,28 @@ func registerConfigProjections(router *gin.Engine, api *Handler) {
 
 func registerConfigs(router *gin.Engine, api *Handler) {
 	configs := router.Group("/apis/ebs/v1/configs")
-	configs.Use(api.configGuard)
+	configs.Use(middleware.RequirePrivileged)
 
-	configs.GET("", api.forwardResource)
-	configs.POST("", api.forwardResource)
+	configs.GET("", api.forward)
+	configs.POST("", api.forward)
 
-	configs.GET("/:name", api.forwardResource)
-	configs.PUT("/:name", api.forwardResource)
-	configs.PATCH("/:name", api.forwardResource)
-	configs.DELETE("/:name", api.forwardResource)
+	configs.GET("/:name", api.forward)
+	configs.PUT("/:name", api.forward)
+	configs.PATCH("/:name", api.forward)
+	configs.DELETE("/:name", rejectBuiltInConfigDeletion, api.forward)
 }
 
 func registerScripts(router *gin.Engine, api *Handler) {
 	scripts := router.Group("/apis/ebs/v1/scripts")
-	scripts.Use(api.scriptGuard)
+	scripts.GET("", api.forward)
+	scripts.GET("/:name", api.forward)
 
-	scripts.GET("", api.forwardResource)
-	scripts.POST("", api.forwardResource)
+	scripts.Use(middleware.RequirePrivileged)
 
-	scripts.GET("/:name", api.forwardResource)
-	scripts.PUT("/:name", api.forwardResource)
-	scripts.PATCH("/:name", api.forwardResource)
-	scripts.DELETE("/:name", api.forwardResource)
+	scripts.POST("", api.forward)
+	scripts.PUT("/:name", api.forward)
+	scripts.PATCH("/:name", api.forward)
+	scripts.DELETE("/:name", api.forward)
 }
 
 func registerProjects(router *gin.Engine, api *Handler) {

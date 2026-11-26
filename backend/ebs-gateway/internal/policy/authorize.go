@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	ebsv1 "ebs-api/ebs/v1"
 	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/upstream"
@@ -172,55 +171,6 @@ func (a *Authorizer) jobAbort(ctx context.Context, who identity.Principal, route
 	}
 	if !access.owner && !access.member {
 		return deny("Job abort requires a project member")
-	}
-	return nil
-}
-
-// AuthorizeConfig restricts Config reads and writes to Ops/Admin.
-func AuthorizeConfig(_ context.Context, who identity.Principal, route Route) error {
-	if who.Type == identity.ServiceType {
-		return authorizeService(who, route)
-	}
-	if !who.IsPrivileged() {
-		return deny("Config access requires Ops")
-	}
-	if route.Subresource != "" {
-		return deny("Config subresource is not exposed")
-	}
-	if route.Method == http.MethodDelete && isBuiltInConfig(route.Name) {
-		return deny("built-in Config cannot be deleted")
-	}
-	return nil
-}
-
-func isBuiltInConfig(name string) bool {
-	switch name {
-	case ebsv1.BuildTargetConfigName, ebsv1.BuildResourceConfigName, ebsv1.ServiceConfigName:
-		return true
-	default:
-		return false
-	}
-}
-
-// AuthorizeScript checks Script reads and writes for the authenticated caller.
-func AuthorizeScript(_ context.Context, who identity.Principal, route Route) error {
-	if who.Type == identity.ServiceType {
-		return authorizeService(who, route)
-	}
-	if route.Subresource != "" {
-		return deny("Script subresource is not exposed")
-	}
-	if who.Type == identity.RunnerType {
-		if route.Name != "" && route.Method == http.MethodGet {
-			return nil
-		}
-		return deny("Runner can only read a named Script")
-	}
-	if route.Method == http.MethodGet {
-		return nil
-	}
-	if !who.IsPrivileged() {
-		return deny("Script modification requires Ops")
 	}
 	return nil
 }

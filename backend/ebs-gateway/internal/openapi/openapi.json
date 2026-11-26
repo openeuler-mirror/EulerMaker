@@ -9384,7 +9384,7 @@
     },
     "/apis/ebs/v1/scripts": {
       "get": {
-        "description": "Authenticated users may read/list Scripts; Runner may GET only a named Script.",
+        "description": "Authenticated users and Runner/Service machine identities may read and list Scripts. Watch is not supported.",
         "operationId": "getScriptsList",
         "parameters": [
           {
@@ -9674,7 +9674,7 @@
         ]
       },
       "get": {
-        "description": "Authenticated users may read/list Scripts; Runner may GET only a named Script.",
+        "description": "Authenticated users and Runner/Service machine identities may read and list Scripts. Watch is not supported.",
         "operationId": "getScriptsObject",
         "parameters": [
           {

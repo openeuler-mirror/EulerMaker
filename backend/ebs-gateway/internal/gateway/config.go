@@ -14,18 +14,21 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/middleware"
-	"ebs-gateway/internal/policy"
 )
 
-func (a *Handler) configGuard(c *gin.Context) {
-	route := policy.Route{Resource: "configs", Name: c.Param("name"), Method: c.Request.Method}
-	a.checkResourceAccess(c, route, authenticatedOnly, policy.AuthorizeConfig, noPendingCheck)
+func rejectBuiltInConfigDeletion(c *gin.Context) {
+	switch c.Param("name") {
+	case ebsv1.BuildTargetConfigName, ebsv1.BuildResourceConfigName, ebsv1.ServiceConfigName:
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "built-in Config cannot be deleted"})
+		return
+	}
+	c.Next()
 }
 
 // readConfigContent reads a fixed, server-selected Config for a Gateway projection.
 func (a *Handler) readConfigContent(c *gin.Context, name string, out any) bool {
 	const maxResponse = 5 << 20
-	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet, apiPrefix+"/configs/"+name, nil, nil)
+	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet, "/apis/ebs/v1/configs/"+name, nil, nil)
 	if err != nil {
 		return false
 	}

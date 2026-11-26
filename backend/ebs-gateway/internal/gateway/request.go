@@ -29,6 +29,10 @@ func (a *Handler) forwardRequest(c *gin.Context, who identity.Principal, route p
 			return
 		}
 	}
+	a.forward(c)
+}
+
+func (a *Handler) forward(c *gin.Context) {
 	a.upstream.Forward(c, c.GetBool("public"))
 }
 
