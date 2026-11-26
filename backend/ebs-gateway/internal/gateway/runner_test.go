@@ -87,11 +87,11 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 			if tc.active {
 				api.runnerWatches.Insert("runner-1")
 			}
-			who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
+			who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}
 			if tc.user {
 				who = identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}
 			}
-			token, err := tokens.Issue(who.Subject, who.Runner, who.Type, who.Scope, time.Hour, time.Now())
+			token, err := tokens.Issue(who.Subject, who.Type, who.Scope, time.Hour, time.Now())
 			if err != nil {
 				t.Fatal(err)
 			}

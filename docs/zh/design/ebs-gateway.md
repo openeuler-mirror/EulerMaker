@@ -235,13 +235,12 @@ Gateway 的用户认证按部署配置使用密码或 OAuth；OAuth 流程见第
 }
 ```
 
-Runner JWT 额外包含与 Runner 对象名称一致的 `runner` claim：
+Runner JWT 使用 `type=runner` 标识身份类别，`sub` 保存 Runner 对象名称：
 
 ```json
 {
   "sub": "runner-001",
   "type": "runner",
-  "runner": "runner-001",
   "scopes": [],
   "iss": "ebs-gateway",
   "aud": "ebs-api",
@@ -254,9 +253,8 @@ Runner JWT 额外包含与 Runner 对象名称一致的 `runner` claim：
 
 | Claim | 说明 |
 |------|------|
-| `sub` | 稳定调用方标识；普通用户与 User `metadata.name` 一致，Runner 与 `runner` claim 一致，Service 与 MachineAccount 名称一致 |
+| `sub` | 稳定调用方标识；普通用户与 User `metadata.name` 一致，Runner 与 Runner 对象名称一致，Service 与 MachineAccount 名称一致 |
 | `type` | 主体类别：`user`、`runner` 或 `service` |
-| `runner` | Runner 对象名称，只允许 `type=runner` token 携带且必须提供 |
 | `scopes` | 用户权限；`type=user` 恰好一个，其他类型为空数组 |
 | `iss` | 固定为 `ebs-gateway`，不提供外部配置 |
 | `aud` | 字符串，固定为 `ebs-api`，不提供外部配置 |
@@ -285,11 +283,14 @@ Gateway 必须验证 `sub`、`type`、`scopes`、`iss`、`aud`、`iat`、`nbf`�
 | Service | `service` | `[]` | `POST /auth/machine-token` 使用 service 账号凭据签发 | 否，实时核验 MachineAccount |
 | 管理员 | `user` | 仅 `ebs:admin` | `spec.scopes=["ebs:admin"]` 的 User 通过密码或 OAuth 登录签发 | 是 |
 
-JWT 在线签发包括用户密码/OAuth 认证和机器账号认证：`POST /auth/login` 根据 User 唯一的 `spec.scopes` 项签发 `type=user` 且仅包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 之一的 token；`POST /auth/machine-token` 根据 MachineAccount 类型签发 runner 或 service Token，scopes 均为空。调用方不能指定 type、scope、`sub` 或有效期；runner claim 只从 runner 账号请求中的合法名称生成。用户权限不可重复、未知或组合，主体类型与 scopes 不匹配时返回 401。所有签发路径使用同一 HMAC 密钥和固定 issuer `ebs-gateway`，生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；user、ops 和 admin token 固定为 24 小时，机器账号 token 由 MachineAccount 的 `tokenTTLSeconds` 决定且最长 24 小时。
+JWT 在线签发包括用户密码/OAuth 认证和机器账号认证：`POST /auth/login` 根据 User 唯一的 `spec.scopes` 项签发 `type=user` 且仅包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 之一的 token；`POST /auth/machine-token` 根据 MachineAccount 类型签发 runner 或 service Token，scopes 均为空。调用方不能指定 type、scope、`sub` 或有效期；Runner Token 的 `sub` 从 runner 账号请求中的合法 Runner 名称生成。用户权限不可重复、未知或组合，主体类型与 scopes 不匹配时返回 401。所有签发路径使用同一 HMAC 密钥和固定 issuer `ebs-gateway`，生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；user、ops 和 admin token 固定为 24 小时，机器账号 token 由 MachineAccount 的 `tokenTTLSeconds` 决定且最长 24 小时。
 
 此次 Token 格式变更不兼容缺少 `type` 或仍使用旧机器权限 scope 的 Token；部署后用户需重新登录，Runner 需重新换取 Token。
 
 普通用户 JWT 不携带额外的资源归属信息，`sub` 就是唯一用户身份；Runner 使用独立的 `type=runner`。
+
+认证后的 `Principal` 统一以 `Subject` 保存 JWT `sub`，不另存 Runner 名称。`Type=runner` 时，
+Runner 名称匹配、Job 归属校验和 Watch 并发限制均使用 `Subject`。
 
 认证失败返回：
 
@@ -299,7 +300,7 @@ JWT 在线签发包括用户密码/OAuth 认证和机器账号认证：`POST /au
 | header、签名或算法不合法 | 401 |
 | issuer、audience 或时间 claims 不合法 | 401 |
 | scope 未知、冲突或组合不合法 | 401 |
-| Runner token 缺少合法 `runner` claim | 401 |
+| `sub` 缺失、为空或类型错误 | 401 |
 
 <a id="machine-token"></a>
 
@@ -325,12 +326,12 @@ Gateway 限制请求体大小并拒绝未知字段，调用 `/internal/iam/v1/ma
 
 | 账号类型 | 请求正文 | Token 内容 |
 |----------|----------|------------|
-| `runner` | `{"runner":"runner-001"}` | `type=runner`，`sub`、`runner` 均为请求中的 Runner 名称 |
+| `runner` | `{"runner":"runner-001"}` | `type=runner`，`sub` 为请求中的 Runner 名称 |
 | `service` | `{}` | `type=service`，`sub` 为 MachineAccount 名称 |
 
 两类 Token 的 `scopes=[]`。runner 名称必须原样满足 DNS1123 label；service 请求禁止携带 runner 字段。
 请求不能指定身份类型、主体、有效期或授权列表；认证响应类型缺失或未知时返回 503。
-service 不携带 runner claim，也不映射到同名 User；Runner Token 的既有权限保持不变。
+Service Token 不映射到同名 User；Runner Token 只允许操作自身 Runner 和分配给自己的 Job。
 Runner 的 MachineAccount 名称只作为审计字段 actor；Service Token 的 actor 与 sub 均为机器账号名称。
 
 成功响应为：
@@ -566,7 +567,7 @@ gateway 在转发前进行用户级 Project 鉴权。
 
 Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行以下检查：
 
-- JWT `sub`、`runner` claim 和 `metadata.name` 完全一致；请求不能使用 `generateName`。
+- JWT `sub` 和 `metadata.name` 完全一致；请求不能使用 `generateName`。
 - 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.instanceID`、`spec.type`、`spec.arch`、初始 `spec.taints`。污点仅在创建时允许声明，已有对象的污点由 Ops/Admin 管理，Runner 更新仍须保留原值。
 - `status` 必须为空；不得设置 `resourceVersion`、UID、timestamps、generation、managedFields、annotations、finalizers、ownerReferences、`spec.unschedulable` 或其他管理字段。
 
@@ -615,7 +616,7 @@ curl -X PATCH "${GATEWAY_URL}/apis/ebs/v1/runners/${RUNNER_NAME}/status" \
 
 Scheduler 不再向 Evicted Runner 分配新 Job，已有 Job 继续执行。Runner agent 保留驱逐状态；Ops 和 Admin 可通过同一路径显式更新为 `Offline`（等待新心跳恢复在线）或 `Online` 解除驱逐。
 
-Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称强制过滤 `status.runner`；gateway 校验该路径名称等于 token 的 `runner` claim。客户端传入的 `fieldSelector` 一律拒绝，不能依赖 Runner 客户端自行隐藏对象。单对象 Job `get` 和 `/status` 写入仍必须读取对象并校验 `status.runner` 等于 token 的 `runner` claim，不匹配时返回 403。Job 对象仍不得保存密码、访问令牌、私钥或其他明文敏感信息；执行所需凭据必须通过独立的受控凭据交付机制提供。
+Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称强制过滤 `status.runner`；gateway 校验该路径名称等于 token 的 `sub`。客户端传入的 `fieldSelector` 一律拒绝，不能依赖 Runner 客户端自行隐藏对象。单对象 Job `get` 和 `/status` 写入仍必须读取对象并校验 `status.runner` 等于 token 的 `sub`，不匹配时返回 403。Job 对象仍不得保存密码、访问令牌、私钥或其他明文敏感信息；执行所需凭据必须通过独立的受控凭据交付机制提供。
 
 Project 归属查询通过 `includeFields=metadata.name,metadata.labels` 只读取授权所需字段，不读取软件包配置。
 Project 或 Runner Job 查询确认对象不存在时返回 404；连接失败、上游限流或其他非成功响应返回 503；响应解析失败或 Project 身份不匹配返回 502。
@@ -705,9 +706,9 @@ metadata.ownerReferences
 | Member 更新 Project | 无 | 4.8 节禁止 member 修改 Project，请求返回 403 |
 | Owner/Member 更新 Project 子资源普通路径 | `metadata.labels`、`metadata.annotations`、`spec` | member 禁止 DELETE，但可按 4.8 节执行 update/patch |
 | Owner/Member 更新 Project 子资源 `/status` | `status` | 仅当对应资源暴露 `/status` 且 4.8 节允许该调用方更新时允许 |
-| Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch` | 路径名称必须等于 token 的 `runner` claim；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
-| Runner 更新自身 `/status` | `status.phase`、`status.conditions`、`status.capacity`、`status.allocatable`、`status.addresses`、`status.info`、`status.heartbeat` | 路径名称必须等于 token 的 `runner` claim；`spec` 和全部 metadata 保持不变 |
-| Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.result`、`status.startTime`、`status.endTime`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `runner` claim；Runner 不得修改 `status.runner`；脚本结果及 missingDeps 的使用范围由 apiserver 校验 |
+| Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch` | 路径名称必须等于 token 的 `sub`；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
+| Runner 更新自身 `/status` | `status.phase`、`status.conditions`、`status.capacity`、`status.allocatable`、`status.addresses`、`status.info`、`status.heartbeat` | 路径名称必须等于 token 的 `sub`；`spec` 和全部 metadata 保持不变 |
+| Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.result`、`status.startTime`、`status.endTime`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `sub`；Runner 不得修改 `status.runner`；脚本结果及 missingDeps 的使用范围由 apiserver 校验 |
 | Admin 更新非管理员 User | `metadata.labels`、`metadata.annotations`、`spec.enabled`、`spec.scopes`、`spec.displayName`、`spec.email` | 旧对象和候选对象的 `spec.scopes` 均不得为 `["ebs:admin"]`；候选 scopes 仍由 apiserver 校验为单一合法 User scope |
 
 表中的允许字段是上限；状态值、不可变 spec 字段和资源自身校验规则仍由 apiserver 执行。Runner 的 `instanceID` 不可变、type/arch labels 一致性和 `resourceVersion` 冲突也只由 apiserver 判定，gateway 不重复实现。没有列入允许集合的任何差异都返回 403。gateway 应在审计日志中记录请求方法、原始 patch 类型、旧/新 `resourceVersion`、被拒绝的 JSON Pointer 路径和拒绝原因，但不得记录密码、完整对象或完整 patch。

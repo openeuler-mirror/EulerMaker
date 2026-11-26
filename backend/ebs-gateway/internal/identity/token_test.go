@@ -14,7 +14,7 @@ func TestIssueAndVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Unix(1790000000, 0)
-	issued, err := tokens.Issue("alice", "", UserType, UserScope, time.Hour, now)
+	issued, err := tokens.Issue("alice", UserType, UserScope, time.Hour, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,34 +30,38 @@ func TestIssueAndVerify(t *testing.T) {
 	}
 }
 
-func TestRunnerTypeRequiresMatchingSubject(t *testing.T) {
+func TestRunnerTokenIdentity(t *testing.T) {
 	tokens, err := NewTokens(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32))))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tokens.Issue("runner-a", "runner-b", RunnerType, "", time.Hour, time.Now()); err == nil {
-		t.Fatal("mismatched runner accepted")
+	if _, err := tokens.Issue("", RunnerType, "", time.Hour, time.Now()); err == nil {
+		t.Fatal("empty runner subject accepted")
 	}
-	if _, err := tokens.Issue("runner-a", "runner-a", RunnerType, UserScope, time.Hour, time.Now()); err == nil {
+	if _, err := tokens.Issue("runner-a", RunnerType, UserScope, time.Hour, time.Now()); err == nil {
 		t.Fatal("runner with user scope accepted")
 	}
-	if _, err := tokens.Issue("alice", "", UserType, "", time.Hour, time.Now()); err == nil {
+	if _, err := tokens.Issue("alice", UserType, "", time.Hour, time.Now()); err == nil {
 		t.Fatal("user without a permission scope accepted")
 	}
-	for _, test := range []struct {
-		kind   Type
-		runner string
-	}{
-		{RunnerType, "runner-a"},
-	} {
-		token, err := tokens.Issue("runner-a", test.runner, test.kind, "", time.Hour, time.Now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		who, err := tokens.Verify(token, time.Now())
-		if err != nil || who.Type != test.kind || who.Scope != "" {
-			t.Fatalf("verify %s token: principal=%+v err=%v", test.kind, who, err)
-		}
+	token, err := tokens.Issue("runner-a", RunnerType, "", time.Hour, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	who, err := tokens.Verify(token, time.Now())
+	if err != nil || who.Type != RunnerType || who.Subject != "runner-a" || who.Scope != "" {
+		t.Fatalf("verify runner token: principal=%+v err=%v", who, err)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(token, ".")[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := fields["runner"]; exists {
+		t.Fatal("runner token contains redundant runner claim")
 	}
 }
 
@@ -67,7 +71,7 @@ func TestServiceTokenIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Unix(1790000000, 0)
-	token, err := tokens.Issue("release-management", "", ServiceType, "", time.Hour, now)
+	token, err := tokens.Issue("release-management", ServiceType, "", time.Hour, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,14 +88,14 @@ func TestServiceTokenIdentity(t *testing.T) {
 	if err := json.Unmarshal(payload, &original); err != nil {
 		t.Fatal(err)
 	}
-	if original.Runner != "" || len(original.Scopes) != 0 || original.Scopes == nil {
+	if len(original.Scopes) != 0 || original.Scopes == nil {
 		t.Fatalf("service claims=%+v", original)
 	}
 	for _, test := range []struct {
 		name   string
 		mutate func(*claims)
 	}{
-		{"runner claim", func(c *claims) { c.Runner = c.Subject }},
+		{"empty subject", func(c *claims) { c.Subject = "" }},
 		{"user scope", func(c *claims) { c.Scopes = []Scope{AdminScope} }},
 		{"empty scope entry", func(c *claims) { c.Scopes = []Scope{""} }},
 	} {

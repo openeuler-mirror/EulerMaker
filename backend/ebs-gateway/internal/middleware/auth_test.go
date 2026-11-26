@@ -52,11 +52,7 @@ func TestAuthMiddleware(t *testing.T) {
 				t.Fatal(err)
 			}
 			auth := NewAuth(tokens, iam.New(client), func() time.Time { return now })
-			runner := ""
-			if test.typ == identity.RunnerType {
-				runner = "account"
-			}
-			token, err := tokens.Issue("account", runner, test.typ, test.scope, time.Hour, now)
+			token, err := tokens.Issue("account", test.typ, test.scope, time.Hour, now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -65,7 +61,7 @@ func TestAuthMiddleware(t *testing.T) {
 			router.GET("/", auth.Authenticate, func(c *gin.Context) {
 				called = true
 				who := Principal(c)
-				if who.Subject != "account" || who.Type != test.typ || who.Scope != test.scope || who.Runner != runner {
+				if who.Subject != "account" || who.Type != test.typ || who.Scope != test.scope {
 					t.Errorf("principal = %+v", who)
 				}
 				var grants *identity.ServiceGrants
@@ -148,7 +144,7 @@ func TestRejectedAccountAuditIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			token, err := tokens.Issue("account", "", tc.typ, tc.scope, time.Hour, now)
+			token, err := tokens.Issue("account", tc.typ, tc.scope, time.Hour, now)
 			if err != nil {
 				t.Fatal(err)
 			}

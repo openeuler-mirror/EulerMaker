@@ -18,7 +18,7 @@ func (a *Handler) runnerJobReadGuard(c *gin.Context) {
 		return
 	}
 	who := middleware.Principal(c)
-	if who.Type == identity.RunnerType && !a.runnerOwnsJob(c, who.Runner) {
+	if who.Type == identity.RunnerType && !a.runnerOwnsJob(c, who.Subject) {
 		c.Abort()
 		return
 	}

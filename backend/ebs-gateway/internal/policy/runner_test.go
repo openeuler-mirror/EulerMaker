@@ -11,7 +11,7 @@ import (
 )
 
 func TestRunnerCreateWithInitialTaints(t *testing.T) {
-	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-a", Runner: "runner-a"}
+	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-a"}
 	body := []byte(`{"metadata":{"name":"runner-a"},"spec":{"instanceID":"01234567-89ab-4def-8123-456789abcdef","type":"ct","arch":"x86_64","taints":[{"key":"pool","value":"gating","effect":"NoSchedule"}]}}`)
 	encoded, err := (&Authorizer{}).PrepareCreate(context.Background(), who,
 		Route{Resource: "runners", Method: http.MethodPost}, body)
@@ -49,7 +49,7 @@ func TestRunnerTaintsAreManagedAfterRegistration(t *testing.T) {
 			old := mutation.Object{"metadata": map[string]any{"name": "runner-a"}, "spec": tc.oldSpec}
 			next := mutation.Object{"metadata": map[string]any{"name": "runner-a"}, "spec": tc.newSpec}
 			err := (&Authorizer{}).ValidateUpdate(context.Background(),
-				identity.Principal{Type: identity.RunnerType, Subject: "runner-a", Runner: "runner-a"},
+				identity.Principal{Type: identity.RunnerType, Subject: "runner-a"},
 				Route{Resource: "runners", Name: "runner-a", Method: http.MethodPatch}, old, next)
 			if (err == nil) != tc.allowed {
 				t.Fatalf("ValidateUpdate() = %v, allowed=%v", err, tc.allowed)

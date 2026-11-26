@@ -24,11 +24,11 @@ func (a *Handler) runnerJobsListGuard(c *gin.Context) {
 			return
 		}
 		if c.Query("watch") == "true" {
-			if !a.acquireRunnerWatch(who.Runner) {
+			if !a.acquireRunnerWatch(who.Subject) {
 				middleware.AbortRateLimited(c, 5, "too many Runner watches")
 				return
 			}
-			defer a.releaseRunnerWatch(who.Runner)
+			defer a.releaseRunnerWatch(who.Subject)
 		}
 	}
 	access.pending = noPendingCheck

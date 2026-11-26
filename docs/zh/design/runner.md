@@ -77,7 +77,7 @@ Content-Type: application/json
 }
 ```
 
-`accessToken` 是最长 24 小时的 `type=runner`、`scopes=[]` JWT，token 的 `sub`、`runner` claim 和本地 Runner 名称完全相同；`tokenType` 固定为 `Bearer`；`expiresIn` 是从响应签发时间开始计算的有效秒数，范围为 300～86400。Runner 必须验证三个字段的类型和值，并使用发起交换请求时记录的本地单调时钟加 `expiresIn` 计算保守到期时间，不依赖解析 JWT claims。响应缺失字段、字段类型错误或值超出范围均视为交换失败。Runner 仅在内存中保存短期 token，不将 client secret、Basic header 或完整 token 写入日志和状态对象。
+`accessToken` 是最长 24 小时的 `type=runner`、`scopes=[]` JWT，token 的 `sub` 和本地 Runner 名称完全相同；`tokenType` 固定为 `Bearer`；`expiresIn` 是从响应签发时间开始计算的有效秒数，范围为 300～86400。Runner 必须验证三个字段的类型和值，并使用发起交换请求时记录的本地单调时钟加 `expiresIn` 计算保守到期时间，不依赖解析 JWT claims。响应缺失字段、字段类型错误或值超出范围均视为交换失败。Runner 仅在内存中保存短期 token，不将 client secret、Basic header 或完整 token 写入日志和状态对象。
 
 Runner 在首次注册前获取 token，并在到期前重新交换。建议在剩余有效期小于 10 分钟或总有效期的 20%（取较小值）时刷新，并加入随机抖动避免大量实例同时请求。交换接口返回 401 表示长期凭据无效，400 表示 Runner 名称或请求格式错误，两者均进入低频退避并报告配置错误，不能无限快速重试。429 遵循 `Retry-After`，网络错误和 503 使用带抖动的指数退避。Runner 不使用 refresh token。
 
@@ -106,7 +106,7 @@ PATCH  /apis/ebs/v1/runners/{name}
 PUT    /apis/ebs/v1/runners/{name}/status
 ```
 
-Runner 是集群级资源，`metadata.name` 在集群内唯一。Runner token 的 `sub`、`runner` claim 以及请求对象或路径中的 Runner 名称必须完全相同；Runner 不能 list/watch Runner 集合或访问其他 Runner，并且禁止对所有资源执行 DELETE。
+Runner 是集群级资源，`metadata.name` 在集群内唯一。Runner token 的 `sub` 以及请求对象或路径中的 Runner 名称必须完全相同；Runner 不能 list/watch Runner 集合或访问其他 Runner，并且禁止对所有资源执行 DELETE。
 
 Runner 采用受限自注册模型。Runner 在首次启动时生成 UUID v4 作为安装实例 ID，以小写规范形式持久化到 `--root-dir/runner-instance-id`；文件必须使用原子创建并限制为 Runner 运行用户读写。进程重启和镜像升级必须复用该值，不能按进程重新生成，也不能在多个 Runner 实例之间复制同一数据目录。`instanceID` 只是实例标识，不是认证凭据，不能替代 MachineAccount token，也不得用于授权判断。
 
@@ -135,7 +135,7 @@ GET /apis/ebs/v1/runners/{runner}/jobs
 GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
 ```
 
-`{runner}` 必须与 Runner token 的 `sub` 和 `runner` claim 完全一致。该接口由 apiserver强制按 `status.runner={runner}` 过滤；客户端不能提供或覆盖 `fieldSelector`。list返回当前已分配 Job 和 `metadata.resourceVersion`，watch从该版本继续。
+`{runner}` 必须与 Runner token 的 `sub` 完全一致。该接口由 apiserver强制按 `status.runner={runner}` 过滤；客户端不能提供或覆盖 `fieldSelector`。list返回当前已分配 Job 和 `metadata.resourceVersion`，watch从该版本继续。
 
 Job 是 Project 级资源。Runner 从 list/watch 对象的 `metadata.namespace` 获取所属 Project，并通过 Project API回写 Job状态：
 

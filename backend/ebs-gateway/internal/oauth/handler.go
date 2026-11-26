@@ -409,7 +409,7 @@ func (h *Handler) loginAccount(c *gin.Context, ctx context.Context, state browse
 		respondError(c, failure(503, "OAuthUnavailable"))
 		return
 	}
-	token, err := h.tokens.Issue(user.Name, "", identity.UserType, scope, 24*time.Hour, h.now())
+	token, err := h.tokens.Issue(user.Name, identity.UserType, scope, 24*time.Hour, h.now())
 	if err != nil {
 		respondError(c, err)
 		return
