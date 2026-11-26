@@ -160,7 +160,7 @@ func operations() object {
 	watchResponse(op)
 	add(paths, "/apis/ebs/v1/runners/{runner}/jobs", "get", op)
 	add(paths, "/apis/ebs/v1/build-targets", "get", operation("getBuildTargets", "Config", "List available build targets",
-		"Public read for anonymous callers and users. Returns distributions and architectures, not build images.", optionalBearer, ref("BuildTargets"), "200"))
+		"Authenticated users only. Runner and Service tokens are not allowed. Uses authenticated rate limits. Returns distributions and architectures, not build images. Watch is not supported.", bearer, ref("BuildTargets"), "200"))
 	add(paths, "/apis/ebs/v1/service-endpoints", "get", operation("getServiceEndpoints", "Runner", "Get Runner service addresses",
 		"Runner token only. Returns all configured Runner endpoints, not management internalURL. Watch requests return 403; other query parameters return 400.", bearer, ref("ServiceEndpoints"), "200"))
 	return paths

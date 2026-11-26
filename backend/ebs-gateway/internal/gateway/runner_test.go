@@ -96,6 +96,7 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			router := gin.New()
+			router.Use(api.auth.AuthenticateRequest)
 			router.GET("/runners/:runner/jobs", api.resourceGuard("runners", "", "runner", "jobs"), api.runnerJobsListGuard, api.forwardResource)
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/runners/runner-1/jobs?"+tc.query, nil)

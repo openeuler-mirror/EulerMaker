@@ -1100,7 +1100,7 @@ func TestRegisterRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-func TestPublicBuildTargets(t *testing.T) {
+func TestBuildTargets(t *testing.T) {
 	for _, tc := range []struct {
 		name, content, want string
 		status              int
@@ -1112,16 +1112,35 @@ func TestPublicBuildTargets(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/apis/iam.ebs/v1/users/user" {
+					body := `{"metadata":{"name":"user"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+				}
 				if r.Method != http.MethodGet || r.URL.RequestURI() != "/apis/ebs/v1/configs/build-target" {
 					t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL)
 				}
 				body, _ := json.Marshal(map[string]any{"metadata": map[string]string{"name": "build-target"}, "spec": map[string]string{"content": tc.content}})
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body))}, nil
 			}))
+			api.limits = limit.New(1, 1, api.now)
 			res := httptest.NewRecorder()
-			api.Router().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/build-targets", nil))
+			token, err := api.tokens.Issue("user", identity.UserType, identity.UserScope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/build-targets", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			router := api.Router()
+			router.ServeHTTP(res, req)
 			if res.Code != tc.status || (tc.want != "" && res.Body.String() != tc.want) || strings.Contains(res.Body.String(), "hidden") {
 				t.Fatalf("status=%d response=%s", res.Code, res.Body)
+			}
+			res = httptest.NewRecorder()
+			req = httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/build-targets", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			router.ServeHTTP(res, req)
+			if res.Code != http.StatusTooManyRequests || res.Header().Get("Retry-After") != "1" {
+				t.Fatalf("authenticated limit: status=%d Retry-After=%q", res.Code, res.Header().Get("Retry-After"))
 			}
 		})
 	}
@@ -1648,6 +1667,7 @@ func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
+			router.Use(api.auth.AuthenticateRequest)
 			router.Handle(tc.method, tc.pattern, append(tc.guards, api.forwardResource)...)
 			request := httptest.NewRequest(tc.method, tc.path, nil)
 			request.Header.Set("Authorization", "Bearer "+token)

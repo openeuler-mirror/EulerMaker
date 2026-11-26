@@ -10,6 +10,7 @@ import (
 	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
+	"ebs-gateway/internal/policy"
 )
 
 // Auth verifies tokens and resolves their current account identity.
@@ -38,9 +39,15 @@ func Principal(c *gin.Context) identity.Principal {
 	return value.(identity.Principal)
 }
 
-// Authenticate advances the middleware chain only after VerifyAccess succeeds.
-func (a *Auth) Authenticate(c *gin.Context) {
-	if !a.VerifyAccess(c) {
+// AuthenticateRequest resolves identity once, defaulting to required authentication for unlisted routes.
+func (a *Auth) AuthenticateRequest(c *gin.Context) {
+	mode := routeAuthentication(c.Request.Method, c.FullPath())
+	if mode == authenticationNone || (mode == authenticationOptional &&
+		!policy.HasWatch(c.Request.URL.Query()) && c.GetHeader("Authorization") == "") {
+		c.Next()
+		return
+	}
+	if !a.verifyAccess(c) {
 		return
 	}
 	c.Next()
@@ -55,8 +62,7 @@ func (a *Auth) verifyToken(header string) (identity.Principal, bool) {
 	return who, err == nil
 }
 
-// VerifyAccess authenticates a request without advancing its middleware chain.
-func (a *Auth) VerifyAccess(c *gin.Context) bool {
+func (a *Auth) verifyAccess(c *gin.Context) bool {
 	who, ok := a.verifyToken(c.GetHeader("Authorization"))
 	if !ok {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})

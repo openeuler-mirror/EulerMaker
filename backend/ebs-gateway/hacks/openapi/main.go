@@ -23,6 +23,7 @@ func main() {
 		"info": object{
 			"title": "EulerMaker Gateway API", "version": "v1",
 			"description": "Public Gateway contract. Visibility in this document does not grant access. " +
+				"Authentication is required by default. Public resource reads allow anonymous requests but validate any supplied token; invalid tokens never fall back to anonymous access. " +
 				"GET /healthz directly returns a fixed plain-text response without middleware; business requests retain recovery and audit. " +
 				"Watch is allowed only on GET /apis/ebs/v1/projects/{project}/jobs and GET /apis/ebs/v1/runners/{runner}/jobs; " +
 				"other matched routes reject Watch with 403 before authentication. Allowed Watch requests still require authentication and authorization. " +
