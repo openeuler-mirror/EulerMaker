@@ -16,7 +16,9 @@ func NewRouter(api *Handler, oauthHandler *oauth.Handler) *gin.Engine {
 	router.RedirectFixedPath = false
 	router.RemoveExtraSlash = false
 	_ = router.SetTrustedProxies(nil)
-	router.Use(middleware.Audit(api.now), gin.Recovery())
+	// Register probes before the business middleware chain to avoid auditing or throttling them.
+	registerHealthz(router)
+	router.Use(middleware.Audit(api.now), gin.Recovery(), middleware.ValidateWatchRoute)
 
 	registerAuth(router, api)
 	registerOAuth(router, oauthHandler)
@@ -29,7 +31,6 @@ func NewRouter(api *Handler, oauthHandler *oauth.Handler) *gin.Engine {
 	registerRunners(router, api)
 	registerProjectScopedResources(router, api)
 
-	registerHealthz(router)
 	registerOpenAPI(router)
 
 	router.NoRoute(api.auth.Authenticate, func(c *gin.Context) {
@@ -56,7 +57,7 @@ func registerAuth(router *gin.Engine, api *Handler) {
 
 func registerIAM(router *gin.Engine, api *Handler) {
 	iam := router.Group("/apis/iam.ebs/v1")
-	iam.Use(api.auth.Authenticate, middleware.LimitAuthenticated(api.limits), middleware.RequireAdmin, rejectIAMWatch)
+	iam.Use(api.auth.Authenticate, middleware.LimitAuthenticated(api.limits), middleware.RequireAdmin)
 
 	iam.GET("/users", api.users)
 

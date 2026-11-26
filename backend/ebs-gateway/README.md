@@ -18,7 +18,9 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/upstream` | 可信内部读取和流式反向代理 |
 | `internal/limit` | 请求令牌桶 |
 
-从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的认证、授权、限流和 Watch 检查。
+从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的认证、授权和限流。
+全局 [ValidateWatchRoute](internal/middleware/watch.go) 按 [routes.go](internal/middleware/routes.go) 中的方法及 Gin 路由模板允许列表检查 Watch，仅开放 Project Job 列表和 Runner 任务列表。其他已匹配路由的 Watch 在认证前返回 403；允许的 Watch 仍须通过认证、授权、查询及并发检查。
+`GET /healthz` 在业务中间件挂载前直接注册 Handler，不经过审计、Recovery 或 Watch 检查。
 指定 Job 的 GET 路由显式挂载 `runnerJobReadGuard` 检查 Runner 归属；Runner 任务列表的 GET 路由挂载 `runnerJobsListGuard` 检查查询参数和 Watch 并发。漏挂所需 guard 时返回 500，不转发。
 Config 的读写统一要求 Ops/Admin，`GET /apis/ebs/v1/build-targets` 单独投影发行版及架构；公共写请求处理放在 `request.go`。
 Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。

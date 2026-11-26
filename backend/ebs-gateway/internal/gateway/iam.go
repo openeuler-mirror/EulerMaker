@@ -14,15 +14,6 @@ import (
 	"ebs-gateway/internal/policy"
 )
 
-// rejectIAMWatch disallows watches on all IAM resource routes.
-func rejectIAMWatch(c *gin.Context) {
-	if policy.HasWatch(c.Request.URL.Query()) {
-		c.AbortWithStatus(http.StatusForbidden)
-		return
-	}
-	c.Next()
-}
-
 func (a *Handler) users(c *gin.Context) {
 	switch c.Request.Method {
 	case http.MethodGet:

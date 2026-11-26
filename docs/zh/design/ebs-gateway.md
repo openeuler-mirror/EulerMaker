@@ -820,7 +820,7 @@ GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
 GET /apis/ebs/v1/projects/{project}/jobs?watch=true
 ```
 
-Gateway 仅对上述两类 GET 列表路由开放 Watch，且仍须通过身份与资源权限校验。Runner 列表、具名 Job/Runner 的 GET、`/status`、其他资源及新增加的资源默认不开放 Watch；已认证调用方请求这些路由的 Watch 时返回 403。所有对外 Watch 请求必须认证，匿名请求返回 401。Runner token 通过自身 Runner 范围接口 Watch Job；用户通过已授权的 Job 列表建立 Watch。
+全局 `ValidateWatchRoute` 按 HTTP 方法和 `c.FullPath()` 精确匹配上述两类 GET 路由模板，不按原始 URL 前缀放行。非 Watch 请求直接继续；其他已匹配路由的 Watch 请求在认证、限流前返回 403，无论是否携带有效 Token。未匹配路由交给既有 `NoRoute`，匿名返回 401、认证成功后返回 404。允许列表只确认接口支持 Watch，不授予访问权限：两类列表仍执行认证、资源授权、查询参数和适用的并发检查，匿名请求返回 401。Runner token 通过自身 Runner 范围接口 Watch Job；用户通过已授权的 Job 列表建立 Watch。
 
 每个 Runner token 同时最多建立一个 Runner 范围 Job watch。超过限制返回429并包含 `Retry-After`；连接正常结束、上游失败或客户端断开时必须释放计数。Runner watch建议使用不超过300秒的 `timeoutSeconds` 定期重连，使 token和权限能够重新校验。
 
@@ -916,6 +916,8 @@ MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 
 ### 7.1 健康检查
 
+仅 `GET /healthz` 直接由 Handler 返回 `200` 和 `text/plain` 正文 `ok\n`，不经过中间件，不检查 Token 或查询参数；例如携带无效 Token 或 `watch=true` 仍返回普通健康响应，不建立 Watch。`POST /healthz`、`/healthz/` 等未注册方法和路径沿用业务链及 NoRoute 处理，不作为探针入口。
+
 ```bash
 curl http://localhost:8080/healthz
 ```
@@ -992,7 +994,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 
 | 风险 | 处理 |
 |------|------|
-| 未认证请求访问业务 API | 仅4.1节白名单资源及其单对象 `/status` 的已注册读取方法进入匿名读取流程；watch、Runner、IAM、写请求和未知资源返回401 |
+| 未认证请求访问业务 API | 仅4.1节白名单资源及其单对象 `/status` 的已注册读取方法进入匿名读取流程；不支持 Watch 的已匹配路由返回403，支持 Watch 的列表、Runner、IAM、写请求和未知资源要求认证，匿名返回401 |
 | 公开对象包含敏感信息 | 匿名接口返回完整对象；公开资源的数据结构和写入校验必须禁止保存密码、Token、私钥等秘密，敏感数据使用非公开资源或独立受控存储 |
 | 匿名批量抓取 | 按客户端IP独立低额度限流，限制collection分页大小，禁止无界list和watch |
 | 注册接口被滥用或批量占用用户名 | 按客户端 IP 和用户名/IP 组合独立限流；限制请求体和字段；多实例生产部署使用共享计数 |
