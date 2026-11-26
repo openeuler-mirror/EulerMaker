@@ -84,20 +84,6 @@ func requireResourceCheck(c *gin.Context, expected resourceCheck) *resourceAcces
 	return access
 }
 
-func supportsWatch(route policy.Route) bool {
-	if route.Method != http.MethodGet {
-		return false
-	}
-	switch route.Resource {
-	case "jobs":
-		return route.Project != "" && route.Name == "" && route.Subresource == ""
-	case "runners":
-		return route.Project == "" && route.Name != "" && route.Subresource == "jobs"
-	default:
-		return false
-	}
-}
-
 func (a *Handler) checkResourceAccess(c *gin.Context, route policy.Route, mode accessMode, rule resourceRule, pending resourceCheck) {
 	watch := policy.HasWatch(c.Request.URL.Query())
 	allowPublic := !watch && mode != authenticatedOnly
@@ -109,10 +95,6 @@ func (a *Handler) checkResourceAccess(c *gin.Context, route policy.Route, mode a
 	who := middleware.Principal(c)
 	if who.Type == identity.ServiceType {
 		prepareServiceAudit(c, route)
-	}
-	if watch && !supportsWatch(route) {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "watch is not supported for this route"})
-		return
 	}
 	if allowPublic && (who.Type == "" || who.IsUser()) {
 		if !a.preparePublicRead(c, route) {

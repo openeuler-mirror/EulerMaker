@@ -23,6 +23,9 @@ func main() {
 		"info": object{
 			"title": "EulerMaker Gateway API", "version": "v1",
 			"description": "Public Gateway contract. Visibility in this document does not grant access. " +
+				"GET /healthz directly returns a fixed plain-text response without middleware; business requests retain recovery and audit. " +
+				"Watch is allowed only on GET /apis/ebs/v1/projects/{project}/jobs and GET /apis/ebs/v1/runners/{runner}/jobs; " +
+				"other matched routes reject Watch with 403 before authentication. Allowed Watch requests still require authentication and authorization. " +
 				"Resource permissions are checked on every request. Field-selected responses may omit properties. " +
 				"After an ambiguous write failure, GET the latest object and confirm the intended result before retrying; " +
 				"never replay an old decision with a newly substituted resourceVersion.",

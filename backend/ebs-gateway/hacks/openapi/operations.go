@@ -162,7 +162,7 @@ func operations() object {
 	add(paths, "/apis/ebs/v1/build-targets", "get", operation("getBuildTargets", "Config", "List available build targets",
 		"Public read for anonymous callers and users. Returns distributions and architectures, not build images.", optionalBearer, ref("BuildTargets"), "200"))
 	add(paths, "/apis/ebs/v1/service-endpoints", "get", operation("getServiceEndpoints", "Runner", "Get Runner service addresses",
-		"Runner token only. Returns all configured Runner endpoints, not management internalURL. No query parameters.", bearer, ref("ServiceEndpoints"), "200"))
+		"Runner token only. Returns all configured Runner endpoints, not management internalURL. Watch requests return 403; other query parameters return 400.", bearer, ref("ServiceEndpoints"), "200"))
 	return paths
 }
 

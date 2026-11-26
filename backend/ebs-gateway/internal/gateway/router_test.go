@@ -883,6 +883,13 @@ func TestWatchRouteAllowlist(t *testing.T) {
 		{"/runners/runner-2/jobs?watch=true", runnerToken, http.StatusForbidden},
 		{"/projects/team/jobs?watch=true", runnerToken, http.StatusForbidden},
 		{"/projects/team/jobs?watch=true", "", http.StatusUnauthorized},
+		{"/runners/runner-1/jobs?watch=true", "", http.StatusUnauthorized},
+		{"/projects/team/jobs?watch=true", "invalid", http.StatusUnauthorized},
+		{"/runners/runner-1/jobs?watch=true", "invalid", http.StatusUnauthorized},
+		{"/projects?watch=true", "", http.StatusForbidden},
+		{"/projects?watch=true", "invalid", http.StatusForbidden},
+		{"/unknown?watch=true", "", http.StatusUnauthorized},
+		{"/unknown?watch=true", adminToken, http.StatusNotFound},
 		{"/projects?watch=false", adminToken, http.StatusOK},
 	}
 	for _, path := range []string{
@@ -1132,7 +1139,7 @@ func TestConfigAndScriptRouteGuards(t *testing.T) {
 		{"GET", "/configs/build-target", "", 401},
 		{"GET", "/configs/build-target", "user", 403},
 		{"GET", "/configs/build-target", "runner", 403},
-		{"GET", "/configs/example?watch=true", "", 401},
+		{"GET", "/configs/example?watch=true", "", 403},
 		{"GET", "/configs/example?watch=true", "ops", 403},
 		{"GET", "/configs/example", "ops", 200},
 		{"GET", "/configs/example", "admin", 200},
@@ -1730,5 +1737,46 @@ func TestAdminOwnerProjectPurposePatch(t *testing.T) {
 				t.Fatalf("status=%d writes=%d body=%s", response.Code, writes, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestConfigProjectionsRejectWatch(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/apis/iam.ebs/v1/users/user" {
+			t.Fatalf("rejected query reached upstream: %s", r.URL)
+		}
+		body := `{"metadata":{"name":"user"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	router := api.Router()
+	for _, endpoint := range []string{"build-targets", "service-endpoints"} {
+		who := identity.Principal{Subject: "user", Type: identity.UserType, Scope: identity.UserScope}
+		if endpoint == "service-endpoints" {
+			who = identity.Principal{Subject: "runner", Type: identity.RunnerType}
+		}
+		token, err := api.tokens.Issue(who.Subject, who.Type, who.Scope, time.Hour, api.now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, query := range []string{"watch=true", "watch=1", "watch=false&watch=true"} {
+			req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/"+endpoint+"?"+query, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, req)
+			if res.Code != http.StatusForbidden || res.Body.String() != `{"error":"watch is not supported for this route"}` {
+				t.Fatalf("%s: status=%d body=%s", req.URL, res.Code, res.Body)
+			}
+		}
+		if endpoint == "service-endpoints" {
+			for _, query := range []string{"watch=false", "project=demo"} {
+				req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/"+endpoint+"?"+query, nil)
+				req.Header.Set("Authorization", "Bearer "+token)
+				res := httptest.NewRecorder()
+				router.ServeHTTP(res, req)
+				if res.Code != http.StatusBadRequest {
+					t.Fatalf("%s: status=%d, want 400", req.URL, res.Code)
+				}
+			}
+		}
 	}
 }
