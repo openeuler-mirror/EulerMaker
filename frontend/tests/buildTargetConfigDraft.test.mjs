@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse as parseComponent } from "@vue/compiler-sfc";
 import ts from "typescript";
 import { parse, stringify } from "yaml";
 
@@ -45,12 +46,22 @@ test("project selectors use only the published distro and architecture choices",
     outputText.replace(/^import .*;$/gm, "").replace("export function", "function") + "; return useBuildTargetConfig()"
   );
   let fail = false;
-  const choices = setup(value => ({ value }), getter => ({ get value() { return getter(); } }), () => {}, async path => {
+  let requests = 0;
+  const mounted = [];
+  const choices = setup(value => ({ value }), getter => ({ get value() { return getter(); } }), callback => mounted.push(callback), async path => {
+    requests++;
     assert.equal(path, "/apis/ebs/v1/build-targets");
     if (fail) throw new Error("unavailable");
     return { items: [{ distro: "oe", arches: ["aarch64", "x86_64"] }] };
   }, () => "loadFailed");
-  await choices.reload();
+  for (const callback of mounted) callback();
+  assert.equal(requests, 0, "mounting a page must not request build targets");
+  assert.equal(choices.loading.value, false);
+  const first = choices.reload();
+  const concurrent = choices.reload();
+  assert.equal(choices.loading.value, true);
+  assert.equal(requests, 1, "concurrent form requests should share one request");
+  await Promise.all([first, concurrent]);
   assert.deepEqual(choices.operatingSystems.value, ["oe"]);
   assert.deepEqual(choices.arches("oe"), ["aarch64", "x86_64"]);
   assert.equal(choices.supports({ os: "oe", arch: "x86_64" }), true);
@@ -59,4 +70,45 @@ test("project selectors use only the published distro and architecture choices",
   await choices.reload();
   assert.equal(choices.supports({ os: "oe", arch: "x86_64" }), false);
   assert.equal(choices.error.value, "loadFailed");
+  assert.equal(choices.loading.value, false);
+  fail = false;
+  await choices.reload();
+  assert.equal(choices.error.value, "");
+  assert.equal(choices.supports({ os: "oe", arch: "aarch64" }), true);
+});
+
+test("project creation loads build targets on demand, but browsing and YAML import do not", () => {
+  const component = readFileSync(new URL("../src/views/ProjectsView.vue", import.meta.url), "utf8");
+  const { descriptor } = parseComponent(component);
+  const source = ts.createSourceFile("ProjectsView.ts", descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true);
+  const openDialog = source.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === "openDialog");
+  const { outputText } = ts.transpileModule(openDialog.getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  });
+  let loads = 0;
+  const redirects = [];
+  const state = {
+    actionErrorKey: { value: "" }, successKey: { value: "" }, submitErrorKey: { value: "" },
+    session: { authenticated: false }, canCreate: { value: false }, dialog: { value: "" },
+    router: { push: route => redirects.push(route) },
+    reloadTargetConfig: async () => { loads++; },
+  };
+  const open = new Function(...Object.keys(state), outputText + "; return openDialog;")(...Object.values(state));
+  assert.equal(loads, 0);
+  open("create");
+  assert.equal(redirects[0].name, "login");
+  assert.equal(loads, 0);
+  state.session.authenticated = true;
+  open("create");
+  assert.equal(state.actionErrorKey.value, "projects.noPermission");
+  assert.equal(loads, 0);
+  state.canCreate.value = true;
+  open("import");
+  assert.equal(state.dialog.value, "import");
+  assert.equal(loads, 0);
+  open("create");
+  assert.equal(state.dialog.value, "create");
+  assert.equal(loads, 1);
+  open("create");
+  assert.equal(loads, 2, "reopening the form refreshes build targets");
 });
