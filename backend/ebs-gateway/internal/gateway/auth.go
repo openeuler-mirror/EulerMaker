@@ -136,7 +136,7 @@ func (a *Handler) login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	token, err := a.tokens.Issue(input.Username, "", identity.UserType, scope, 24*time.Hour, a.now())
+	token, err := a.tokens.Issue(input.Username, identity.UserType, scope, 24*time.Hour, a.now())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token unavailable"})
 		return
@@ -183,14 +183,14 @@ func (a *Handler) machineToken(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "service token request must be empty"})
 			return
 		}
-		token, err = a.tokens.Issue(spec.Name, "", identity.ServiceType, "", time.Duration(ttl)*time.Second, a.now())
+		token, err = a.tokens.Issue(spec.Name, identity.ServiceType, "", time.Duration(ttl)*time.Second, a.now())
 	} else {
 		var runner string
 		if err := json.Unmarshal(input.Runner, &runner); err != nil || !validUsername(runner) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runner"})
 			return
 		}
-		token, err = a.tokens.Issue(runner, runner, identity.RunnerType, "", time.Duration(ttl)*time.Second, a.now())
+		token, err = a.tokens.Issue(runner, identity.RunnerType, "", time.Duration(ttl)*time.Second, a.now())
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token unavailable"})
@@ -210,9 +210,6 @@ func (a *Handler) checkToken(c *gin.Context) {
 	}
 	user := middleware.Principal(c)
 	name := user.Subject
-	if user.Type == identity.RunnerType {
-		name = user.Runner
-	}
 	scopes := make([]identity.Scope, 0, 1)
 	if user.Scope != "" {
 		scopes = append(scopes, user.Scope)

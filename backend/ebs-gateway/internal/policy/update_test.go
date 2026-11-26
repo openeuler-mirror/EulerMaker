@@ -11,7 +11,7 @@ import (
 )
 
 func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
-	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
+	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}
 	route := Route{Resource: "jobs", Project: "team", Name: "job-1", Subresource: "status", Method: http.MethodPatch}
 	old := mutation.Object{
 		"apiVersion": "ebs/v1", "kind": "Job",
@@ -99,7 +99,7 @@ func TestUpdateVersionAndStatusBoundaries(t *testing.T) {
 				t.Fatal(err)
 			}
 			tc.change(candidate)
-			who := identity.Principal{Type: identity.RunnerType, Subject: "worker", Runner: "worker"}
+			who := identity.Principal{Type: identity.RunnerType, Subject: "worker"}
 			route := Route{Resource: tc.resource, Name: "worker", Subresource: tc.subresource, Method: http.MethodPatch}
 			err = (&Authorizer{}).ValidateUpdate(context.Background(), who, route, old, candidate)
 			if tc.want == 0 {
@@ -114,7 +114,7 @@ func TestUpdateVersionAndStatusBoundaries(t *testing.T) {
 }
 
 func TestRunnerActiveJobsStatusUpdate(t *testing.T) {
-	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
+	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}
 	route := Route{Resource: "runners", Name: "runner-1", Subresource: "status", Method: http.MethodPatch}
 	for _, count := range []int{2, 0} {
 		old := mutation.Object{"status": map[string]any{"phase": "Online", "activeJobs": 1}}

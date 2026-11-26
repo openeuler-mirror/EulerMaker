@@ -174,7 +174,7 @@ func validateStatusUpdate(who identity.Principal, route Route, old, candidate mu
 	case "runners":
 		allowed = map[string]bool{"phase": true, "conditions": true, "capacity": true, "allocatable": true, "activeJobs": true, "addresses": true, "info": true, "heartbeat": true}
 	case "jobs":
-		if oldStatus["runner"] != who.Runner || newStatus["runner"] != who.Runner {
+		if oldStatus["runner"] != who.Subject || newStatus["runner"] != who.Subject {
 			return deny("Job is not assigned to Runner")
 		}
 		allowed = map[string]bool{"phase": true, "stage": true, "result": true, "startTime": true, "endTime": true, "message": true}

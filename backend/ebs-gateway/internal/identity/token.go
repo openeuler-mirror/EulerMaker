@@ -23,21 +23,24 @@ const (
 )
 
 type Scope string
+
+const (
+	UserScope  Scope = "ebs:user"
+	OpsScope   Scope = "ebs:ops"
+	AdminScope Scope = "ebs:admin"
+)
+
 type Type string
 
 const (
-	UserScope   Scope = "ebs:user"
-	OpsScope    Scope = "ebs:ops"
-	AdminScope  Scope = "ebs:admin"
-	UserType    Type  = "user"
-	RunnerType  Type  = "runner"
-	ServiceType Type  = "service"
+	UserType    Type = "user"
+	RunnerType  Type = "runner"
+	ServiceType Type = "service"
 )
 
 type Principal struct {
 	Type      Type
 	Subject   string
-	Runner    string
 	Scope     Scope
 	ID        string
 	ExpiresAt time.Time
@@ -60,7 +63,6 @@ func (p Principal) IsPrivileged() bool {
 type claims struct {
 	Type      Type    `json:"type"`
 	Subject   string  `json:"sub"`
-	Runner    string  `json:"runner,omitempty"`
 	Scopes    []Scope `json:"scopes"`
 	Issuer    string  `json:"iss"`
 	Audience  string  `json:"aud"`
@@ -82,8 +84,8 @@ func NewTokens(base64Secret string) (*Tokens, error) {
 	return &Tokens{secret: secret}, nil
 }
 
-func (t *Tokens) Issue(subject, runner string, kind Type, scope Scope, ttl time.Duration, now time.Time) (string, error) {
-	if subject == "" || ttl <= 0 || ttl > maxAge || !validIdentity(kind, scope, runner, subject) {
+func (t *Tokens) Issue(subject string, kind Type, scope Scope, ttl time.Duration, now time.Time) (string, error) {
+	if subject == "" || ttl <= 0 || ttl > maxAge || !validIdentity(kind, scope) {
 		return "", errors.New("invalid token identity or lifetime")
 	}
 	random := make([]byte, 16)
@@ -97,7 +99,6 @@ func (t *Tokens) Issue(subject, runner string, kind Type, scope Scope, ttl time.
 	c := claims{
 		Type:      kind,
 		Subject:   subject,
-		Runner:    runner,
 		Scopes:    scopes,
 		Issuer:    issuer,
 		Audience:  audience,
@@ -146,7 +147,6 @@ func (t *Tokens) Verify(token string, now time.Time) (Principal, error) {
 	principal := Principal{
 		Type:      c.Type,
 		Subject:   c.Subject,
-		Runner:    c.Runner,
 		ID:        c.ID,
 		ExpiresAt: time.Unix(c.ExpiresAt, 0),
 	}
@@ -173,7 +173,7 @@ func validClaims(c claims, now time.Time) bool {
 	if len(c.Scopes) == 1 {
 		scope = c.Scopes[0]
 	}
-	if !validIdentity(c.Type, scope, c.Runner, c.Subject) {
+	if !validIdentity(c.Type, scope) {
 		return false
 	}
 	if c.IssuedAt <= 0 || c.NotBefore <= 0 || c.ExpiresAt <= c.IssuedAt || c.ExpiresAt <= c.NotBefore {
@@ -184,14 +184,12 @@ func validClaims(c claims, now time.Time) bool {
 	return c.IssuedAt <= current+skew && c.NotBefore <= current+skew && c.ExpiresAt > current-skew && c.ExpiresAt-c.IssuedAt <= int64(maxAge/time.Second)
 }
 
-func validIdentity(kind Type, scope Scope, runner, subject string) bool {
+func validIdentity(kind Type, scope Scope) bool {
 	switch kind {
-	case ServiceType:
-		return scope == "" && runner == ""
-	case RunnerType:
-		return scope == "" && runner != "" && runner == subject
+	case ServiceType, RunnerType:
+		return scope == ""
 	case UserType:
-		return runner == "" && (scope == UserScope || scope == OpsScope || scope == AdminScope)
+		return scope == UserScope || scope == OpsScope || scope == AdminScope
 	default:
 		return false
 	}

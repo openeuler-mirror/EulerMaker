@@ -301,10 +301,10 @@ func TestMachineTokenAccountType(t *testing.T) {
 				t.Fatalf("token principal=%+v expiresIn=%d error=%v", who, result.ExpiresIn, err)
 			}
 			if tc.name == "service" {
-				if who.Type != identity.ServiceType || who.Subject != "worker" || who.Runner != "" {
+				if who.Type != identity.ServiceType || who.Subject != "worker" {
 					t.Fatalf("service principal=%+v", who)
 				}
-			} else if who.Type != identity.RunnerType || who.Subject != "runner-1" || who.Runner != "runner-1" {
+			} else if who.Type != identity.RunnerType || who.Subject != "runner-1" {
 				t.Fatalf("runner principal=%+v", who)
 			}
 		})
@@ -377,7 +377,7 @@ func TestServiceTokenChecksCurrentAccount(t *testing.T) {
 		}
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(account))}, nil
 	}))
-	token, err := api.tokens.Issue("service", "", identity.ServiceType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("service", identity.ServiceType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestServiceTokenRejectsOperationsOutsideAllowlist(t *testing.T) {
 		body := `{"metadata":{"name":"service"},"spec":{"type":"service","projects":["team"],"permissions":["projects:update","builds:create","builds:abort"]}}`
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	token, err := api.tokens.Issue("service", "", identity.ServiceType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("service", identity.ServiceType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +533,7 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 				}
 				return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			token, err := api.tokens.Issue("service", "", identity.ServiceType, "", time.Hour, api.now())
+			token, err := api.tokens.Issue("service", identity.ServiceType, "", time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -584,7 +584,7 @@ func TestServiceTokenUsesCurrentGrants(t *testing.T) {
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
 	api := newTestAPI(t, transport)
-	token, err := api.tokens.Issue("service", "", identity.ServiceType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("service", identity.ServiceType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,7 +663,7 @@ func TestRegisterMachineAccountConfigurationForwarding(t *testing.T) {
 				}
 				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			token, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
+			token, err := api.tokens.Issue("admin", identity.UserType, identity.AdminScope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -730,7 +730,7 @@ func TestMachineAccountGrantUpdates(t *testing.T) {
 				}
 				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			token, err := api.tokens.Issue("admin", "", identity.UserType, tc.scope, time.Hour, api.now())
+			token, err := api.tokens.Issue("admin", identity.UserType, tc.scope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -761,7 +761,7 @@ func TestOldJobsReadRoutes(t *testing.T) {
 			t.Fatalf("path=%s status=%d body=%s", path, r.Code, r.Body)
 		}
 	}
-	token, err := api.tokens.Issue("runner", "runner", identity.RunnerType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("runner", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -789,7 +789,7 @@ func TestAuthenticatedRoutesShareLimit(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
 	}), 1, oauth.Config{})
-	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -832,7 +832,7 @@ func TestIAMRouteGuards(t *testing.T) {
 				}
 				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			token, err := api.tokens.Issue("operator", "", identity.UserType, tc.scope, time.Hour, api.now())
+			token, err := api.tokens.Issue("operator", identity.UserType, tc.scope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -861,11 +861,11 @@ func TestWatchRouteAllowlist(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	adminToken, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
+	adminToken, err := api.tokens.Issue("admin", identity.UserType, identity.AdminScope, time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	runnerToken, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	runnerToken, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -994,7 +994,7 @@ func TestAuthenticatedRequestsRequireCurrentUser(t *testing.T) {
 				lookups++
 				return &http.Response{StatusCode: tc.iamStatus, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
 			}))
-			token, err := api.tokens.Issue("alice", "", identity.UserType, identity.UserScope, time.Hour, api.now())
+			token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1027,7 +1027,7 @@ func TestCheckTokenUsesScopesForUserPermissions(t *testing.T) {
 				body := fmt.Sprintf(`{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":[%q]}}`, scope)
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			token, err := api.tokens.Issue("alice", "", identity.UserType, scope, time.Hour, api.now())
+			token, err := api.tokens.Issue("alice", identity.UserType, scope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1059,32 +1059,23 @@ func TestCheckTokenMachineIdentityHasNoUserScopes(t *testing.T) {
 		t.Fatal("token check must not call upstream")
 		return nil, nil
 	}))
-	for _, test := range []struct {
-		kind   identity.Type
-		runner string
-	}{
-		{identity.RunnerType, "runner-a"},
-	} {
-		t.Run(string(test.kind), func(t *testing.T) {
-			token, err := api.tokens.Issue("runner-a", test.runner, test.kind, "", time.Hour, api.now())
-			if err != nil {
-				t.Fatal(err)
-			}
-			request := httptest.NewRequest(http.MethodPost, "/auth/check", nil)
-			request.Header.Set("Authorization", "Bearer "+token)
-			recorder := httptest.NewRecorder()
-			api.Router().ServeHTTP(recorder, request)
-			var response struct {
-				Identity struct {
-					Type   identity.Type    `json:"type"`
-					Scopes []identity.Scope `json:"scopes"`
-				} `json:"identity"`
-			}
-			if recorder.Code != http.StatusOK || json.NewDecoder(recorder.Body).Decode(&response) != nil ||
-				response.Identity.Type != test.kind || response.Identity.Scopes == nil || len(response.Identity.Scopes) != 0 {
-				t.Fatalf("unexpected token check response: status=%d response=%+v", recorder.Code, response)
-			}
-		})
+	token, err := api.tokens.Issue("runner-a", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/auth/check", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	api.Router().ServeHTTP(recorder, request)
+	var response struct {
+		Identity struct {
+			Type   identity.Type    `json:"type"`
+			Scopes []identity.Scope `json:"scopes"`
+		} `json:"identity"`
+	}
+	if recorder.Code != http.StatusOK || json.NewDecoder(recorder.Body).Decode(&response) != nil ||
+		response.Identity.Type != identity.RunnerType || response.Identity.Scopes == nil || len(response.Identity.Scopes) != 0 {
+		t.Fatalf("unexpected token check response: status=%d response=%+v", recorder.Code, response)
 	}
 }
 
@@ -1176,11 +1167,11 @@ func TestConfigAndScriptRouteGuards(t *testing.T) {
 			case "invalid":
 				req.Header.Set("Authorization", "Bearer invalid")
 			default:
-				typ, scope, runner := identity.UserType, identity.Scope("ebs:"+tc.caller), ""
+				typ, scope := identity.UserType, identity.Scope("ebs:"+tc.caller)
 				if tc.caller == "runner" {
-					typ, scope, runner = identity.RunnerType, "", tc.caller
+					typ, scope = identity.RunnerType, ""
 				}
-				token, err := api.tokens.Issue(tc.caller, runner, typ, scope, time.Hour, api.now())
+				token, err := api.tokens.Issue(tc.caller, typ, scope, time.Hour, api.now())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1235,7 +1226,7 @@ gitServer:
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(config)))}, nil
 	}))
 	for _, runner := range []string{"runner-a", "runner-b"} {
-		token, err := api.tokens.Issue(runner, runner, identity.RunnerType, "", time.Hour, api.now())
+		token, err := api.tokens.Issue(runner, identity.RunnerType, "", time.Hour, api.now())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1277,7 +1268,7 @@ gitServer:
 	if response.Code != http.StatusUnauthorized || calls != 2 {
 		t.Fatalf("anonymous status=%d upstream reads=%d", response.Code, calls)
 	}
-	userToken, err := api.tokens.Issue("alice", "", identity.UserType, identity.UserScope, time.Hour, api.now())
+	userToken, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1295,7 +1286,7 @@ func TestRunnerServiceEndpointsRejectsInvalidConfig(t *testing.T) {
 		body := `{"metadata":{"name":"services"},"spec":{"content":"artifactManagers:\n  art-01:\n    internalURL: http://artifact-manager.art-01:8081\n    secret: hidden\n"}}`
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	token, err := api.tokens.Issue("runner-a", "runner-a", identity.RunnerType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-a", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1328,7 +1319,7 @@ func TestRunnerServiceEndpointsRefresh(t *testing.T) {
 		return &http.Response{StatusCode: upstreamStatus, Header: make(http.Header),
 			Body: io.NopCloser(strings.NewReader(string(body)))}, nil
 	}))
-	token, err := api.tokens.Issue("runner-a", "runner-a", identity.RunnerType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-a", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1388,7 +1379,7 @@ func TestAdminUserGetUsesCheckedResponse(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	token, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
+	token, err := api.tokens.Issue("admin", identity.UserType, identity.AdminScope, time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1414,7 +1405,7 @@ func TestUserListOmitsAdminAccounts(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	token, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
+	token, err := api.tokens.Issue("admin", identity.UserType, identity.AdminScope, time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1460,7 +1451,7 @@ func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1489,7 +1480,7 @@ func TestRunnerJobReadPreservesNotFound(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader(`{"reason":"NotFound"}`)),
 		}, nil
 	}))
-	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1516,7 +1507,7 @@ func TestRunnerCannotUpdateUnassignedJob(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(old))}, nil
 	}))
-	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1548,11 +1539,11 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	userToken, err := api.tokens.Issue("alice", "", identity.UserType, identity.UserScope, time.Hour, api.now())
+	userToken, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	runnerToken, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	runnerToken, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1600,7 +1591,7 @@ func TestRunnerJobsIdentityIsCheckedBeforeProxy(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
 	}))
-	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1630,7 +1621,7 @@ func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
 		t.Fatal("incomplete guard chain reached upstream")
 		return nil, nil
 	}))
-	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1681,7 +1672,7 @@ func TestAdminCannotModifyAnotherOwnersProject(t *testing.T) {
 		{"admin update", "admin", identity.AdminScope, http.MethodPut, "/apis/ebs/v1/projects/team"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			token, err := api.tokens.Issue(test.subject, "", identity.UserType, test.scope, time.Hour, api.now())
+			token, err := api.tokens.Issue(test.subject, identity.UserType, test.scope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1726,7 +1717,7 @@ func TestAdminOwnerProjectPurposePatch(t *testing.T) {
 				}
 				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			token, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
+			token, err := api.tokens.Issue("admin", identity.UserType, identity.AdminScope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}

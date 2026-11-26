@@ -13,7 +13,7 @@ func authorizeRunner(who identity.Principal, route Route) error {
 	if who.IsPrivileged() {
 		return nil
 	}
-	if who.Type != identity.RunnerType || who.Runner == "" || who.Subject != who.Runner {
+	if who.Type != identity.RunnerType || who.Subject == "" {
 		return deny("Runner access denied")
 	}
 	if route.Name == "" {
@@ -22,7 +22,7 @@ func authorizeRunner(who identity.Principal, route Route) error {
 		}
 		return deny("Runner collection access denied")
 	}
-	if route.Name != who.Runner {
+	if route.Name != who.Subject {
 		return deny("Runner identity mismatch")
 	}
 	switch route.Subresource {

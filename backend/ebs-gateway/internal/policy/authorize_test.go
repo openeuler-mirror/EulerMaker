@@ -227,7 +227,7 @@ func TestServicePermissionsAreIndependent(t *testing.T) {
 
 func TestRunnerAuthorization(t *testing.T) {
 	a := projectAuthorizer(t)
-	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
+	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}
 	for _, test := range []struct {
 		route Route
 		allow bool
@@ -248,7 +248,7 @@ func TestRunnerAuthorization(t *testing.T) {
 }
 
 func TestScriptAuthorization(t *testing.T) {
-	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
+	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}
 	for _, tc := range []struct {
 		who    identity.Principal
 		name   string
@@ -271,7 +271,7 @@ func TestConfigAuthorization(t *testing.T) {
 	ordinary := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
 	ops := identity.Principal{Type: identity.UserType, Subject: "ops", Scope: identity.OpsScope}
 	admin := identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}
-	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-a", Runner: "runner-a"}
+	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-a"}
 	for _, test := range []struct {
 		who    identity.Principal
 		name   string

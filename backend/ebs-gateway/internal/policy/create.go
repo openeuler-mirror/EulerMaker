@@ -31,7 +31,7 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 		if who.Type != identity.RunnerType {
 			break
 		}
-		if err := validateRunnerCreate(object, who.Runner); err != nil {
+		if err := validateRunnerCreate(object, who.Subject); err != nil {
 			return nil, err
 		}
 	}
