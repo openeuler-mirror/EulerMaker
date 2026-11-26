@@ -241,7 +241,8 @@ func newTestAPIWithConfig(t *testing.T, transport http.RoundTripper, burst int, 
 	accounts := iam.New(client)
 	api, err := NewHandler(Dependencies{
 		Upstream: client, IAM: accounts, Tokens: tokens, Now: now,
-		IPLimits: limit.New(1000, 2000, now), Limits: limit.New(100, burst, now), BodyLimit: 1 << 20, LocalAuthEnabled: cfg.LocalAuthenticationEnabled(),
+		Limits: limit.New(100, burst, now), BodyLimit: 1 << 20, LocalAuthEnabled: cfg.LocalAuthenticationEnabled(),
+		IPLimits: limit.New(1000, 2000, now),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -851,6 +852,10 @@ func TestIAMRouteGuards(t *testing.T) {
 				router.ServeHTTP(res, req)
 				if res.Code != tc.want {
 					t.Errorf("%s: status=%d, want %d", resource, res.Code, tc.want)
+				}
+				if tc.scope == identity.AdminScope && tc.want == http.StatusForbidden &&
+					res.Body.String() != `{"error":"watch is not supported for this route"}` {
+					t.Errorf("%s: unexpected Watch denial: %s", resource, res.Body)
 				}
 			}
 		})
@@ -1742,6 +1747,16 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		status                    int
 	}{
 		{"anonymous public list", http.MethodGet, "/apis/ebs/v1/projects/team/jobs", "", http.StatusOK},
+		{"anonymous project read", http.MethodGet, "/apis/ebs/v1/projects/team", "", http.StatusOK},
+		{"anonymous project write", http.MethodPatch, "/apis/ebs/v1/projects/team", "", http.StatusUnauthorized},
+		{"anonymous build creation", http.MethodPost, "/apis/ebs/v1/projects/team/builds", "", http.StatusUnauthorized},
+		{"invalid job status write", http.MethodPatch, "/apis/ebs/v1/projects/team/jobs/j/status", "bad", http.StatusUnauthorized},
+		{"anonymous runner list", http.MethodGet, "/apis/ebs/v1/runners", "", http.StatusUnauthorized},
+		{"anonymous runner jobs watch", http.MethodGet, "/apis/ebs/v1/runners/runner-1/jobs?watch=true", "", http.StatusUnauthorized},
+		{"invalid project bearer cannot become anonymous", http.MethodGet, "/apis/ebs/v1/projects/team", "bad", http.StatusUnauthorized},
+		{"runner cannot read project", http.MethodGet, "/apis/ebs/v1/projects/team", runnerToken, http.StatusForbidden},
+		{"anonymous project watch", http.MethodGet, "/apis/ebs/v1/projects?watch=true", "", http.StatusForbidden},
+		{"authenticated project watch", http.MethodGet, "/apis/ebs/v1/projects?watch=true", userToken, http.StatusForbidden},
 		{"anonymous watch", http.MethodGet, "/apis/ebs/v1/projects/team/jobs?watch=true", "", http.StatusUnauthorized},
 		{"invalid bearer cannot become anonymous", http.MethodGet, "/apis/ebs/v1/projects/team/jobs", "bad", http.StatusUnauthorized},
 		{"runner not public business reader", http.MethodGet, "/apis/ebs/v1/projects/team/jobs", runnerToken, http.StatusForbidden},
@@ -1815,23 +1830,19 @@ func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs := api.resourceGuard("jobs", "project", "name", "")
-	runners := api.resourceGuard("runners", "", "runner", "jobs")
+	jobs := api.publicReadGuard("jobs", "")
 	for _, tc := range []struct {
 		name, method, pattern, path string
 		guards                      []gin.HandlerFunc
 	}{
 		{"no guards", "GET", "/projects", "/projects", nil},
+		{"private resource marked public", "GET", "/configs/:name", "/configs/example", []gin.HandlerFunc{api.publicReadGuard("configs", "")}},
+		{"write marked public", "POST", "/projects", "/projects", []gin.HandlerFunc{api.publicReadGuard("projects", "")}},
 		{"missing job read", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs}},
-
-		{"missing runner list", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners}},
-		{"wrong job guard", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs, api.runnerJobsListGuard}},
-		{"wrong list guard", "GET", "/runners/:runner/jobs", "/runners/runner-1/jobs", []gin.HandlerFunc{runners, api.runnerJobReadGuard}},
 		{"read guard before authorization", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{api.runnerJobReadGuard, jobs}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
-			router.Use(api.auth.AuthenticateRequest)
 			router.Handle(tc.method, tc.pattern, append(tc.guards, api.forwardResource)...)
 			request := httptest.NewRequest(tc.method, tc.path, nil)
 			request.Header.Set("Authorization", "Bearer "+token)

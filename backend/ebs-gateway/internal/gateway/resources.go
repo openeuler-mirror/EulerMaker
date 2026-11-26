@@ -12,16 +12,12 @@ import (
 	"ebs-gateway/internal/policy"
 )
 
-const (
-	apiPrefix         = "/apis/ebs/v1"
-	resourceAccessKey = "ebs-gateway.resourceAccess"
-)
+const resourceAccessKey = "ebs-gateway.resourceAccess"
 
 type resourceCheck uint8
 
 const (
 	noPendingCheck resourceCheck = iota
-	runnerJobsListCheck
 	runnerJobReadCheck
 )
 
@@ -30,38 +26,61 @@ type resourceAccess struct {
 	pending resourceCheck
 }
 
-// These modes select the public-read path; other callers go through authorization.
-type accessMode uint8
-
-const (
-	authenticatedOnly accessMode = iota
-	publicRead
-)
-
 type resourceRule func(context.Context, identity.Principal, policy.Route) error
 
-// resourceGuard authorizes the route and records any check still required before forwarding.
-func (a *Handler) resourceGuard(resource, projectKey, nameKey, subresource string) gin.HandlerFunc {
+func (a *Handler) projectGuard(subresource string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		resolved := policy.Route{
+		a.authorizeAuthenticatedRoute(c, policy.Route{
+			Resource:    "projects",
+			Name:        c.Param("project"),
+			Subresource: subresource,
+			Method:      c.Request.Method,
+		})
+	}
+}
+
+func (a *Handler) publicReadGuard(resource, subresource string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		route := policy.Route{
 			Resource:    resource,
-			Project:     c.Param(projectKey),
-			Name:        c.Param(nameKey),
 			Subresource: subresource,
 			Method:      c.Request.Method,
 		}
-		mode := authenticatedOnly
-		if policy.IsPublicRead(resolved) {
-			mode = publicRead
+		if resource == "projects" {
+			route.Name = c.Param("project")
+		} else {
+			route.Project = c.Param("project")
+			route.Name = c.Param("name")
 		}
-		a.checkResourceAccess(c, resolved, mode, a.policy.Authorize, requiredResourceCheck(resolved))
+		if !policy.IsPublicRead(route) {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "invalid public read route"})
+			return
+		}
+		watch := policy.HasWatch(c.Request.URL.Query())
+		who := middleware.Principal(c)
+		if watch || (who.Type != "" && !who.IsUser()) {
+			a.authorizeAuthenticatedRoute(c, route)
+			return
+		}
+		preparePublicRead(c, route)
+		allowResource(c, route)
+	}
+}
+
+func (a *Handler) projectScopedGuard(resource, subresource string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		a.authorizeAuthenticatedRoute(c, policy.Route{
+			Resource:    resource,
+			Project:     c.Param("project"),
+			Name:        c.Param("name"),
+			Subresource: subresource,
+			Method:      c.Request.Method,
+		})
 	}
 }
 
 func requiredResourceCheck(route policy.Route) resourceCheck {
 	switch {
-	case route.Resource == "runners" && route.Subresource == "jobs" && route.Method == http.MethodGet:
-		return runnerJobsListCheck
 	case route.Resource == "jobs" && route.Name != "" && route.Subresource == "" && route.Method == http.MethodGet:
 		return runnerJobReadCheck
 	default:
@@ -79,21 +98,22 @@ func requireResourceCheck(c *gin.Context, expected resourceCheck) *resourceAcces
 	return access
 }
 
-func (a *Handler) checkResourceAccess(c *gin.Context, route policy.Route, mode accessMode, rule resourceRule, pending resourceCheck) {
-	watch := policy.HasWatch(c.Request.URL.Query())
-	allowPublic := !watch && mode != authenticatedOnly
+func (a *Handler) authorizeAuthenticatedRoute(c *gin.Context, route policy.Route) {
 	who := middleware.Principal(c)
+	if who.Type == "" {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "missing authenticated principal"})
+		return
+	}
 	if who.Type == identity.ServiceType {
 		prepareServiceAudit(c, route)
 	}
-	if allowPublic && (who.Type == "" || who.IsUser()) {
-		if !a.preparePublicRead(c, route) {
-			return
-		}
-	} else if !a.authorizeResource(c, who, route, rule) {
-		return
+	if authorizeResource(c, who, route, a.policy.Authorize) {
+		allowResource(c, route)
 	}
-	c.Set(resourceAccessKey, &resourceAccess{route: route, pending: pending})
+}
+
+func allowResource(c *gin.Context, route policy.Route) {
+	c.Set(resourceAccessKey, &resourceAccess{route: route, pending: requiredResourceCheck(route)})
 	c.Next()
 }
 
@@ -110,7 +130,7 @@ func prepareServiceAudit(c *gin.Context, route policy.Route) {
 	c.Set("serviceAuthorization", "denied")
 }
 
-func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
+func preparePublicRead(c *gin.Context, route policy.Route) {
 	if route.Name == "" && route.Subresource == "" {
 		query := c.Request.URL.Query()
 		limit, err := strconv.Atoi(query.Get("limit"))
@@ -120,11 +140,13 @@ func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
 		}
 	}
 	c.Set("public", true)
-	return true
 }
 
-func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route, rule resourceRule) bool {
+func authorizeResource(c *gin.Context, who identity.Principal, route policy.Route, rule resourceRule) bool {
 	if err := rule(c.Request.Context(), who, route); err != nil {
+		if who.Type == identity.ServiceType {
+			c.Set("serviceAuthorization", "denied")
+		}
 		c.AbortWithStatusJSON(policyErrorStatus(err), gin.H{"error": err.Error()})
 		return false
 	}
