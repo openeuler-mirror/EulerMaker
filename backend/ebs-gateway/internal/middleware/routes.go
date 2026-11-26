@@ -114,8 +114,6 @@ var routePolicies = map[routeKey]routePolicy{
 	{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs/:name"}:          {authenticationOptional, allowAnonymous | allowUsers | allowRunner, false},
 	{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs/:name/status"}:   {authenticationOptional, allowAnonymous | allowUsers, false},
 	{http.MethodPost, "/apis/ebs/v1/projects/:project/jobs"}:               {authenticationRequired, allowUsers, false},
-	{http.MethodPut, "/apis/ebs/v1/projects/:project/jobs/:name"}:          {authenticationRequired, allowUsers, false},
-	{http.MethodPatch, "/apis/ebs/v1/projects/:project/jobs/:name"}:        {authenticationRequired, allowUsers, false},
 	{http.MethodDelete, "/apis/ebs/v1/projects/:project/jobs/:name"}:       {authenticationRequired, allowUsers, false},
 	{http.MethodPut, "/apis/ebs/v1/projects/:project/jobs/:name/status"}:   {authenticationRequired, allowRunner, false},
 	{http.MethodPatch, "/apis/ebs/v1/projects/:project/jobs/:name/status"}: {authenticationRequired, allowRunner, false},

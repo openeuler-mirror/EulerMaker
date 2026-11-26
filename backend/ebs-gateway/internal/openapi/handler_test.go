@@ -53,6 +53,22 @@ func TestDocumentContract(t *testing.T) {
 	}
 	checkRefs(doc)
 	schemas := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	if _, exists := schemas["JobUpdate"]; exists {
+		t.Fatal("Job ordinary update schema is no longer exposed")
+	}
+	paths := doc["paths"].(map[string]any)
+	jobPath := "/apis/ebs/v1/projects/{project}/jobs/{name}"
+	for _, method := range []string{"put", "patch"} {
+		if _, exists := paths[jobPath].(map[string]any)[method]; exists {
+			t.Fatalf("Job ordinary %s is still exposed", method)
+		}
+		if _, exists := paths[jobPath+"/status"].(map[string]any)[method]; !exists {
+			t.Fatalf("Job status %s is missing", method)
+		}
+	}
+	if _, exists := paths[jobPath+"/abort"].(map[string]any)["post"]; !exists {
+		t.Fatal("Job abort is missing")
+	}
 	for _, name := range []string{"MachineRequest", "ebs-api.iam.v1.MachineAccountSpec"} {
 		properties := schemas[name].(map[string]any)["properties"].(map[string]any)
 		typ := properties["type"].(map[string]any)

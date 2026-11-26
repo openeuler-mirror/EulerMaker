@@ -164,8 +164,6 @@ func registerProjectScopedResources(router *gin.Engine, api *Handler) {
 	project.POST("/jobs", guard, api.forwardResource)
 
 	project.GET("/jobs/:name", readJob, api.runnerJobReadGuard, api.forwardResource)
-	project.PUT("/jobs/:name", guard, api.forwardResource)
-	project.PATCH("/jobs/:name", guard, api.forwardResource)
 	project.DELETE("/jobs/:name", guard, api.forwardResource)
 
 	guard = api.projectScopedGuard("jobs", "status")

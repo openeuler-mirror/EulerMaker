@@ -111,7 +111,7 @@ func operations() object {
 				case "list":
 					methods = append(methods, "post")
 				case "object", "status":
-					if r.name != "builds" {
+					if r.name != "builds" && !(r.name == "jobs" && part == "object") {
 						methods = append(methods, "put", "patch")
 					}
 					if part == "object" && r.name != "projects" {

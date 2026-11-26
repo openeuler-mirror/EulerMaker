@@ -57,6 +57,8 @@ func TestAdmitIdentity(t *testing.T) {
 		{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs/:name", "anonymous,user,ops,admin,runner"},
 		{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs/:name/status", "anonymous,user,ops,admin"},
 		{http.MethodPut, "/apis/ebs/v1/projects/:project/jobs/:name/status", "runner"},
+		{http.MethodPut, "/apis/ebs/v1/projects/:project/jobs/:name", ""},
+		{http.MethodPatch, "/apis/ebs/v1/projects/:project/jobs/:name", ""},
 		{http.MethodGet, "/apis/ebs/v1/new-resource", ""},
 		{http.MethodPost, "/apis/ebs/v1/build-targets", ""},
 	} {
