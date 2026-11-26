@@ -236,9 +236,6 @@ func IsPublicRead(route Route) bool {
 	if route.Method != http.MethodGet {
 		return false
 	}
-	if route.Resource == "build-targets" {
-		return route.Project == "" && route.Name == "" && route.Subresource == ""
-	}
 	if route.Subresource != "" && route.Subresource != "status" {
 		return false
 	}

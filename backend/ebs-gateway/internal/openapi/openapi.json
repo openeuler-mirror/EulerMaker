@@ -3563,7 +3563,7 @@
     }
   },
   "info": {
-    "description": "Public Gateway contract. Visibility in this document does not grant access. GET /healthz directly returns a fixed plain-text response without middleware; business requests retain recovery and audit. Watch is allowed only on GET /apis/ebs/v1/projects/{project}/jobs and GET /apis/ebs/v1/runners/{runner}/jobs; other matched routes reject Watch with 403 before authentication. Allowed Watch requests still require authentication and authorization. Resource permissions are checked on every request. Field-selected responses may omit properties. After an ambiguous write failure, GET the latest object and confirm the intended result before retrying; never replay an old decision with a newly substituted resourceVersion.",
+    "description": "Public Gateway contract. Visibility in this document does not grant access. Authentication is required by default. Public resource reads allow anonymous requests but validate any supplied token; invalid tokens never fall back to anonymous access. GET /healthz directly returns a fixed plain-text response without middleware; business requests retain recovery and audit. Watch is allowed only on GET /apis/ebs/v1/projects/{project}/jobs and GET /apis/ebs/v1/runners/{runner}/jobs; other matched routes reject Watch with 403 before authentication. Allowed Watch requests still require authentication and authorization. Resource permissions are checked on every request. Field-selected responses may omit properties. After an ambiguous write failure, GET the latest object and confirm the intended result before retrying; never replay an old decision with a newly substituted resourceVersion.",
     "title": "EulerMaker Gateway API",
     "version": "v1"
   },
@@ -3571,7 +3571,7 @@
   "paths": {
     "/apis/ebs/v1/build-targets": {
       "get": {
-        "description": "Public read for anonymous callers and users. Returns distributions and architectures, not build images.",
+        "description": "Authenticated users only. Runner and Service tokens are not allowed. Uses authenticated rate limits. Returns distributions and architectures, not build images. Watch is not supported.",
         "operationId": "getBuildTargets",
         "responses": {
           "200": {
@@ -3628,7 +3628,6 @@
           }
         },
         "security": [
-          {},
           {
             "BearerAuth": []
           }

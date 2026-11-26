@@ -180,7 +180,7 @@ Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 
 | Job | `/apis/ebs/v1/projects/{project}/jobs[/{name}]`、`/projects/{project}/jobs/{name}/status` |
 | 历史 Job | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]`，仅 GET，无 `/status` |
 
-`GET /apis/ebs/v1/build-targets` 供匿名和用户身份读取可选的发行版及其架构；携带无效 Token 不降级为匿名。Gateway 读取内置构建配置，仅返回按名称排序的 `items[].distro` 和 `items[].arches`，不返回镜像地址、Config 元数据或原文。配置不可用时返回 503。Config 不应存放凭据。
+`GET /apis/ebs/v1/build-targets` 仅供已认证用户读取可选的发行版及其架构，与 `service-endpoints` 通过全局请求认证及各自的限流链。限流未触发时，非 Watch 请求携带无效 Token 或未登录时返回 401；Watch 请求由全局 `ValidateWatchRoute` 在认证前拒绝并返回 403，Handler 保留 Runner、Service 身份限制。Gateway 读取内置构建配置，仅返回按名称排序的 `items[].distro` 和 `items[].arches`，不返回镜像地址、Config 元数据或原文。配置不可用时返回 503。Config 不应存放凭据。
 
 Runner 通过专用服务地址投影接口读取 Artifact Manager 和 Git Server 的 Runner 地址，不改变上述 Config 读取权限。接口、授权和响应契约见 4.11 节。
 
@@ -775,11 +775,23 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 
 路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/gateway` 在 `router.go` 注册路径、组装中间件，同包的资源 Handler 协调匿名访问、Policy 授权、请求准备及最终响应或代理；`internal/middleware` 负责 Bearer JWT 校验、Service 账号实时核验、User 状态确认、Admin 门卫、已认证请求限流和审计。Policy 的公共入口负责分派，Project、Runner 的授权及写入规则分别集中在各自的业务文件。全局路由链挂载审计与 panic 恢复。身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iam`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
 
-`/healthz` 和登录、注册、Token 换取/校验接口使用各自的 Handler，其中 Token 校验保留独立的认证与限流语义。密码、MachineAccount 和 IAM 路由使用需要认证的中间件链。业务 API 在认证前隐藏内部全局路径；没有 Authorization header 时仅公开读取可进入匿名分支，携带 header 的请求必须先验证身份，不能失败后降级。认证后的公开读取也使用公开读取 Handler，service 必须先通过专属允许列表检查；其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
+认证后的用户公开读取仍使用公开读取 Handler；Runner/Service 身份先执行各自授权规则。其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
 
 对外注册范围包括：Project 的集合、对象和 `/status`；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
 
 另注册固定路径 `GET /apis/ebs/v1/service-endpoints`，仅供 Runner 身份读取地址投影，不作为 apiserver 资源代理。
+
+`AuthenticateRequest` 按 HTTP 方法和 Gin `c.FullPath()` 精确分类，未列出的路由默认必须认证，不按 URL 前缀放行：
+
+规则统一维护于 `internal/middleware/routes.go`，以 `routeKey{Method, Path}` 为键，分别定义 `unauthenticatedRoutes`、`optionalAuthenticationRoutes` 和 `watchRoutes` 三份列表。前两份列表互斥；Watch 列表只声明接口能力，不跳过认证或授权。`auth.go`、`watch.go` 查询列表并执行请求检查，不再各自维护路径分支；健康检查在业务链外注册，不加入这些列表。
+
+| 认证模式 | 路由范围 | 行为 |
+|----------|----------|------|
+| 无需 Bearer 认证 | `GET /openapi.json`、`GET /auth/providers`、`GET /auth/oauth/:provider/login`；`POST /auth/register`、`POST /auth/login`、`POST /auth/machine-token`、`POST /auth/oauth/:provider/callback`、`POST /auth/oauth/register` | 不解析 Bearer Token；登录、注册、机器换 Token 和 OAuth Handler 仍校验自身凭据或流程上下文 |
+| 可选认证 | Project 的 GET 集合、对象和 `/status`；Project 范围 Build、Job、Snapshot、BuildInfo、BuildGraph、RpmRepo 的 GET 集合、对象和 `/status`；OldJob 的 GET 集合和对象 | 无 Authorization 时匿名；携带 Token 必须验证，失败不得降级匿名；允许的 Watch 请求升级为必须认证 |
+| 必须认证 | 其余路由，包括 Config、Script、Runner、IAM、配置投影、业务写操作、`/auth/check` 和密码修改 | 校验 Token 并解析身份后才进入限流和授权 |
+
+未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。全局认证只确认调用方身份，不授予权限；公开 GET 的 Runner/Service Token 仍经过各自授权，角色、工程归属、Runner Job 归属与 Watch 并发限制由后续中间件或 Handler 执行。无需 Bearer 认证的接口不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由其 Handler 处理。
 
 ### 5.1 路由与权限速览
 
@@ -801,7 +813,7 @@ Service Token 的资源权限仅按 4.3.1，不继承下表中的公开读取或
 | `/apis/ebs/v1/projects/{project}/jobs/{name}/abort` | 无 | 仅本 Project 的 owner/member 用户可 POST |
 | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]` | 匿名及已认证用户仅可 GET；Runner 不开放 | 无；只注册 GET |
 | `/apis/ebs/v1/runners[/{name}][/status]`、`/apis/ebs/v1/runners/{name}/jobs` | Ops/Admin 可读；Runner 仅可读自身对象及自身范围 Job | Ops/Admin 可管理 Runner；Runner 仅可创建、受限修改自身对象和 `/status`，不得删除 |
-| `/apis/ebs/v1/build-targets` | 公开的发行版及架构列表 | 无 |
+| `/apis/ebs/v1/build-targets` | 已认证用户可读取发行版及架构列表；机器身份不可读 | 无 |
 | `/apis/ebs/v1/configs[/{name}]` | 仅 Ops/Admin 可读 | 仅 Ops/Admin 可写；内置 `build-target`、`build-resource`、`services` 不可删除 |
 | `/apis/ebs/v1/service-endpoints` | 仅 Runner Token 可读取各实例的 Runner 地址投影 | 无 |
 | `/apis/ebs/v1/scripts[/{name}]` | 登录用户和 Ops/Admin 可读取、列表；Runner 仅可具名读取 | 仅 Ops/Admin 可创建、修改、删除 |

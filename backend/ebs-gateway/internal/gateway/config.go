@@ -12,6 +12,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ebsv1 "ebs-api/ebs/v1"
+	"ebs-gateway/internal/identity"
+	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/policy"
 )
 
@@ -43,6 +45,14 @@ func (a *Handler) readConfigContent(c *gin.Context, name string, out any) bool {
 }
 
 func (a *Handler) buildTargets(c *gin.Context) {
+	who := middleware.Principal(c)
+	if who.Type == identity.ServiceType {
+		c.Set("serviceAuthorization", "denied")
+	}
+	if !who.IsUser() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "user identity required"})
+		return
+	}
 	var content ebsv1.BuildTargetContent
 	if !a.readConfigContent(c, ebsv1.BuildTargetConfigName, &content) || content.Targets == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "build targets unavailable"})

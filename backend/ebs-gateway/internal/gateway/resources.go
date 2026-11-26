@@ -87,11 +87,6 @@ func requireResourceCheck(c *gin.Context, expected resourceCheck) *resourceAcces
 func (a *Handler) checkResourceAccess(c *gin.Context, route policy.Route, mode accessMode, rule resourceRule, pending resourceCheck) {
 	watch := policy.HasWatch(c.Request.URL.Query())
 	allowPublic := !watch && mode != authenticatedOnly
-	if !allowPublic || c.GetHeader("Authorization") != "" {
-		if !a.auth.VerifyAccess(c) {
-			return
-		}
-	}
 	who := middleware.Principal(c)
 	if who.Type == identity.ServiceType {
 		prepareServiceAudit(c, route)
@@ -125,7 +120,7 @@ func (a *Handler) preparePublicRead(c *gin.Context, route policy.Route) bool {
 		middleware.AbortRateLimited(c, 1, "too many requests")
 		return false
 	}
-	if route.Resource != "build-targets" && route.Name == "" && route.Subresource == "" {
+	if route.Name == "" && route.Subresource == "" {
 		query := c.Request.URL.Query()
 		limit, err := strconv.Atoi(query.Get("limit"))
 		if err != nil || limit < 1 || limit > 100 || len(query["limit"]) != 1 {

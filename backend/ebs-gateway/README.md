@@ -21,8 +21,9 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的认证、授权和限流。
 全局 [ValidateWatchRoute](internal/middleware/watch.go) 按 [routes.go](internal/middleware/routes.go) 中的方法及 Gin 路由模板允许列表检查 Watch，仅开放 Project Job 列表和 Runner 任务列表。其他已匹配路由的 Watch 在认证前返回 403；允许的 Watch 仍须通过认证、授权、查询及并发检查。
 `GET /healthz` 在业务中间件挂载前直接注册 Handler，不经过审计、Recovery 或 Watch 检查。
+全局 [AuthenticateRequest](internal/middleware/auth.go) 按 [routes.go](internal/middleware/routes.go) 的方法及路由模板列表处理无需认证、可选认证和必须认证的请求，未列出的路由默认必须认证。公开 GET 携带 Token 时必须验证，不能降级匿名；允许的 Watch 必须认证。资源 Guard 仅复用解析后的身份，不重复认证。
 指定 Job 的 GET 路由显式挂载 `runnerJobReadGuard` 检查 Runner 归属；Runner 任务列表的 GET 路由挂载 `runnerJobsListGuard` 检查查询参数和 Watch 并发。漏挂所需 guard 时返回 500，不转发。
-Config 的读写统一要求 Ops/Admin，`GET /apis/ebs/v1/build-targets` 单独投影发行版及架构；公共写请求处理放在 `request.go`。
+Config 的读写统一要求 Ops/Admin，`GET /apis/ebs/v1/build-targets` 仅向已认证用户投影发行版及架构；公共写请求处理放在 `request.go`。
 Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
 测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
 Handler 私有逻辑测试放在对应文件中，真实 HTTP 请求链、路由注册和 OpenAPI 路由契约测试放在 [router_test.go](internal/gateway/router_test.go)。

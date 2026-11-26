@@ -18,7 +18,7 @@ func NewRouter(api *Handler, oauthHandler *oauth.Handler) *gin.Engine {
 	_ = router.SetTrustedProxies(nil)
 	// Register probes before the business middleware chain to avoid auditing or throttling them.
 	registerHealthz(router)
-	router.Use(middleware.Audit(api.now), gin.Recovery(), middleware.ValidateWatchRoute)
+	router.Use(middleware.Audit(api.now), gin.Recovery(), middleware.ValidateWatchRoute, api.auth.AuthenticateRequest)
 
 	registerAuth(router, api)
 	registerOAuth(router, oauthHandler)
@@ -33,7 +33,7 @@ func NewRouter(api *Handler, oauthHandler *oauth.Handler) *gin.Engine {
 
 	registerOpenAPI(router)
 
-	router.NoRoute(api.auth.Authenticate, func(c *gin.Context) {
+	router.NoRoute(func(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 	})
 	return router
@@ -49,15 +49,15 @@ func registerOAuth(router *gin.Engine, h *oauth.Handler) {
 func registerAuth(router *gin.Engine, api *Handler) {
 	router.POST("/auth/register", api.registerUser)
 	router.POST("/auth/login", api.login)
-	router.POST("/auth/check", api.auth.Authenticate, middleware.LimitAuthenticated(api.limits), api.checkToken)
-	router.PUT("/auth/users/:name/password", api.auth.Authenticate, middleware.LimitAuthenticated(api.limits), api.changePassword)
+	router.POST("/auth/check", middleware.LimitAuthenticated(api.limits), api.checkToken)
+	router.PUT("/auth/users/:name/password", middleware.LimitAuthenticated(api.limits), api.changePassword)
 	router.POST("/auth/machine-token", api.machineToken)
-	router.POST("/auth/machineaccounts", api.auth.Authenticate, middleware.LimitAuthenticated(api.limits), middleware.RequireAdmin, api.registerMachine)
+	router.POST("/auth/machineaccounts", middleware.LimitAuthenticated(api.limits), middleware.RequireAdmin, api.registerMachine)
 }
 
 func registerIAM(router *gin.Engine, api *Handler) {
 	iam := router.Group("/apis/iam.ebs/v1")
-	iam.Use(api.auth.Authenticate, middleware.LimitAuthenticated(api.limits), middleware.RequireAdmin)
+	iam.Use(middleware.LimitAuthenticated(api.limits), middleware.RequireAdmin)
 
 	iam.GET("/users", api.users)
 
@@ -75,9 +75,8 @@ func registerIAM(router *gin.Engine, api *Handler) {
 }
 
 func registerConfigProjections(router *gin.Engine, api *Handler) {
-	router.GET("/apis/ebs/v1/build-targets", api.resourceGuard("build-targets", "", "", ""), api.buildTargets)
-	router.GET("/apis/ebs/v1/service-endpoints", api.auth.Authenticate,
-		middleware.LimitAuthenticated(api.limits), api.serviceEndpoints)
+	router.GET("/apis/ebs/v1/build-targets", middleware.LimitAuthenticated(api.limits), api.buildTargets)
+	router.GET("/apis/ebs/v1/service-endpoints", middleware.LimitAuthenticated(api.limits), api.serviceEndpoints)
 }
 
 func registerConfigs(router *gin.Engine, api *Handler) {

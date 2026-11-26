@@ -30,10 +30,14 @@ func TestAuthMiddleware(t *testing.T) {
 		typ        identity.Type
 		scope      identity.Scope
 		lookupPath string
+		route      string
 	}{
-		{"user", identity.UserType, identity.UserScope, "/apis/iam.ebs/v1/users/account"},
-		{"runner", identity.RunnerType, "", ""},
-		{"service", identity.ServiceType, "", "/apis/iam.ebs/v1/machineaccounts/account"},
+		{"user", identity.UserType, identity.UserScope, "/apis/iam.ebs/v1/users/account", "/"},
+		{"runner", identity.RunnerType, "", "", "/"},
+		{"service", identity.ServiceType, "", "/apis/iam.ebs/v1/machineaccounts/account", "/"},
+		{"optional user", identity.UserType, identity.UserScope, "/apis/iam.ebs/v1/users/account", "/apis/ebs/v1/projects"},
+		{"optional runner", identity.RunnerType, "", "", "/apis/ebs/v1/projects"},
+		{"optional service", identity.ServiceType, "", "/apis/iam.ebs/v1/machineaccounts/account", "/apis/ebs/v1/projects"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			paths := make(chan string, 4)
@@ -57,8 +61,9 @@ func TestAuthMiddleware(t *testing.T) {
 				t.Fatal(err)
 			}
 			router := gin.New()
+			router.Use(auth.AuthenticateRequest)
 			called := false
-			router.GET("/", auth.Authenticate, func(c *gin.Context) {
+			router.GET(test.route, func(c *gin.Context) {
 				called = true
 				who := Principal(c)
 				if who.Subject != "account" || who.Type != test.typ || who.Scope != test.scope {
@@ -73,7 +78,7 @@ func TestAuthMiddleware(t *testing.T) {
 				}
 				c.Status(http.StatusOK)
 			})
-			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request := httptest.NewRequest(http.MethodGet, test.route, nil)
 			request.Header.Set("Authorization", "Bearer "+token)
 			recorder := httptest.NewRecorder()
 			router.ServeHTTP(recorder, request)
@@ -91,6 +96,79 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 }
 
+func TestAuthenticateRequestRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	now := time.Now()
+	tokens, err := identity.NewTokens(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := tokens.Issue("runner", identity.RunnerType, "", time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := NewAuth(tokens, nil, func() time.Time { return now })
+	for _, tc := range []struct {
+		name, method, route, target, authorization string
+		status                                     int
+		identified                                 bool
+	}{
+		{"openapi", "GET", "/openapi.json", "/openapi.json", "", 204, false},
+		{"providers", "GET", "/auth/providers", "/auth/providers", "", 204, false},
+		{"oauth login", "GET", "/auth/oauth/:provider/login", "/auth/oauth/community/login", "", 204, false},
+		{"oauth callback", "POST", "/auth/oauth/:provider/callback", "/auth/oauth/community/callback", "", 204, false},
+		{"oauth register", "POST", "/auth/oauth/register", "/auth/oauth/register", "", 204, false},
+		{"register", "POST", "/auth/register", "/auth/register", "", 204, false},
+		{"login", "POST", "/auth/login", "/auth/login", "Bearer invalid", 204, false},
+		{"machine token", "POST", "/auth/machine-token", "/auth/machine-token", "", 204, false},
+		{"public list", "GET", "/apis/ebs/v1/projects", "/apis/ebs/v1/projects", "", 204, false},
+		{"public invalid token", "GET", "/apis/ebs/v1/projects", "/apis/ebs/v1/projects", "Bearer invalid", 401, false},
+		{"public valid token", "GET", "/apis/ebs/v1/projects", "/apis/ebs/v1/projects", "Bearer " + token, 204, true},
+		{"public write", "POST", "/apis/ebs/v1/projects", "/apis/ebs/v1/projects", "", 401, false},
+		{"job watch", "GET", "/apis/ebs/v1/projects/:project/jobs", "/apis/ebs/v1/projects/demo/jobs?watch=true", "", 401, false},
+		{"empty watch", "GET", "/apis/ebs/v1/projects/:project/jobs", "/apis/ebs/v1/projects/demo/jobs?watch=", "", 401, false},
+		{"repeated watch", "GET", "/apis/ebs/v1/projects/:project/jobs", "/apis/ebs/v1/projects/demo/jobs?watch=false&watch=true", "", 401, false},
+		{"non watch", "GET", "/apis/ebs/v1/projects/:project/jobs", "/apis/ebs/v1/projects/demo/jobs?watch=false", "", 204, false},
+		{"authenticated watch", "GET", "/apis/ebs/v1/projects/:project/jobs", "/apis/ebs/v1/projects/demo/jobs?watch=true", "Bearer " + token, 204, true},
+		{"runner watch", "GET", "/apis/ebs/v1/runners/:runner/jobs", "/apis/ebs/v1/runners/runner/jobs?watch=true", "", 401, false},
+		{"script", "GET", "/apis/ebs/v1/scripts", "/apis/ebs/v1/scripts", "", 401, false},
+		{"config", "GET", "/apis/ebs/v1/configs", "/apis/ebs/v1/configs", "", 401, false},
+		{"targets", "GET", "/apis/ebs/v1/build-targets", "/apis/ebs/v1/build-targets", "", 401, false},
+		{"endpoints", "GET", "/apis/ebs/v1/service-endpoints", "/apis/ebs/v1/service-endpoints", "", 401, false},
+		{"check", "POST", "/auth/check", "/auth/check", "", 401, false},
+		{"unlisted auth route", "GET", "/auth/new", "/auth/new", "", 401, false},
+		{"unlisted resource", "GET", "/apis/ebs/v1/projects/:project/new", "/apis/ebs/v1/projects/demo/new", "", 401, false},
+		{"different method", "POST", "/openapi.json", "/openapi.json", "", 401, false},
+		{"different template", "GET", "/apis/ebs/v1/projects/demo", "/apis/ebs/v1/projects/demo", "", 401, false},
+		{"unknown", "GET", "", "/unknown", "", 401, false},
+		{"unknown authenticated", "GET", "", "/unknown", "Bearer " + token, 404, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(auth.AuthenticateRequest)
+			identified := false
+			endpoint := func(c *gin.Context) {
+				identified = Principal(c).Type != ""
+				c.Status(http.StatusNoContent)
+			}
+			if tc.route != "" {
+				router.Handle(tc.method, tc.route, endpoint)
+			}
+			router.NoRoute(func(c *gin.Context) {
+				identified = Principal(c).Type != ""
+				c.Status(http.StatusNotFound)
+			})
+			request := httptest.NewRequest(tc.method, tc.target, nil)
+			request.Header.Set("Authorization", tc.authorization)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != tc.status || identified != tc.identified {
+				t.Fatalf("status=%d identified=%v, want %d/%v", response.Code, identified, tc.status, tc.identified)
+			}
+		})
+	}
+}
+
 func TestAuthenticateStopsInvalidToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tokens, err := identity.NewTokens(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32))))
@@ -101,8 +179,9 @@ func TestAuthenticateStopsInvalidToken(t *testing.T) {
 	for _, header := range []string{"", "Basic secret", "Bearer invalid"} {
 		t.Run(header, func(t *testing.T) {
 			router := gin.New()
+			router.Use(auth.AuthenticateRequest)
 			called := false
-			router.GET("/", auth.Authenticate, func(c *gin.Context) {
+			router.GET("/", func(c *gin.Context) {
 				called = true
 			})
 			request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -153,7 +232,7 @@ func TestRejectedAccountAuditIdentity(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 			c.Request.Header.Set("Authorization", "Bearer "+token)
 			auth := NewAuth(tokens, iam.New(client), func() time.Time { return now })
-			if auth.VerifyAccess(c) || !c.IsAborted() || response.Code != tc.wantStatus || Principal(c).Subject != tc.auditSubject {
+			if auth.verifyAccess(c) || !c.IsAborted() || response.Code != tc.wantStatus || Principal(c).Subject != tc.auditSubject {
 				t.Fatalf("aborted=%v status=%d audit subject=%q", c.IsAborted(), response.Code, Principal(c).Subject)
 			}
 		})
