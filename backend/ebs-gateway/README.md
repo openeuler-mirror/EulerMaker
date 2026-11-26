@@ -18,10 +18,11 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/upstream` | 可信内部读取和流式反向代理 |
 | `internal/limit` | 请求令牌桶 |
 
-从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的认证、授权和限流。
+从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的授权和公开读取处理。
 全局 [ValidateWatchRoute](internal/middleware/watch.go) 按 [routes.go](internal/middleware/routes.go) 中的方法及 Gin 路由模板允许列表检查 Watch，仅开放 Project Job 列表和 Runner 任务列表。其他已匹配路由的 Watch 在认证前返回 403；允许的 Watch 仍须通过认证、授权、查询及并发检查。
 `GET /healthz` 在业务中间件挂载前直接注册 Handler，不经过审计、Recovery 或 Watch 检查。
 全局 [AuthenticateRequest](internal/middleware/auth.go) 按 [routes.go](internal/middleware/routes.go) 的方法及路由模板列表处理无需认证、可选认证和必须认证的请求，未列出的路由默认必须认证。公开 GET 携带 Token 时必须验证，不能降级匿名；允许的 Watch 必须认证。资源 Guard 仅复用解析后的身份，不重复认证。
+通用限流由 [limit.go](internal/middleware/limit.go) 在业务链全局执行：认证前按 IP 限流，认证后按身份类型/名称/IP 或匿名 IP 限流。登录、注册、机器换 Token、OAuth 和 Watch 并发限制继续保留，通用限流返回 429 和 `Retry-After: 1`。
 指定 Job 的 GET 路由显式挂载 `runnerJobReadGuard` 检查 Runner 归属；Runner 任务列表的 GET 路由挂载 `runnerJobsListGuard` 检查查询参数和 Watch 并发。漏挂所需 guard 时返回 500，不转发。
 Config 的读写统一要求 Ops/Admin，`GET /apis/ebs/v1/build-targets` 仅向已认证用户投影发行版及架构；公共写请求处理放在 `request.go`。
 Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
@@ -41,6 +42,8 @@ go run ./cmd \
 开发环境连接自签名 apiserver 时，可以配置 `--apiserver-ca`；仅在隔离测试环境中使用 `--insecure-skip-verify`。启用 apiserver 内部证书认证时，还需设置 `--apiserver-client-cert` 和 `--apiserver-client-key`，证书的 URI SAN 为 `spiffe://eulermaker/internal/ebs-gateway`。默认监听 `:8080`，`GET /healthz` 返回健康状态。构建镜像时 Dockerfile 使用同一个 `cmd` 入口。
 
 日志统一使用 klog 标准参数，包括 `--v`（默认 `0`）、`--vmodule` 和 `--logtostderr`（默认 `true`）。启动、正常退出及请求审计使用 `InfoS`，启动或退出失败使用 `ErrorS`，进程退出前执行 `Flush`。verbosity 不等同于最低严重级别，默认保留请求审计。User 身份逐请求读取 apiserver，不缓存。
+
+`--ip-rate-limit-per-sec` / `--ip-rate-limit-burst` 控制认证前的每 IP 额度，默认 `1000/2000`；`--rate-limit-per-sec` / `--rate-limit-burst` 统一控制身份/IP 与匿名 IP 的额度，默认 `100/200`。匿名和已认证请求复用同一个限流器，通过 `anonymous/{clientIP}` 与 `{type}/{sub}/{clientIP}` 隔离计数；已认证用户读取公开资源也使用身份 key。限流按副本独立计算，当前不信任转发头；经 Nginx 或 NAT 接入的请求可能共用一个客户端 IP，应按汇总流量调整前置 IP 额度。
 
 进程收到 SIGINT/SIGTERM 后最多等待 15 秒排空在途请求，再退出；超时会强制关闭连接并返回错误。部署的终止宽限期应留出排空及后台任务退出时间。
 

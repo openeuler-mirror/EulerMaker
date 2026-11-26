@@ -27,7 +27,7 @@ func TestCommandParsesGatewayFlags(t *testing.T) {
 		called = true
 		if opts.port != 9090 || opts.apiServer != "https://api.example:8443" || opts.secretFile != "/tmp/jwt-secret" ||
 			opts.clientCertFile != "/tmp/client.crt" || opts.clientKeyFile != "/tmp/client.key" || opts.oauthConfigFile != "/tmp/oauth.yaml" ||
-			!opts.insecureTLS || opts.maxBody != 2048 || opts.rate != 25 || opts.burst != 50 {
+			!opts.insecureTLS || opts.maxBody != 2048 || opts.rate != 25 || opts.burst != 50 || opts.ipRate != 250 || opts.ipBurst != 500 {
 			t.Errorf("unexpected options: %+v", opts)
 		}
 		return nil
@@ -39,6 +39,7 @@ func TestCommandParsesGatewayFlags(t *testing.T) {
 		"--apiserver-client-cert=/tmp/client.crt", "--apiserver-client-key=/tmp/client.key",
 		"--max-request-body-bytes=2048", "--rate-limit-per-sec=25",
 		"--rate-limit-burst=50", "--v=4", "--vmodule=handler=6", "--logtostderr=true",
+		"--ip-rate-limit-per-sec=250", "--ip-rate-limit-burst=500",
 	})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
@@ -98,6 +99,11 @@ func TestRunReportsInvalidConfiguration(t *testing.T) {
 		{"--rate-limit-per-sec=+Inf", "--rate-limit-per-sec must be a finite number greater than 0, got +Inf"},
 		{"--rate-limit-per-sec=-Inf", "--rate-limit-per-sec must be a finite number greater than 0, got -Inf"},
 		{"--rate-limit-burst=0", "--rate-limit-burst must be greater than 0, got 0"},
+		{"--ip-rate-limit-per-sec=0", "--ip-rate-limit-per-sec must be a finite number greater than 0, got 0"},
+		{"--ip-rate-limit-per-sec=-1", "--ip-rate-limit-per-sec must be a finite number greater than 0, got -1"},
+		{"--ip-rate-limit-per-sec=NaN", "--ip-rate-limit-per-sec must be a finite number greater than 0, got NaN"},
+		{"--ip-rate-limit-per-sec=+Inf", "--ip-rate-limit-per-sec must be a finite number greater than 0, got +Inf"},
+		{"--ip-rate-limit-burst=0", "--ip-rate-limit-burst must be greater than 0, got 0"},
 		{"--apiserver-client-cert=client.crt", "--apiserver-client-cert and --apiserver-client-key must be provided together"},
 		{"--apiserver-client-key=client.key", "--apiserver-client-cert and --apiserver-client-key must be provided together"},
 	} {
@@ -156,7 +162,7 @@ func TestRunStartupErrors(t *testing.T) {
 		{"OAuth config", func(o *options) { o.oauthConfigFile = "missing-oauth" }, "load --oauth-config-file:"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			opts := options{port: port, secretFile: secretFile, apiServer: "https://example.invalid", maxBody: 1, rate: 1, burst: 1}
+			opts := options{port: port, secretFile: secretFile, apiServer: "https://example.invalid", maxBody: 1, rate: 1, burst: 1, ipRate: 1, ipBurst: 1}
 			test.change(&opts)
 			if err := run(opts); err == nil || !strings.HasPrefix(err.Error(), test.want) {
 				t.Fatalf("expected %q error, got %v", test.want, err)
