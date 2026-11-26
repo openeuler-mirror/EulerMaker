@@ -21,6 +21,7 @@ import (
 	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
+	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/oauth"
 	"ebs-gateway/internal/upstream"
 )
@@ -450,7 +451,7 @@ func TestServiceTokenRejectsOperationsOutsideAllowlist(t *testing.T) {
 		{"DELETE", "/apis/ebs/v1/projects/team/builds/build-1"},
 		{"POST", "/apis/ebs/v1/projects/team/jobs/job-1/abort"},
 		{"GET", "/apis/ebs/v1/configs/services"},
-		{"GET", "/apis/ebs/v1/scripts/rpmbuild"},
+		{"POST", "/apis/ebs/v1/scripts"},
 		{"GET", "/apis/ebs/v1/runners/service/jobs?watch=true"},
 		{"GET", "/apis/ebs/v1/service-endpoints"},
 		{"GET", "/apis/iam.ebs/v1/machineaccounts"},
@@ -1158,12 +1159,19 @@ func TestConfigAndScriptRouteGuards(t *testing.T) {
 		status               int
 	}{
 		{"GET", "/build-targets", "user", 200},
+		{"GET", "/build-targets", "ops", 200},
+		{"GET", "/build-targets", "admin", 200},
+		{"GET", "/build-targets", "", 401},
 		{"GET", "/build-targets", "invalid", 401},
 		{"GET", "/build-targets", "runner", 403},
+		{"GET", "/build-targets", "service", 403},
+		{"GET", "/build-targets?watch=true", "", 403},
+		{"GET", "/build-targets?watch=true", "user", 403},
 		{"GET", "/configs/example", "invalid", 401},
 		{"GET", "/configs/build-target", "", 401},
 		{"GET", "/configs/build-target", "user", 403},
 		{"GET", "/configs/build-target", "runner", 403},
+		{"GET", "/configs/build-target", "service", 403},
 		{"GET", "/configs/example?watch=true", "", 403},
 		{"GET", "/configs/example?watch=true", "ops", 403},
 		{"GET", "/configs/example", "ops", 200},
@@ -1171,11 +1179,30 @@ func TestConfigAndScriptRouteGuards(t *testing.T) {
 		{"GET", "/configs", "", 401},
 		{"GET", "/configs", "user", 403},
 		{"GET", "/configs", "ops", 200},
+		{"PATCH", "/configs/build-target", "ops", 200},
+		{"DELETE", "/configs/build-target", "admin", 403},
+		{"DELETE", "/configs/build-resource", "admin", 403},
 		{"DELETE", "/configs/services", "ops", 403},
+		{"DELETE", "/configs/services", "admin", 403},
+		{"DELETE", "/configs/custom", "ops", 200},
+		{"GET", "/scripts", "", 401},
 		{"GET", "/scripts/rpmbuild", "", 401},
+		{"GET", "/scripts/rpmbuild", "invalid", 401},
+		{"GET", "/scripts/rpmbuild?watch=true", "invalid", 403},
+		{"GET", "/scripts/rpmbuild?watch=true", "", 403},
+		{"GET", "/scripts/rpmbuild?watch=true", "runner", 403},
 		{"GET", "/scripts/rpmbuild", "runner", 200},
-		{"GET", "/scripts", "runner", 403},
+		{"GET", "/scripts", "runner", 200},
 		{"GET", "/scripts", "user", 200},
+		{"GET", "/scripts/custom", "service", 200},
+		{"GET", "/scripts", "service", 200},
+		{"POST", "/scripts", "", 401},
+		{"POST", "/scripts", "user", 403},
+		{"POST", "/scripts", "runner", 403},
+		{"POST", "/scripts", "service", 403},
+		{"PUT", "/scripts/custom", "user", 403},
+		{"PATCH", "/scripts/custom", "runner", 403},
+		{"DELETE", "/scripts/custom", "runner", 403},
 		{"DELETE", "/scripts/custom", "user", 403},
 		{"DELETE", "/scripts/custom", "ops", 200},
 	} {
@@ -1185,6 +1212,8 @@ func TestConfigAndScriptRouteGuards(t *testing.T) {
 				body := "{}"
 				if r.URL.Path == "/apis/iam.ebs/v1/users/"+tc.caller {
 					body = fmt.Sprintf(`{"metadata":{"name":%q},"spec":{"enabled":true,"scopes":["ebs:%s"]}}`, tc.caller, tc.caller)
+				} else if r.URL.Path == "/apis/iam.ebs/v1/machineaccounts/service" {
+					body = `{"metadata":{"name":"service"},"spec":{"type":"service"}}`
 				} else {
 					calls++
 					if r.URL.Path == "/apis/ebs/v1/configs/build-target" {
@@ -1193,7 +1222,14 @@ func TestConfigAndScriptRouteGuards(t *testing.T) {
 				}
 				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			req := httptest.NewRequest(tc.method, "/apis/ebs/v1"+tc.path, nil)
+			var payload io.Reader
+			if tc.method == http.MethodPatch {
+				payload = strings.NewReader(`{"spec":{"content":"targets: {}\n"}}`)
+			}
+			req := httptest.NewRequest(tc.method, "/apis/ebs/v1"+tc.path, payload)
+			if payload != nil {
+				req.Header.Set("Content-Type", "application/merge-patch+json")
+			}
 			switch tc.caller {
 			case "":
 			case "invalid":
@@ -1202,6 +1238,8 @@ func TestConfigAndScriptRouteGuards(t *testing.T) {
 				typ, scope := identity.UserType, identity.Scope("ebs:"+tc.caller)
 				if tc.caller == "runner" {
 					typ, scope = identity.RunnerType, ""
+				} else if tc.caller == "service" {
+					typ, scope = identity.ServiceType, ""
 				}
 				token, err := api.tokens.Issue(tc.caller, typ, scope, time.Hour, api.now())
 				if err != nil {
@@ -1452,6 +1490,126 @@ func TestUserListOmitsAdminAccounts(t *testing.T) {
 		if !strings.Contains(response.Body.String(), field) {
 			t.Fatalf("missing %s in response: %s", field, response.Body.String())
 		}
+	}
+}
+
+func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
+	api := newTestAPIWithConfig(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
+			t.Fatalf("denied request reached upstream: %s", r.URL)
+		}
+		body := `{"metadata":{"name":"service"},"spec":{"type":"service"}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}), 2, oauth.Config{})
+	token, err := api.tokens.Issue("service", identity.ServiceType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	var decision string
+	router.Use(func(c *gin.Context) {
+		c.Next()
+		decision = c.GetString("serviceAuthorization")
+	})
+	router.Use(middleware.ValidateWatchRoute, middleware.LimitIP(api.ipLimits), api.auth.AuthenticateRequest,
+		middleware.LimitIdentity(api.limits))
+	registerConfigs(router, api.Handler)
+	registerScripts(router, api.Handler)
+	for _, tc := range []struct {
+		query, audit string
+		status       int
+	}{
+		{"", "denied", http.StatusForbidden},
+		{"?watch=true", "", http.StatusForbidden},
+		{"", "", http.StatusTooManyRequests},
+	} {
+		for _, resource := range []string{"configs", "scripts"} {
+			req := httptest.NewRequest(http.MethodPost, "/apis/ebs/v1/"+resource+tc.query, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, req)
+			if res.Code != tc.status || decision != tc.audit {
+				t.Errorf("%s: status=%d audit=%q, want %d/%q", req.URL, res.Code, decision, tc.status, tc.audit)
+			}
+		}
+	}
+}
+
+func TestConfigAndScriptForwarding(t *testing.T) {
+	for _, resource := range []string{"configs", "scripts"} {
+		t.Run(resource, func(t *testing.T) {
+			testResourceForwarding(t, resource)
+		})
+	}
+}
+
+func testResourceForwarding(t *testing.T, resource string) {
+	t.Helper()
+	path := "/apis/ebs/v1/" + resource
+	const object = `{"metadata":{"name":"custom"},"spec":{}}`
+	for _, tc := range []struct {
+		name, method, suffix, media, payload string
+		status                               int
+		upstream                             []string
+	}{
+		{"list with query", "GET", "?limit=3", "", "", 200, []string{"GET " + path + "?limit=3"}},
+		{"create", "POST", "", "application/json", object, 200, []string{"POST " + path}},
+		{"create preserves formatting", "POST", "", "application/json", " \n" + object + "\n", 200, []string{"POST " + path}},
+		{"create exceeds Gateway body limit", "POST", "", "application/json", `{"metadata":{"name":"custom"},"spec":{"content":"` + strings.Repeat("x", 257) + `"}}`, 200, []string{"POST " + path}},
+		{"invalid create rejected upstream", "POST", "", "application/json", "{", 400, []string{"POST " + path}},
+		{"create media type rejected upstream", "POST", "", "text/plain", object, 415, []string{"POST " + path}},
+		{"replace", "PUT", "/custom", "application/json", " \n" + object + "\n", 200, []string{"PUT " + path + "/custom"}},
+		{"merge patch", "PATCH", "/custom", "application/merge-patch+json", `{"spec":{"content":"new"}}`, 200, []string{"PATCH " + path + "/custom"}},
+		{"JSON patch", "PATCH", "/custom", "application/json-patch+json", `[{"op":"replace","path":"/spec/content","value":"new"}]`, 200, []string{"PATCH " + path + "/custom"}},
+		{"large update", "PUT", "/custom", "application/json", `{"metadata":{"name":"custom"},"spec":{"content":"` + strings.Repeat("x", 257) + `"}}`, 200, []string{"PUT " + path + "/custom"}},
+		{"invalid patch rejected upstream", "PATCH", "/custom", "application/merge-patch+json", "{", 400, []string{"PATCH " + path + "/custom"}},
+		{"conflict from upstream", "PUT", "/custom", "application/json", object, 409, []string{"PUT " + path + "/custom"}},
+		{"delete options", "DELETE", "/custom", "application/json", `{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"resourceVersion":"v1:1:1"}}`, 200, []string{"DELETE " + path + "/custom"}},
+		{"large delete", "DELETE", "/custom", "application/json", strings.Repeat(" ", 257) + "{}", 200, []string{"DELETE " + path + "/custom"}},
+		{"delete rejected upstream", "DELETE", "/custom", "application/json", "{", 400, []string{"DELETE " + path + "/custom"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				body := object
+				status := http.StatusOK
+				if r.URL.Path == "/apis/iam.ebs/v1/users/ops" {
+					body = `{"metadata":{"name":"ops"},"spec":{"enabled":true,"scopes":["ebs:ops"]}}`
+				} else {
+					calls = append(calls, r.Method+" "+r.URL.RequestURI())
+					if r.Header.Get("Authorization") != "" {
+						t.Fatal("caller token forwarded")
+					}
+					if r.Method != http.MethodGet {
+						raw, err := io.ReadAll(r.Body)
+						if err != nil || string(raw) != tc.payload || r.Header.Get("Content-Type") != tc.media {
+							t.Fatalf("write request was modified: body=%q media=%q error=%v", raw, r.Header.Get("Content-Type"), err)
+						}
+						status = tc.status
+						if status != http.StatusOK {
+							body = `{"error":"rejected by apiserver"}`
+						}
+					}
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			api.bodyLimit = 256
+			token, err := api.tokens.Issue("ops", identity.UserType, identity.OpsScope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(tc.method, path+tc.suffix, strings.NewReader(tc.payload))
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", tc.media)
+			res := httptest.NewRecorder()
+			api.Router().ServeHTTP(res, req)
+			if res.Code != tc.status || !reflect.DeepEqual(calls, tc.upstream) {
+				t.Fatalf("status=%d calls=%v, want %d/%v", res.Code, calls, tc.status, tc.upstream)
+			}
+			if len(tc.upstream) != 0 && tc.status != http.StatusOK && res.Body.String() != `{"error":"rejected by apiserver"}` {
+				t.Fatalf("upstream error response was modified: %s", res.Body)
+			}
+		})
 	}
 }
 

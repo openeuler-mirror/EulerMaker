@@ -282,7 +282,7 @@ func permissions(resource, part, method string) ([]object, string) {
 	}
 	if resource == "scripts" {
 		if read {
-			return bearer, "Authenticated users may read/list Scripts; Runner may GET only a named Script."
+			return bearer, "Authenticated users and Runner/Service machine identities may read and list Scripts. Watch is not supported."
 		}
 		return bearer, "Ops/Admin only. Use UID and resourceVersion preconditions when deleting."
 	}

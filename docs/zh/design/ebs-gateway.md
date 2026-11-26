@@ -8,7 +8,7 @@ BuildGraph 的字段及生命周期见 [数据模型](data-models.md#buildgraph�
 
 集群级 Config 仅 Ops/Admin 可读写，不依赖工程成员关系。详见 [构建配置设计](data-models~config.md#11-config-公共资源与访问权限)。
 
-集群级 Script 使用 `/apis/ebs/v1/scripts`：仅 Ops/Admin 可创建、PUT/PATCH 修改和 DELETE 脚本；普通登录用户可读取和列表，Runner 身份仅可 GET 具名脚本。匿名访问、Watch、status 子资源和 Project-scoped 路径均不开放。删除请求若携带 UID/resourceVersion 前置条件，由 apiserver 校验；Gateway 不按脚本名称限制删除，也不校验脚本正文。字段校验及更新冲突交给 apiserver。详见 [Script 设计](data-models~script.md)。
+集群级 Script 使用 `/apis/ebs/v1/scripts`：所有已认证的 User、Runner、Service 身份可读取列表和单个脚本，匿名请求及无效 Token 返回 401。读写统一使用已认证限流；仅 Ops/Admin 可创建、PUT/PATCH 修改和 DELETE 脚本。Watch、status 子资源和 Project-scoped 路径均不开放。删除请求若携带 UID/resourceVersion 前置条件，由 apiserver 校验；Gateway 不按脚本名称限制删除，也不校验脚本正文。字段校验及更新冲突交给 apiserver。详见 [Script 设计](data-models~script.md)。
 
 Gateway 不开放 Build 对象及其 `/status` 的 PUT/PATCH，任何身份均不得通过 Gateway 更新 Build；Build Controller 直连 apiserver 固化增量构建的 `spec.packages`。用户创建 Build 和使用已有中止接口的权限保持不变。
 
@@ -389,9 +389,9 @@ Build 中止复用既有 `/abort` 路由及请求/响应契约，不通过主资
 3. 从已解析路由确定目标工程：Project 对象路由取对象名称，Build 路由取 Project 路径参数；不能从请求正文或查询参数扩大范围。
 4. 同时检查工程命中及路由对应权限，再执行现有候选对象/字段检查或 `/abort` 转发；身份、权限和业务校验全部通过后才调用上游写入。
 
-账号不存在或名称/类型不匹配返回 401，上游不可用或响应异常返回 503，工程未授权、缺少操作权限或操作未开放返回 403（未注册的路径或方法走未匹配路由，认证通过后返回 404）。Token 只携带身份，不固化授权列表；每次请求按账号当前配置执行，已通过核验的在途请求不作撤回保证。公开读取继续主动不带 Authorization；带 Service Token 的读取请求返回拒绝，不降级为匿名，不新增读取权限。
+账号不存在或名称/类型不匹配返回 401，上游不可用或响应异常返回 503，工程未授权、缺少操作权限或操作未开放返回 403（未注册的路径或方法走未匹配路由，认证通过后返回 404）。Token 只携带身份，不固化授权列表；每次请求按账号当前配置执行，已通过核验的在途请求不作撤回保证。公开业务资源读取继续主动不带 Authorization；除已开放的 Script 读取外，带 Service Token 的资源读取请求返回拒绝，不降级为匿名。
 
-除上述三项操作及 `/auth/check` 外，资源操作默认拒绝，包括 Project 创建/删除、Build 删除/普通更新、所有 `/status` 写入，以及 Runner、Job、Config、Script 和 IAM 管理。授予 `projects:update` 不会获得 MachineAccount 或其他资源更新能力。
+除上述三项操作、`/auth/check` 和 Script 列表及读取外，资源操作默认拒绝，包括 Project 创建/删除、Build 删除/普通更新、所有 `/status` 写入，以及 Runner、Job、Config、Script 和 IAM 管理。授予 `projects:update` 不会获得 MachineAccount 或其他资源更新能力。
 
 授权随 Admin 调用 `POST /auth/machineaccounts` 创建账号写入；前端创建和编辑 service 账号时支持配置工程名称及三个操作权限。Admin 可通过 `PUT/PATCH /apis/iam.ebs/v1/machineaccounts/{name}` 修改 runner 和 service 账号的 `spec.tokenTTLSeconds`（300～86400 秒），service 账号还允许修改 `spec.projects`、`spec.permissions`，不能改变账号类型、元数据或凭据。普通用户、Ops、Runner Token 和 Service Token 均不具备该更新能力。更新使用既有 PATCH 转 PUT 和并发版本保护，UID/resourceVersion 不匹配返回 409；不自动重试覆盖。有效期变更仅影响之后签发的 Token，已签发 Token 的到期时间不变。授权变更对后续请求生效，既有 Token 不需重签，已受理操作不撤销。按现有名称身份契约，同名账号重建后未过期旧 Token 可以继续使用，并按新账号授权判断。更换 secret 不撤销已签发 Token；若必须隔离旧 Token，使用新的账号名称。上线顺序为 apiserver mapping/字段支持、准备显式授权账号、Gateway 启用范围校验；缺少授权的旧账号不再全工程放行。
 
@@ -665,7 +665,11 @@ Runner 范围 Job list/watch 只允许 GET，拒绝客户端 `fieldSelector`，�
 
 #### 4.9.1 PUT/PATCH 完整对象比较
 
-gateway 不能只检查请求体中显式出现的字段。所有 `PUT`、`PATCH` 请求必须先构造本次请求将产生的完整候选对象，再对旧对象和候选对象执行授权比较；只有比较通过的候选对象可以写入 apiserver。
+Config 请求在通过认证、Ops/Admin 权限、限流和 Watch 检查后直接代理，保留原始方法、正文和 Content-Type；DELETE 还须通过内置配置删除保护。Gateway 不预读 Config、不将 PATCH 转为 PUT，也不对 Config 请求执行正文大小检查；解码、PATCH 应用、元数据及内容校验、版本冲突检查、DeleteOptions 解析和正文大小限制均由 apiserver 负责，响应原样返回。
+
+Script 同样直接代理，由 apiserver 执行正文大小限制、解码、PATCH 应用、版本冲突和资源校验。所有已认证的 User、Runner、Service 身份可读取列表和单个脚本；写请求须具备 Ops/Admin 权限。Gateway 统一执行已认证限流并拒绝 Watch，列表查询参数原样透传。
+
+以下完整对象比较及请求格式、大小限制适用于其他资源的更新请求。gateway 不能只检查请求体中显式出现的字段，必须先构造本次请求将产生的完整候选对象，再对旧对象和候选对象执行授权比较；只有比较通过的候选对象可以写入 apiserver。
 
 处理流程：
 
@@ -826,7 +830,7 @@ Service Token 的资源权限仅按 4.3.1，不继承下表中的公开读取或
 | `/apis/ebs/v1/build-targets` | 已认证用户可读取发行版及架构列表；机器身份不可读 | 无 |
 | `/apis/ebs/v1/configs[/{name}]` | 仅 Ops/Admin 可读 | 仅 Ops/Admin 可写；内置 `build-target`、`build-resource`、`services` 不可删除 |
 | `/apis/ebs/v1/service-endpoints` | 仅 Runner Token 可读取各实例的 Runner 地址投影 | 无 |
-| `/apis/ebs/v1/scripts[/{name}]` | 登录用户和 Ops/Admin 可读取、列表；Runner 仅可具名读取 | 仅 Ops/Admin 可创建、修改、删除 |
+| `/apis/ebs/v1/scripts[/{name}]` | 所有已认证 User、Runner、Service 身份可读取、列表 | 仅 Ops/Admin 可创建、修改、删除 |
 | `/apis/iam.ebs/v1/users[/{name}]`、`/machineaccounts[/{name}]` | 仅 Admin；User 不含管理员对象 | 仅 Admin 可修改/删除非管理员 User、删除 MachineAccount、更新机器账号 Token 有效期及 service 账号的工程范围和权限；创建分别使用 `/auth/register`、`/auth/machineaccounts` |
 
 未列出的资源、子资源和 `/api/*` 别名不对外开放；匿名不能 watch 或写入。Project 范围资源的原生全局路径也不开放。完整的角色差异、Runner 字段限制和 Job 中止特例以第 4.8 节为准。
