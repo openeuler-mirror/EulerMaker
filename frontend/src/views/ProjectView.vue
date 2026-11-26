@@ -1142,6 +1142,7 @@ function createBuildName(): string {
 
 function openTargetEditor(): void {
   if (!project.value || !canEditProject.value) return;
+  void reloadBuildTargetConfig();
   targetSaveSuccess.value = false;
   targetErrorKey.value = "";
   editingTargets.value = (project.value.spec?.buildArches || []).map((arch) => ({

@@ -4,6 +4,8 @@
 
 构建配置支持运维编辑发行版/架构/镜像映射；工程统一选择发行版，构建目标仅选择架构，选项读取 Gateway 的 `/apis/ebs/v1/build-targets` 投影，并保留旧工程已失效的目标值；规则见 [构建配置设计](data-models~config.md#26-前端与-ebsctl)。Project 的 `distro` 字段在前端统一显示为“发行版”。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](data-models~script.md)。
 
+构建目标投影按需加载：通过登录及操作权限检查后，打开创建工程、编辑构建架构或发起构建表单时请求，重新打开时刷新，并发加载合并为一次请求。浏览工程列表和详情不自动加载；YAML 导入不请求选项，构建目标合法性由 apiserver 校验。
+
 本文定义 EulerMaker Web 控制台的首版产品范围、技术架构、页面结构、权限行为、API 对接、实时日志、安全边界、部署方式和验收标准。
 
 本文记录当前页面与接口行为，性能、测试目标和待完善能力单独说明。资源访问以当前 `ebs/v1`、`iam.ebs/v1`、Gateway 和 Artifact Manager 契约为准；资源字段的权威定义位于 [`api/ebs/v1`](../../../api/ebs/v1) 和 [`api/iam/v1`](../../../api/iam/v1)。

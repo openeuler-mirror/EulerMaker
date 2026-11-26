@@ -1,4 +1,4 @@
-import { computed, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { errorTranslationKey, request } from "@/api";
 import type { ConfiguredBuildTarget } from "@/types";
 
@@ -30,6 +30,5 @@ export function useBuildTargetConfig() {
   const operatingSystems = computed(() => targets.value.map(target => target.distro));
   const arches = (os?: string) => targets.value.find(target => target.distro === os)?.arches ?? [];
   const supports = (target: ConfiguredBuildTarget) => !loading.value && !error.value && target.arch !== undefined && arches(target.os).includes(target.arch);
-  onMounted(() => { void reload(); });
   return { loading, error, reload, operatingSystems, arches, supports };
 }

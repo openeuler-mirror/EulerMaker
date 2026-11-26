@@ -271,6 +271,7 @@ function openDialog(kind: "create" | "import"): void {
     return;
   }
   submitErrorKey.value = "";
+  if (kind === "create") void reloadTargetConfig();
   dialog.value = kind;
 }
 

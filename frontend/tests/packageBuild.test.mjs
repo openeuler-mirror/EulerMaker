@@ -17,6 +17,7 @@ const { outputText } = ts.transpileModule(functions.map(statement => statement.g
 
 function setup() {
   const requests = [];
+  const targetConfigLoads = ref(0);
   let nextBuild = 0;
   const state = {
     project: ref({ spec: {
@@ -31,7 +32,7 @@ function setup() {
     buildDialogErrorKey: ref(""), buildActionErrorKey: ref(""), createdBuildNames: ref([]),
     abortedBuildName: ref(""), buildDialogOpen: ref(false), unsupportedBuildSelection: ref(false),
     selectedBuildName: ref(""), name: ref("example"),
-    reloadBuildTargetConfig: async () => {}, loadProject: async () => true, loadResources: async () => {},
+    reloadBuildTargetConfig: async () => { targetConfigLoads.value++; }, loadProject: async () => true, loadResources: async () => {},
     selectTab: () => {}, createBuildName: () => `build-${++nextBuild}`,
     ApiError: class extends Error {}, errorTranslationKey: () => "errors.createBuild",
     request: async (url, options) => {
@@ -44,8 +45,24 @@ function setup() {
   state.availableBuildPackages = computed(() => state.project.value.spec.packageRepos.map(repo => repo.name));
   const actions = new Function(...Object.keys(state), outputText
     + "\nreturn { completeBuildGitRef, openBuildDialog, closeBuildDialog, createBuild, openTargetEditor, addTarget, saveTargets };")(...Object.values(state));
-  return { state, actions, requests };
+  return { state, actions, requests, targetConfigLoads };
 }
+
+test("build targets load only when an authorized build or architecture form opens", async () => {
+  const { state, actions, targetConfigLoads } = setup();
+  assert.equal(targetConfigLoads.value, 0);
+  state.canEditProject.value = false;
+  state.canStartBuild.value = false;
+  actions.openTargetEditor();
+  await actions.openBuildDialog("full");
+  assert.equal(targetConfigLoads.value, 0);
+  state.canEditProject.value = true;
+  actions.openTargetEditor();
+  assert.equal(targetConfigLoads.value, 1);
+  state.canStartBuild.value = true;
+  await actions.openBuildDialog("full");
+  assert.equal(targetConfigLoads.value, 2);
+});
 
 test("architecture editing preserves the project distribution", async () => {
   const { state, actions, requests } = setup();
