@@ -862,6 +862,48 @@ func TestIAMRouteGuards(t *testing.T) {
 	}
 }
 
+func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
+	api := newTestAPIWithConfig(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
+			t.Fatalf("denied request reached upstream: %s", r.URL)
+		}
+		body := `{"metadata":{"name":"service"},"spec":{"type":"service"}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}), 2, oauth.Config{})
+	token, err := api.tokens.Issue("service", identity.ServiceType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	var decision string
+	router.Use(func(c *gin.Context) {
+		c.Next()
+		decision = c.GetString("serviceAuthorization")
+	})
+	router.Use(middleware.ValidateWatchRoute, middleware.LimitIP(api.ipLimits), api.auth.AuthenticateRequest,
+		middleware.LimitIdentity(api.limits))
+	registerConfigs(router, api.Handler)
+	registerScripts(router, api.Handler)
+	for _, tc := range []struct {
+		query, audit string
+		status       int
+	}{
+		{"", "denied", http.StatusForbidden},
+		{"?watch=true", "", http.StatusForbidden},
+		{"", "", http.StatusTooManyRequests},
+	} {
+		for _, resource := range []string{"configs", "scripts"} {
+			req := httptest.NewRequest(http.MethodPost, "/apis/ebs/v1/"+resource+tc.query, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, req)
+			if res.Code != tc.status || decision != tc.audit {
+				t.Errorf("%s: status=%d audit=%q, want %d/%q", req.URL, res.Code, decision, tc.status, tc.audit)
+			}
+		}
+	}
+}
+
 func TestWatchRouteAllowlist(t *testing.T) {
 	forwarded := 0
 	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1153,6 +1195,306 @@ func TestBuildTargets(t *testing.T) {
 			router.ServeHTTP(res, req)
 			if res.Code != http.StatusTooManyRequests || res.Header().Get("Retry-After") != "1" {
 				t.Fatalf("authenticated limit: status=%d Retry-After=%q", res.Code, res.Header().Get("Retry-After"))
+			}
+		})
+	}
+}
+
+func TestConfigProjectionsRejectWatch(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/apis/iam.ebs/v1/users/user" {
+			t.Fatalf("rejected query reached upstream: %s", r.URL)
+		}
+		body := `{"metadata":{"name":"user"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	router := api.Router()
+	for _, endpoint := range []string{"build-targets", "service-endpoints"} {
+		who := identity.Principal{Subject: "user", Type: identity.UserType, Scope: identity.UserScope}
+		if endpoint == "service-endpoints" {
+			who = identity.Principal{Subject: "runner", Type: identity.RunnerType}
+		}
+		token, err := api.tokens.Issue(who.Subject, who.Type, who.Scope, time.Hour, api.now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, query := range []string{"watch=true", "watch=1", "watch=false&watch=true"} {
+			req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/"+endpoint+"?"+query, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, req)
+			if res.Code != http.StatusForbidden || res.Body.String() != `{"error":"watch is not supported for this route"}` {
+				t.Fatalf("%s: status=%d body=%s", req.URL, res.Code, res.Body)
+			}
+		}
+		if endpoint == "service-endpoints" {
+			for _, query := range []string{"watch=false", "project=demo"} {
+				req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/"+endpoint+"?"+query, nil)
+				req.Header.Set("Authorization", "Bearer "+token)
+				res := httptest.NewRecorder()
+				router.ServeHTTP(res, req)
+				if res.Code != http.StatusBadRequest {
+					t.Fatalf("%s: status=%d, want 400", req.URL, res.Code)
+				}
+			}
+		}
+	}
+}
+
+func TestGlobalIdentityAndAnonymousLimits(t *testing.T) {
+	lookups := 0
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/apis/iam.ebs/v1/users/alice" {
+			lookups++
+			body := `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+		}
+		if r.URL.Path != "/apis/ebs/v1/projects" && r.URL.Path != "/apis/ebs/v1/scripts" {
+			t.Fatalf("unexpected upstream request: %s", r.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
+	}))
+	api.limits = limit.New(1, 2, api.now)
+	token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := api.Router()
+	for _, tc := range []struct {
+		method, path  string
+		authenticated bool
+		want          int
+	}{
+		{"GET", "/apis/ebs/v1/projects", false, 200},
+		{"GET", "/openapi.json", false, 200},
+		{"GET", "/auth/providers", false, 429},
+		{"GET", "/healthz", false, 200},
+		{"GET", "/apis/ebs/v1/projects", true, 200},
+		{"GET", "/apis/ebs/v1/scripts", true, 200},
+		{"POST", "/auth/check", true, 429},
+		{"GET", "/apis/ebs/v1/projects", true, 429},
+	} {
+		request := httptest.NewRequest(tc.method, tc.path, nil)
+		if tc.authenticated {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+		before := lookups
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, request)
+		if res.Code != tc.want {
+			t.Fatalf("%s: status=%d, want %d", tc.path, res.Code, tc.want)
+		}
+		wantLookups := 0
+		if tc.authenticated {
+			wantLookups = 1
+		}
+		if lookups-before != wantLookups {
+			t.Fatalf("%s: IAM lookups=%d, want %d", tc.path, lookups-before, wantLookups)
+		}
+		if tc.want == 429 && res.Header().Get("Retry-After") != "1" {
+			t.Fatal("missing retry delay")
+		}
+	}
+}
+
+func TestHealthAndBusinessMiddlewareChains(t *testing.T) {
+	var audit bytes.Buffer
+	state := klog.CaptureState()
+	t.Cleanup(state.Restore)
+	loggingFlags := flag.NewFlagSet("logging", flag.ContinueOnError)
+	klog.InitFlags(loggingFlags)
+	for name, value := range map[string]string{"logtostderr": "false", "alsologtostderr": "false", "stderrthreshold": "FATAL", "one_output": "true"} {
+		if err := loggingFlags.Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	klog.SetOutput(&audit)
+	lookups := 0
+	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		lookups++
+		panic("test account lookup panic")
+	}))
+	api.ipLimits = limit.New(1, 1, api.now)
+	api.limits = limit.New(1, 1, api.now)
+	router := api.Router()
+	for _, exhausted := range []bool{false, true} {
+		if exhausted {
+			if !api.ipLimits.Allow("192.0.2.1") || !api.limits.Allow("anonymous/192.0.2.1") {
+				t.Fatal("health requests consumed rate limit allowance")
+			}
+		}
+		for _, path := range []string{"/healthz", "/healthz?watch=true"} {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			request.RemoteAddr = "192.0.2.1:1234"
+			request.Header.Set("Authorization", "Bearer invalid")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			klog.Flush()
+			if response.Code != http.StatusOK || response.Body.String() != "ok\n" || audit.Len() != 0 || lookups != 0 {
+				t.Fatalf("probe entered business chain: status=%d body=%q audit=%q lookups=%d", response.Code, response.Body, audit.String(), lookups)
+			}
+			if response.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+				t.Fatalf("unexpected health response content type: %q", response.Header().Get("Content-Type"))
+			}
+		}
+	}
+	for _, methodPath := range []struct{ method, path string }{
+		{http.MethodPost, "/healthz"},
+		{http.MethodGet, "/healthz/"},
+	} {
+		request := httptest.NewRequest(methodPath.method, methodPath.path, nil)
+		request.RemoteAddr = "192.0.2.1:1234"
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusTooManyRequests {
+			t.Fatalf("%s %s bypassed business limits: %d", methodPath.method, methodPath.path, response.Code)
+		}
+	}
+
+	audit.Reset()
+	token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/projects", nil)
+	request.RemoteAddr = "192.0.2.2:1234"
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	klog.Flush()
+	if response.Code != http.StatusInternalServerError || lookups != 1 {
+		t.Fatalf("business panic not recovered: status=%d lookups=%d", response.Code, lookups)
+	}
+	for _, field := range []string{`"HTTP request"`, `path="/apis/ebs/v1/projects"`, "status=500"} {
+		if !strings.Contains(audit.String(), field) {
+			t.Fatalf("panic audit missing %s: %s", field, audit.String())
+		}
+	}
+	if strings.Count(audit.String(), `"HTTP request"`) != 1 || strings.Contains(audit.String(), token) {
+		t.Fatalf("unexpected panic audit: %s", audit.String())
+	}
+}
+
+func TestGlobalIPLimitBeforeAuthentication(t *testing.T) {
+	lookups, forwards := 0, 0
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := `{"items":[]}`
+		if r.URL.Path == "/apis/iam.ebs/v1/users/alice" {
+			lookups++
+			body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
+		} else {
+			forwards++
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	api.ipLimits = limit.New(1, 1, api.now)
+	token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := api.Router()
+	for _, tc := range []struct {
+		path, address, token string
+		status               int
+		lookups, forwards    int
+	}{
+		{"/apis/ebs/v1/projects", "192.0.2.1:1234", "invalid", 401, 0, 0},
+		{"/apis/ebs/v1/projects", "192.0.2.1:1234", token, 429, 0, 0},
+		{"/auth/providers", "192.0.2.1:1234", "", 429, 0, 0},
+		{"/unknown", "192.0.2.1:1234", "", 429, 0, 0},
+		{"/healthz", "192.0.2.1:1234", "invalid", 200, 0, 0},
+		{"/apis/ebs/v1/projects?watch=true", "192.0.2.1:1234", token, 403, 0, 0},
+		{"/apis/ebs/v1/projects", "192.0.2.2:1234", token, 200, 1, 1},
+	} {
+		request := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		request.RemoteAddr = tc.address
+		if tc.token != "" {
+			request.Header.Set("Authorization", "Bearer "+tc.token)
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != tc.status || lookups != tc.lookups || forwards != tc.forwards {
+			t.Fatalf("%s: status=%d lookups=%d forwards=%d, want %d/%d/%d", tc.path, response.Code, lookups, forwards, tc.status, tc.lookups, tc.forwards)
+		}
+		if tc.status == 429 && response.Header().Get("Retry-After") != "1" {
+			t.Fatal("missing retry delay")
+		}
+	}
+}
+
+func TestConfigAndScriptForwarding(t *testing.T) {
+	for _, resource := range []string{"configs", "scripts"} {
+		t.Run(resource, func(t *testing.T) {
+			testResourceForwarding(t, resource)
+		})
+	}
+}
+
+func testResourceForwarding(t *testing.T, resource string) {
+	t.Helper()
+	path := "/apis/ebs/v1/" + resource
+	const object = `{"metadata":{"name":"custom"},"spec":{}}`
+	for _, tc := range []struct {
+		name, method, suffix, media, payload string
+		status                               int
+		upstream                             []string
+	}{
+		{"list with query", "GET", "?limit=3", "", "", 200, []string{"GET " + path + "?limit=3"}},
+		{"create", "POST", "", "application/json", object, 200, []string{"POST " + path}},
+		{"create preserves formatting", "POST", "", "application/json", " \n" + object + "\n", 200, []string{"POST " + path}},
+		{"create exceeds Gateway body limit", "POST", "", "application/json", `{"metadata":{"name":"custom"},"spec":{"content":"` + strings.Repeat("x", 257) + `"}}`, 200, []string{"POST " + path}},
+		{"invalid create rejected upstream", "POST", "", "application/json", "{", 400, []string{"POST " + path}},
+		{"create media type rejected upstream", "POST", "", "text/plain", object, 415, []string{"POST " + path}},
+		{"replace", "PUT", "/custom", "application/json", " \n" + object + "\n", 200, []string{"PUT " + path + "/custom"}},
+		{"merge patch", "PATCH", "/custom", "application/merge-patch+json", `{"spec":{"content":"new"}}`, 200, []string{"PATCH " + path + "/custom"}},
+		{"JSON patch", "PATCH", "/custom", "application/json-patch+json", `[{"op":"replace","path":"/spec/content","value":"new"}]`, 200, []string{"PATCH " + path + "/custom"}},
+		{"large update", "PUT", "/custom", "application/json", `{"metadata":{"name":"custom"},"spec":{"content":"` + strings.Repeat("x", 257) + `"}}`, 200, []string{"PUT " + path + "/custom"}},
+		{"invalid patch rejected upstream", "PATCH", "/custom", "application/merge-patch+json", "{", 400, []string{"PATCH " + path + "/custom"}},
+		{"conflict from upstream", "PUT", "/custom", "application/json", object, 409, []string{"PUT " + path + "/custom"}},
+		{"delete options", "DELETE", "/custom", "application/json", `{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"resourceVersion":"v1:1:1"}}`, 200, []string{"DELETE " + path + "/custom"}},
+		{"large delete", "DELETE", "/custom", "application/json", strings.Repeat(" ", 257) + "{}", 200, []string{"DELETE " + path + "/custom"}},
+		{"delete rejected upstream", "DELETE", "/custom", "application/json", "{", 400, []string{"DELETE " + path + "/custom"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				body := object
+				status := http.StatusOK
+				if r.URL.Path == "/apis/iam.ebs/v1/users/ops" {
+					body = `{"metadata":{"name":"ops"},"spec":{"enabled":true,"scopes":["ebs:ops"]}}`
+				} else {
+					calls = append(calls, r.Method+" "+r.URL.RequestURI())
+					if r.Header.Get("Authorization") != "" {
+						t.Fatal("caller token forwarded")
+					}
+					if r.Method != http.MethodGet {
+						raw, err := io.ReadAll(r.Body)
+						if err != nil || string(raw) != tc.payload || r.Header.Get("Content-Type") != tc.media {
+							t.Fatalf("write request was modified: body=%q media=%q error=%v", raw, r.Header.Get("Content-Type"), err)
+						}
+						status = tc.status
+						if status != http.StatusOK {
+							body = `{"error":"rejected by apiserver"}`
+						}
+					}
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			api.bodyLimit = 256
+			token, err := api.tokens.Issue("ops", identity.UserType, identity.OpsScope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(tc.method, path+tc.suffix, strings.NewReader(tc.payload))
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", tc.media)
+			res := httptest.NewRecorder()
+			api.Router().ServeHTTP(res, req)
+			if res.Code != tc.status || !reflect.DeepEqual(calls, tc.upstream) {
+				t.Fatalf("status=%d calls=%v, want %d/%v", res.Code, calls, tc.status, tc.upstream)
+			}
+			if len(tc.upstream) != 0 && tc.status != http.StatusOK && res.Body.String() != `{"error":"rejected by apiserver"}` {
+				t.Fatalf("upstream error response was modified: %s", res.Body)
 			}
 		})
 	}
@@ -1498,126 +1840,6 @@ func TestUserListOmitsAdminAccounts(t *testing.T) {
 	}
 }
 
-func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
-	api := newTestAPIWithConfig(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
-			t.Fatalf("denied request reached upstream: %s", r.URL)
-		}
-		body := `{"metadata":{"name":"service"},"spec":{"type":"service"}}`
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
-	}), 2, oauth.Config{})
-	token, err := api.tokens.Issue("service", identity.ServiceType, "", time.Hour, api.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	router := gin.New()
-	var decision string
-	router.Use(func(c *gin.Context) {
-		c.Next()
-		decision = c.GetString("serviceAuthorization")
-	})
-	router.Use(middleware.ValidateWatchRoute, middleware.LimitIP(api.ipLimits), api.auth.AuthenticateRequest,
-		middleware.LimitIdentity(api.limits))
-	registerConfigs(router, api.Handler)
-	registerScripts(router, api.Handler)
-	for _, tc := range []struct {
-		query, audit string
-		status       int
-	}{
-		{"", "denied", http.StatusForbidden},
-		{"?watch=true", "", http.StatusForbidden},
-		{"", "", http.StatusTooManyRequests},
-	} {
-		for _, resource := range []string{"configs", "scripts"} {
-			req := httptest.NewRequest(http.MethodPost, "/apis/ebs/v1/"+resource+tc.query, nil)
-			req.Header.Set("Authorization", "Bearer "+token)
-			res := httptest.NewRecorder()
-			router.ServeHTTP(res, req)
-			if res.Code != tc.status || decision != tc.audit {
-				t.Errorf("%s: status=%d audit=%q, want %d/%q", req.URL, res.Code, decision, tc.status, tc.audit)
-			}
-		}
-	}
-}
-
-func TestConfigAndScriptForwarding(t *testing.T) {
-	for _, resource := range []string{"configs", "scripts"} {
-		t.Run(resource, func(t *testing.T) {
-			testResourceForwarding(t, resource)
-		})
-	}
-}
-
-func testResourceForwarding(t *testing.T, resource string) {
-	t.Helper()
-	path := "/apis/ebs/v1/" + resource
-	const object = `{"metadata":{"name":"custom"},"spec":{}}`
-	for _, tc := range []struct {
-		name, method, suffix, media, payload string
-		status                               int
-		upstream                             []string
-	}{
-		{"list with query", "GET", "?limit=3", "", "", 200, []string{"GET " + path + "?limit=3"}},
-		{"create", "POST", "", "application/json", object, 200, []string{"POST " + path}},
-		{"create preserves formatting", "POST", "", "application/json", " \n" + object + "\n", 200, []string{"POST " + path}},
-		{"create exceeds Gateway body limit", "POST", "", "application/json", `{"metadata":{"name":"custom"},"spec":{"content":"` + strings.Repeat("x", 257) + `"}}`, 200, []string{"POST " + path}},
-		{"invalid create rejected upstream", "POST", "", "application/json", "{", 400, []string{"POST " + path}},
-		{"create media type rejected upstream", "POST", "", "text/plain", object, 415, []string{"POST " + path}},
-		{"replace", "PUT", "/custom", "application/json", " \n" + object + "\n", 200, []string{"PUT " + path + "/custom"}},
-		{"merge patch", "PATCH", "/custom", "application/merge-patch+json", `{"spec":{"content":"new"}}`, 200, []string{"PATCH " + path + "/custom"}},
-		{"JSON patch", "PATCH", "/custom", "application/json-patch+json", `[{"op":"replace","path":"/spec/content","value":"new"}]`, 200, []string{"PATCH " + path + "/custom"}},
-		{"large update", "PUT", "/custom", "application/json", `{"metadata":{"name":"custom"},"spec":{"content":"` + strings.Repeat("x", 257) + `"}}`, 200, []string{"PUT " + path + "/custom"}},
-		{"invalid patch rejected upstream", "PATCH", "/custom", "application/merge-patch+json", "{", 400, []string{"PATCH " + path + "/custom"}},
-		{"conflict from upstream", "PUT", "/custom", "application/json", object, 409, []string{"PUT " + path + "/custom"}},
-		{"delete options", "DELETE", "/custom", "application/json", `{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"resourceVersion":"v1:1:1"}}`, 200, []string{"DELETE " + path + "/custom"}},
-		{"large delete", "DELETE", "/custom", "application/json", strings.Repeat(" ", 257) + "{}", 200, []string{"DELETE " + path + "/custom"}},
-		{"delete rejected upstream", "DELETE", "/custom", "application/json", "{", 400, []string{"DELETE " + path + "/custom"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var calls []string
-			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				body := object
-				status := http.StatusOK
-				if r.URL.Path == "/apis/iam.ebs/v1/users/ops" {
-					body = `{"metadata":{"name":"ops"},"spec":{"enabled":true,"scopes":["ebs:ops"]}}`
-				} else {
-					calls = append(calls, r.Method+" "+r.URL.RequestURI())
-					if r.Header.Get("Authorization") != "" {
-						t.Fatal("caller token forwarded")
-					}
-					if r.Method != http.MethodGet {
-						raw, err := io.ReadAll(r.Body)
-						if err != nil || string(raw) != tc.payload || r.Header.Get("Content-Type") != tc.media {
-							t.Fatalf("write request was modified: body=%q media=%q error=%v", raw, r.Header.Get("Content-Type"), err)
-						}
-						status = tc.status
-						if status != http.StatusOK {
-							body = `{"error":"rejected by apiserver"}`
-						}
-					}
-				}
-				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
-			}))
-			api.bodyLimit = 256
-			token, err := api.tokens.Issue("ops", identity.UserType, identity.OpsScope, time.Hour, api.now())
-			if err != nil {
-				t.Fatal(err)
-			}
-			req := httptest.NewRequest(tc.method, path+tc.suffix, strings.NewReader(tc.payload))
-			req.Header.Set("Authorization", "Bearer "+token)
-			req.Header.Set("Content-Type", tc.media)
-			res := httptest.NewRecorder()
-			api.Router().ServeHTTP(res, req)
-			if res.Code != tc.status || !reflect.DeepEqual(calls, tc.upstream) {
-				t.Fatalf("status=%d calls=%v, want %d/%v", res.Code, calls, tc.status, tc.upstream)
-			}
-			if len(tc.upstream) != 0 && tc.status != http.StatusOK && res.Body.String() != `{"error":"rejected by apiserver"}` {
-				t.Fatalf("upstream error response was modified: %s", res.Body)
-			}
-		})
-	}
-}
-
 func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
 	old := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-1","resourceVersion":"7"},"spec":{"instanceID":"constant","type":"ct"},"status":{"phase":"Offline"}}`
 	writes := 0
@@ -1932,227 +2154,5 @@ func TestAdminOwnerProjectPurposePatch(t *testing.T) {
 				t.Fatalf("status=%d writes=%d body=%s", response.Code, writes, response.Body.String())
 			}
 		})
-	}
-}
-
-func TestConfigProjectionsRejectWatch(t *testing.T) {
-	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/apis/iam.ebs/v1/users/user" {
-			t.Fatalf("rejected query reached upstream: %s", r.URL)
-		}
-		body := `{"metadata":{"name":"user"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
-	}))
-	router := api.Router()
-	for _, endpoint := range []string{"build-targets", "service-endpoints"} {
-		who := identity.Principal{Subject: "user", Type: identity.UserType, Scope: identity.UserScope}
-		if endpoint == "service-endpoints" {
-			who = identity.Principal{Subject: "runner", Type: identity.RunnerType}
-		}
-		token, err := api.tokens.Issue(who.Subject, who.Type, who.Scope, time.Hour, api.now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, query := range []string{"watch=true", "watch=1", "watch=false&watch=true"} {
-			req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/"+endpoint+"?"+query, nil)
-			req.Header.Set("Authorization", "Bearer "+token)
-			res := httptest.NewRecorder()
-			router.ServeHTTP(res, req)
-			if res.Code != http.StatusForbidden || res.Body.String() != `{"error":"watch is not supported for this route"}` {
-				t.Fatalf("%s: status=%d body=%s", req.URL, res.Code, res.Body)
-			}
-		}
-		if endpoint == "service-endpoints" {
-			for _, query := range []string{"watch=false", "project=demo"} {
-				req := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/"+endpoint+"?"+query, nil)
-				req.Header.Set("Authorization", "Bearer "+token)
-				res := httptest.NewRecorder()
-				router.ServeHTTP(res, req)
-				if res.Code != http.StatusBadRequest {
-					t.Fatalf("%s: status=%d, want 400", req.URL, res.Code)
-				}
-			}
-		}
-	}
-}
-
-func TestGlobalIdentityAndAnonymousLimits(t *testing.T) {
-	lookups := 0
-	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path == "/apis/iam.ebs/v1/users/alice" {
-			lookups++
-			body := `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
-		}
-		if r.URL.Path != "/apis/ebs/v1/projects" && r.URL.Path != "/apis/ebs/v1/scripts" {
-			t.Fatalf("unexpected upstream request: %s", r.URL)
-		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
-	}))
-	api.limits = limit.New(1, 2, api.now)
-	token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	router := api.Router()
-	for _, tc := range []struct {
-		method, path  string
-		authenticated bool
-		want          int
-	}{
-		{"GET", "/apis/ebs/v1/projects", false, 200},
-		{"GET", "/openapi.json", false, 200},
-		{"GET", "/auth/providers", false, 429},
-		{"GET", "/healthz", false, 200},
-		{"GET", "/apis/ebs/v1/projects", true, 200},
-		{"GET", "/apis/ebs/v1/scripts", true, 200},
-		{"POST", "/auth/check", true, 429},
-		{"GET", "/apis/ebs/v1/projects", true, 429},
-	} {
-		request := httptest.NewRequest(tc.method, tc.path, nil)
-		if tc.authenticated {
-			request.Header.Set("Authorization", "Bearer "+token)
-		}
-		before := lookups
-		res := httptest.NewRecorder()
-		router.ServeHTTP(res, request)
-		if res.Code != tc.want {
-			t.Fatalf("%s: status=%d, want %d", tc.path, res.Code, tc.want)
-		}
-		wantLookups := 0
-		if tc.authenticated {
-			wantLookups = 1
-		}
-		if lookups-before != wantLookups {
-			t.Fatalf("%s: IAM lookups=%d, want %d", tc.path, lookups-before, wantLookups)
-		}
-		if tc.want == 429 && res.Header().Get("Retry-After") != "1" {
-			t.Fatal("missing retry delay")
-		}
-	}
-}
-
-func TestHealthAndBusinessMiddlewareChains(t *testing.T) {
-	var audit bytes.Buffer
-	state := klog.CaptureState()
-	t.Cleanup(state.Restore)
-	loggingFlags := flag.NewFlagSet("logging", flag.ContinueOnError)
-	klog.InitFlags(loggingFlags)
-	for name, value := range map[string]string{"logtostderr": "false", "alsologtostderr": "false", "stderrthreshold": "FATAL", "one_output": "true"} {
-		if err := loggingFlags.Set(name, value); err != nil {
-			t.Fatal(err)
-		}
-	}
-	klog.SetOutput(&audit)
-	lookups := 0
-	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
-		lookups++
-		panic("test account lookup panic")
-	}))
-	api.ipLimits = limit.New(1, 1, api.now)
-	api.limits = limit.New(1, 1, api.now)
-	router := api.Router()
-	for _, exhausted := range []bool{false, true} {
-		if exhausted {
-			if !api.ipLimits.Allow("192.0.2.1") || !api.limits.Allow("anonymous/192.0.2.1") {
-				t.Fatal("health requests consumed rate limit allowance")
-			}
-		}
-		for _, path := range []string{"/healthz", "/healthz?watch=true"} {
-			request := httptest.NewRequest(http.MethodGet, path, nil)
-			request.RemoteAddr = "192.0.2.1:1234"
-			request.Header.Set("Authorization", "Bearer invalid")
-			response := httptest.NewRecorder()
-			router.ServeHTTP(response, request)
-			klog.Flush()
-			if response.Code != http.StatusOK || response.Body.String() != "ok\n" || audit.Len() != 0 || lookups != 0 {
-				t.Fatalf("probe entered business chain: status=%d body=%q audit=%q lookups=%d", response.Code, response.Body, audit.String(), lookups)
-			}
-			if response.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
-				t.Fatalf("unexpected health response content type: %q", response.Header().Get("Content-Type"))
-			}
-		}
-	}
-	for _, methodPath := range []struct{ method, path string }{
-		{http.MethodPost, "/healthz"},
-		{http.MethodGet, "/healthz/"},
-	} {
-		request := httptest.NewRequest(methodPath.method, methodPath.path, nil)
-		request.RemoteAddr = "192.0.2.1:1234"
-		response := httptest.NewRecorder()
-		router.ServeHTTP(response, request)
-		if response.Code != http.StatusTooManyRequests {
-			t.Fatalf("%s %s bypassed business limits: %d", methodPath.method, methodPath.path, response.Code)
-		}
-	}
-
-	audit.Reset()
-	token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/projects", nil)
-	request.RemoteAddr = "192.0.2.2:1234"
-	request.Header.Set("Authorization", "Bearer "+token)
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, request)
-	klog.Flush()
-	if response.Code != http.StatusInternalServerError || lookups != 1 {
-		t.Fatalf("business panic not recovered: status=%d lookups=%d", response.Code, lookups)
-	}
-	for _, field := range []string{`"HTTP request"`, `path="/apis/ebs/v1/projects"`, "status=500"} {
-		if !strings.Contains(audit.String(), field) {
-			t.Fatalf("panic audit missing %s: %s", field, audit.String())
-		}
-	}
-	if strings.Count(audit.String(), `"HTTP request"`) != 1 || strings.Contains(audit.String(), token) {
-		t.Fatalf("unexpected panic audit: %s", audit.String())
-	}
-}
-
-func TestGlobalIPLimitBeforeAuthentication(t *testing.T) {
-	lookups, forwards := 0, 0
-	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		body := `{"items":[]}`
-		if r.URL.Path == "/apis/iam.ebs/v1/users/alice" {
-			lookups++
-			body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
-		} else {
-			forwards++
-		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
-	}))
-	api.ipLimits = limit.New(1, 1, api.now)
-	token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	router := api.Router()
-	for _, tc := range []struct {
-		path, address, token string
-		status               int
-		lookups, forwards    int
-	}{
-		{"/apis/ebs/v1/projects", "192.0.2.1:1234", "invalid", 401, 0, 0},
-		{"/apis/ebs/v1/projects", "192.0.2.1:1234", token, 429, 0, 0},
-		{"/auth/providers", "192.0.2.1:1234", "", 429, 0, 0},
-		{"/unknown", "192.0.2.1:1234", "", 429, 0, 0},
-		{"/healthz", "192.0.2.1:1234", "invalid", 200, 0, 0},
-		{"/apis/ebs/v1/projects?watch=true", "192.0.2.1:1234", token, 403, 0, 0},
-		{"/apis/ebs/v1/projects", "192.0.2.2:1234", token, 200, 1, 1},
-	} {
-		request := httptest.NewRequest(http.MethodGet, tc.path, nil)
-		request.RemoteAddr = tc.address
-		if tc.token != "" {
-			request.Header.Set("Authorization", "Bearer "+tc.token)
-		}
-		response := httptest.NewRecorder()
-		router.ServeHTTP(response, request)
-		if response.Code != tc.status || lookups != tc.lookups || forwards != tc.forwards {
-			t.Fatalf("%s: status=%d lookups=%d forwards=%d, want %d/%d/%d", tc.path, response.Code, lookups, forwards, tc.status, tc.lookups, tc.forwards)
-		}
-		if tc.status == 429 && response.Header().Get("Retry-After") != "1" {
-			t.Fatal("missing retry delay")
-		}
 	}
 }
