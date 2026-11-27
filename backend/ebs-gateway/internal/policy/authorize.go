@@ -82,8 +82,8 @@ func (a *Authorizer) authorizeBuild(ctx context.Context, who identity.Principal,
 }
 
 func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, route Route) error {
-	if route.Subresource == "" && (route.Method == http.MethodPut || route.Method == http.MethodPatch) {
-		return deny("Job updates are not exposed through Gateway")
+	if route.Subresource == "" && isWrite(route.Method) {
+		return deny("Job creation, deletion and ordinary updates are not exposed through Gateway")
 	}
 	if route.Subresource == "abort" {
 		return a.jobAbort(ctx, who, route)
@@ -91,7 +91,7 @@ func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, r
 	if who.Type == identity.RunnerType {
 		if route.Project != "" && route.Name != "" &&
 			((route.Subresource == "" && route.Method == http.MethodGet) ||
-				(route.Subresource == "status" && (route.Method == http.MethodPut || route.Method == http.MethodPatch))) {
+				(route.Subresource == "status" && route.Method == http.MethodPatch)) {
 			return nil // Object assignment is verified by the Job handler before forwarding.
 		}
 		return deny("Runner project access denied")
@@ -102,15 +102,12 @@ func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, r
 		}
 		return nil
 	}
-	access, err := a.projectMembership(ctx, who, route.Project)
+	_, err := a.projectMembership(ctx, who, route.Project)
 	if err != nil {
 		return err
 	}
 	if route.Subresource == "status" && isWrite(route.Method) {
 		return deny("user cannot update Job status")
-	}
-	if !access.owner && route.Method == http.MethodDelete {
-		return deny("Project member cannot delete resource")
 	}
 	return nil
 }

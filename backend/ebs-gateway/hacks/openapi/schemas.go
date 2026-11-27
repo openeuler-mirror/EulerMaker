@@ -187,7 +187,7 @@ func requestSchemas(definitions object) {
 		original := definitions[schemaName("ebs-api/"+group+"/v1."+name)].(map[string]any)
 		properties := original["properties"].(map[string]any)
 		for _, mode := range []string{"Create", "Update", "StatusUpdate"} {
-			if name == "Job" && mode == "Update" {
+			if name == "Job" && mode != "StatusUpdate" {
 				continue
 			}
 			metadataFields := object{"name": textSchema(), "namespace": textSchema(),

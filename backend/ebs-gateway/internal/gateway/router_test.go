@@ -168,6 +168,10 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 		"/apis/ebs/v1/projects/{project}/builds/{name}":        "get delete",
 		"/apis/ebs/v1/projects/{project}/builds/{name}/status": "get",
 		"/apis/ebs/v1/projects/{project}/builds/{name}/abort":  "post",
+		"/apis/ebs/v1/projects/{project}/jobs":                 "get",
+		"/apis/ebs/v1/projects/{project}/jobs/{name}":          "get",
+		"/apis/ebs/v1/projects/{project}/jobs/{name}/status":   "get patch",
+		"/apis/ebs/v1/projects/{project}/jobs/{name}/abort":    "post",
 		"/apis/ebs/v1/scripts":                                 "get post",
 		"/apis/ebs/v1/scripts/{name}":                          "get put patch delete",
 		"/apis/ebs/v1/runners/{runner}/jobs":                   "get",
@@ -1594,6 +1598,9 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		{"unknown authenticated path", http.MethodGet, "/apis/ebs/v1/secrets", userToken, http.StatusNotFound},
 		{"abort wrong method", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/job-1/abort", userToken, http.StatusNotFound},
 		{"collection update", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", userToken, http.StatusNotFound},
+		{"job create", http.MethodPost, "/apis/ebs/v1/projects/team/jobs", userToken, http.StatusNotFound},
+		{"job delete", http.MethodDelete, "/apis/ebs/v1/projects/team/jobs/j", userToken, http.StatusNotFound},
+		{"runner job status put", http.MethodPut, "/apis/ebs/v1/projects/team/jobs/j/status", runnerToken, http.StatusNotFound},
 		{"job update", http.MethodPut, "/apis/ebs/v1/projects/team/jobs/j", userToken, http.StatusNotFound},
 		{"job patch", http.MethodPatch, "/apis/ebs/v1/projects/team/jobs/j", userToken, http.StatusNotFound},
 		{"runner job update", http.MethodPut, "/apis/ebs/v1/projects/team/jobs/j", runnerToken, http.StatusNotFound},
@@ -1605,7 +1612,7 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		{"anonymous unsupported method", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", "", http.StatusUnauthorized},
 		{"IAM create is not registered", http.MethodPost, "/apis/iam.ebs/v1/users", userToken, http.StatusNotFound},
 
-		{"watch on job creation", http.MethodPost, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusForbidden},
+		{"watch on removed job creation", http.MethodPost, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusNotFound},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(test.method, test.path, nil)

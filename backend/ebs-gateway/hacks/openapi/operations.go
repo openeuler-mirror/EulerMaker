@@ -109,12 +109,16 @@ func operations() object {
 			if !r.readOnly {
 				switch part {
 				case "list":
-					methods = append(methods, "post")
+					if r.name != "jobs" {
+						methods = append(methods, "post")
+					}
 				case "object", "status":
-					if r.name != "builds" && !(r.name == "jobs" && part == "object") {
+					if r.name == "jobs" && part == "status" {
+						methods = append(methods, "patch")
+					} else if r.name != "builds" && r.name != "jobs" {
 						methods = append(methods, "put", "patch")
 					}
-					if part == "object" && r.name != "projects" {
+					if part == "object" && r.name != "projects" && r.name != "jobs" {
 						methods = append(methods, "delete")
 					}
 				case "abort":
@@ -321,7 +325,7 @@ func permissions(resource, part, method string) ([]object, string) {
 		return bearer, "Project owner/member only, including Ops/Admin. Completed Jobs are returned unchanged. UID is required; optional reason is recorded."
 	}
 	if resource == "jobs" && part == "status" {
-		return bearer, "Only the Runner assigned to this Job may update status. Gateway verifies assignment and protected fields."
+		return bearer, "Only the Runner assigned to this Job may PATCH status. Gateway verifies assignment and protected fields, then forwards the merged object to apiserver using PUT."
 	}
 	if method == "delete" {
 		if resource == "builds" {

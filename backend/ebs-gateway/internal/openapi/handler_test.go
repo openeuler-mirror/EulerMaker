@@ -57,13 +57,22 @@ func TestDocumentContract(t *testing.T) {
 		t.Fatal("Job ordinary update schema is no longer exposed")
 	}
 	paths := doc["paths"].(map[string]any)
+	if _, exists := schemas["JobCreate"]; exists {
+		t.Fatal("Job create schema is still exposed")
+	}
+	if _, exists := paths["/apis/ebs/v1/projects/{project}/jobs"].(map[string]any)["post"]; exists {
+		t.Fatal("Job creation is still exposed")
+	}
 	jobPath := "/apis/ebs/v1/projects/{project}/jobs/{name}"
+	if _, exists := paths[jobPath].(map[string]any)["delete"]; exists {
+		t.Fatal("Job deletion is still exposed")
+	}
 	for _, method := range []string{"put", "patch"} {
 		if _, exists := paths[jobPath].(map[string]any)[method]; exists {
 			t.Fatalf("Job ordinary %s is still exposed", method)
 		}
-		if _, exists := paths[jobPath+"/status"].(map[string]any)[method]; !exists {
-			t.Fatalf("Job status %s is missing", method)
+		if _, exists := paths[jobPath+"/status"].(map[string]any)[method]; exists != (method == "patch") {
+			t.Fatalf("Job status %s exposed=%v", method, exists)
 		}
 	}
 	if _, exists := paths[jobPath+"/abort"].(map[string]any)["post"]; !exists {
