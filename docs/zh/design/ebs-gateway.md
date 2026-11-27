@@ -154,14 +154,17 @@ Gateway 不开放 Project 删除路由，工程删除由内部运维通过 apise
 ```text
 Request
   -> Audit
-  -> PrepareQuery
+  -> Recovery
+  -> PrepareQuery（Watch 校验及普通列表分页规范化）
   -> Authenticate（按路由认证模式解析当前身份）
   -> LimitIdentity（身份/IP 或匿名 IP）
-  -> ProjectAuthorize
-  -> AccessLabels
+  -> Authorize（路由身份准入、Service 工程/操作权限、对象归属）
+  -> 请求准备与字段权限校验
   -> ReverseProxy
   -> Response
 ```
+
+全局 `PrepareQuery` 在认证前检查 Watch 支持；允许的 Watch 保留原查询参数，后续仍须认证和授权。非 Watch 请求仅对显式配置 `ListLimit` 的 GET 列表规范化分页。当前适用于 Project、Build、Job、OldJob、Snapshot、BuildInfo、BuildGraph、RpmRepo 列表；未配置的 Runner、IAM、Config、Script 等列表保持原行为。缺失、非法、重复或超出上限的 `limit` 统一设置为路由上限，合法值及其他查询参数保留。
 
 ### 4.1 公开读取
 
@@ -171,7 +174,7 @@ Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 
 
 | 资源 | 对外公开 API |
 |------|--------------|
-| Project | `/apis/ebs/v1/projects`、`/projects/{name}`、`/projects/{name}/status` |
+| Project | `/apis/ebs/v1/projects`、`/projects/{name}`；状态通过普通 GET 的 `includeFields=status` 获取 |
 | Snapshot | `/apis/ebs/v1/projects/{project}/snapshots[/{name}]`、`/projects/{project}/snapshots/{name}/status` |
 | Build | `/apis/ebs/v1/projects/{project}/builds[/{name}]`、`/projects/{project}/builds/{name}/status` |
 | BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos[/{name}]`、`/projects/{project}/buildinfos/{name}/status` |
@@ -405,7 +408,7 @@ POST /auth/check
 Authorization: Bearer <token>
 ```
 
-该接口不要求 mTLS 客户端证书、服务凭据或其他服务身份。Gateway 验证 JWT 签名、issuer、audience、时间字段和 scope 结构；成功返回认证身份、Token scopes 和过期时间，调用方根据自身需求检查主体类型及权限。Token 非法返回 401，携带非空请求正文返回 400，触发全局 IP 或 `{type}/{sub}/{clientIP}` 限流时返回 429。接口只确认身份，不执行资源授权。
+该接口不要求 mTLS 客户端证书、服务凭据或其他服务身份。Gateway 验证 JWT 签名、issuer、audience、时间字段和 scope 结构；成功返回认证身份、Token scopes 和过期时间，调用方根据自身需求检查主体类型及权限。Token 非法返回 401，携带非空请求正文返回 400，触发 `{type}/{sub}/{clientIP}` 限流时返回 429。接口只执行认证、身份准入和限流，不执行资源授权；有效的 User、Runner 和 Service 身份均可调用，Service 无需配置工程或操作权限。
 
 - User：查询当前 IAM User，确认账号名称匹配、已启用且角色与 Token 一致。账号不存在、已禁用或角色不匹配时返回 403。
 - Runner：不查询 User、Runner 或 Job。
@@ -584,7 +587,7 @@ apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 40
 | Project 子资源：历史 Job（oldjobs） | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
 | Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取；仅 owner/member 可创建和中止，仅 owner 可删除；禁止 PUT/PATCH |
 | 集群级 Config | 禁止 | 同 Owner | `get/list/create/update/patch/delete`，内置对象禁止删除 | 禁止 | 同 Ops |
-| Project 子资源：Job（不含 `/abort`） | 主资源 `get/list`，禁止 `/status` 写入 | 同 Owner | 同 Owner | 仅已分配 Job 的 `get` 和 `/status` 的 `patch` | 同 Owner |
+| Project 子资源：Job（不含 `/abort`） | 主资源 `get/list`，禁止创建、删除和 `/status` 写入 | 同 owner | 同 owner | 仅已分配 Job 的 `get` 和 `/status` 的 `patch` | 同 owner |
 | Job `/abort` | 本工程 POST | 本工程 POST | 仅 owner/member 工程 POST | 禁止 | 仅 owner/member 工程 POST |
 | Runner 范围 Job list/watch | 禁止 | 禁止 | 禁止 | 自身路径 `get/list/watch`，由 apiserver 按 `status.runner` 强制过滤 | 禁止 |
 | Runner | 禁止 | 禁止 | `get/list/update/patch/delete`，禁止创建，包括 `/status` 读写；禁止 Watch | 自身 `create/get/update/patch`，普通对象受字段白名单约束，`/status` 由 apiserver 校验；禁止 `list/watch/delete` | 同 Ops |
@@ -619,6 +622,9 @@ Scheduler 不再向 Evicted Runner 分配新 Job，已有 Job 继续执行。Run
 Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称强制过滤 `status.runner`；gateway 校验该路径名称等于 token 的 `sub`。客户端传入的 `fieldSelector` 一律拒绝，不能依赖 Runner 客户端自行隐藏对象。单对象 Job `get` 和 `/status` 写入仍必须读取对象并校验 `status.runner` 等于 token 的 `sub`，不匹配时返回 403。Job 对象仍不得保存密码、访问令牌、私钥或其他明文敏感信息；执行所需凭据必须通过独立的受控凭据交付机制提供。
 
 Project 归属查询通过 `includeFields=metadata.name,metadata.labels` 只读取授权所需字段，不读取软件包配置。
+
+IAM 认证读取同样使用字段投影：User 查询仅请求 `metadata.name,metadata.uid,spec.enabled,spec.scopes`；机器账号查询仅请求 `metadata.name,spec.type,spec.projects,spec.permissions`。User 删除保护仅查询 `spec.scopes`，无需读取完整用户资料。字段投影缩小响应数据，不改变身份、账号状态及授权校验；需要合并更新正文时仍读取完整对象。
+
 Project 或 Runner Job 查询确认对象不存在时返回 404；连接失败、上游限流或其他非成功响应返回 503；响应解析失败或 Project 身份不匹配返回 502。
 只有已确认的 owner/member 或 Runner 归属不匹配才返回 403，查询失败时不放行，也不误报无权限。
 
@@ -627,6 +633,8 @@ Project 或 Runner Job 查询确认对象不存在时返回 404；连接失败�
 Runner 范围 Job list/watch 仅允许 Runner Token 对自身路径执行 GET，普通用户、Ops/Admin 和 Service Token 均拒绝；拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver 从可信路径生成。
 
 ### 4.8.1 Job 主动中止授权
+
+Gateway 不开放 Job 创建和删除接口；用户通过创建 Build 发起任务，由 BuildInfo Controller 直连 apiserver 创建 Job。清理任务通过删除所属 Build 触发，由 Controller 管理 Job 生命周期。ebsctl 在本地拒绝 Job 创建和删除，不向 Gateway 发送这些请求。
 
 `POST /apis/ebs/v1/projects/{project}/jobs/{name}/abort` 代理到 apiserver 同路径，接口及状态语义见 [Job 主动中止](ebs-apiserver.md#job-主动中止)。不开放全局 Job 列表，不以通用 `/status` 写入实现中止。
 
@@ -712,8 +720,6 @@ metadata.ownerReferences
 |--------------|--------------------|----------|
 | Owner 更新 Project | `metadata.labels`、`metadata.annotations`、`spec` | `ebs.io/owner-user` 必须保持不变；member labels 按本节后续规则校验 |
 | Member 更新 Project | 无 | 4.8 节禁止 member 修改 Project，请求返回 403 |
-| Owner/Member 更新 Project 子资源普通路径 | `metadata.labels`、`metadata.annotations`、`spec` | member 禁止 DELETE，但可按 4.8 节执行 update/patch |
-| Owner/Member 更新 Project 子资源 `/status` | `status` | 仅当对应资源暴露 `/status` 且 4.8 节允许该调用方更新时允许 |
 | Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch` | 路径名称必须等于 token 的 `sub`；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
 | Runner 更新自身 `/status` | Gateway 原样转发 PUT/PATCH，由 apiserver 校验 Runner 状态 | 路径名称必须等于 token 的 `sub`；apiserver 保留旧 spec 和受保护 metadata，保留请求的 resourceVersion 用于版本冲突校验 |
 | Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.result`、`status.startTime`、`status.endTime`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `sub`；Runner 不得修改 `status.runner`；脚本结果及 missingDeps 的使用范围由 apiserver 校验 |
@@ -940,7 +946,7 @@ bash backend/ebs-gateway/hacks/update-openapi.sh --check
 
 启动时逐项校验参数，错误包含参数名和具体约束；数值错误附上当前值，密钥内容不进入错误信息。日志统一接入 klog 标准参数，启动、正常退出及请求审计使用 `InfoS`，进程失败使用 `ErrorS`，正常及错误退出前均执行 `Flush`。verbosity 控制显式 `V(n)` 日志，不是最低严重级别过滤，默认保留请求审计，不记录 Token、请求正文或密钥。Gin 固定使用 release 模式。
 
-成功绑定监听端口后才记录启动成功。收到 SIGINT/SIGTERM 后停止接收新连接，最多等待 15 秒让在途请求排空，等待结束前主流程不退出；超时则强制关闭连接并返回错误。Watch 等持续请求也受此退出期限约束。退出前取消并等待 OAuth 后台任务结束，关闭上游空闲连接。
+成功绑定监听端口后才记录启动成功。收到 SIGINT/SIGTERM 后停止接收新连接，最多等待 15 秒让在途请求排空，等待结束前主流程不退出；超时则强制关闭连接并返回错误。Watch 等持续请求也受此退出期限约束。退出前释放信号订阅并关闭上游空闲连接。
 
 配置 `--apiserver-client-cert` 和 `--apiserver-client-key` 后，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；启用 `--internal-client-ca-file` 的 apiserver 根据证书 URI SAN 识别 Gateway，不依赖转发的用户身份头。IAM 的 OAuth 分支仅允许 Gateway 身份调用，其余接口尚未实施完整的按组件授权规则；部署时仍须限制 apiserver 的网络访问。
 
@@ -1081,7 +1087,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | AccessLabels | 普通用户、Ops 和 Admin 创建 Project 时统一写入当前 Token 的 owner user label；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 仅 Runner Token 可创建；普通用户、Ops/Admin、Service 拒绝且不得转发；创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护由运维管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
 | RunnerStatus | Runner 仅可更新自身 Runner `/status`，Gateway 原样转发 PUT/PATCH，apiserver 保留 spec 和受保护 metadata；已分配 Job 的 status 仍按 Gateway 白名单校验，不能修改 Job runner、spec 或 metadata |
-| RateLimit | 认证后身份与匿名额度隔离、公开读取不重复扣减、429 和 Retry-After，以及登录/OAuth/Watch 专用限制 |
+| RateLimit | 认证失败不扣减通用额度、认证后身份与匿名额度隔离、公开读取不重复扣减、429 和 Retry-After，以及登录/OAuth/Watch 专用限制 |
 | RouteIdentityAdmission | 全部已注册业务路由有规则、方法与模板精确匹配、未配置默认拒绝、角色与机器身份隔离、Service 拒绝审计，以及准入后仍执行对象归属和字段权限检查 |
 | MiddlewareChains | 健康检查独立链路、不消耗额度或产生审计、不访问 IAM；非探针路径仍受保护；业务 panic 恢复后仍记录一次含最终状态的审计 |
 | Proxy | `/apis/ebs/v1/*` 原样透传 |

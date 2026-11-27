@@ -56,6 +56,7 @@ type ServiceGrants struct {
 func (p Principal) IsUser() bool {
 	return p.Type == UserType
 }
+
 func (p Principal) IsPrivileged() bool {
 	return p.Type == UserType && (p.Scope == OpsScope || p.Scope == AdminScope)
 }

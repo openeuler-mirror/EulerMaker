@@ -20,6 +20,8 @@ ebsctl get job build-kernel -o yaml
 ebsctl get cfg build-target -o yaml
 ```
 
+Job creation and deletion are not exposed through Gateway and are rejected locally by ebsctl. Create a Build to dispatch Jobs, and delete the owning Build to trigger Controller-managed cleanup.
+
 Config (`cfg`) is cluster-scoped: `-p/-n` never changes its URL. All Config operations require Ops or Admin privileges. Delete and watch are unsupported. Update an object using its current resourceVersion:
 
 ```bash
