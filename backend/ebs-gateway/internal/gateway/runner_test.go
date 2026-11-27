@@ -11,14 +11,71 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
-
+	"ebs-gateway/internal/auth"
 	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/upstream"
 )
+
+func TestRunnerStatusForwarding(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, media, body, subject string
+		typ                                identity.Type
+		scope                              identity.Scope
+		want                               int
+	}{
+		{"runner put", "PUT", "application/json", `{"metadata":{"name":"runner-1","resourceVersion":"7"},"status":{"phase":"Online"}}`, "runner-1", identity.RunnerType, "", 200},
+		{"runner merge patch", "PATCH", "application/merge-patch+json", `{"metadata":{"resourceVersion":"7"},"status":{"activeJobs":2}}`, "runner-1", identity.RunnerType, "", 200},
+		{"runner json patch", "PATCH", "application/json-patch+json", `[{"op":"test","path":"/metadata/resourceVersion","value":"7"},{"op":"replace","path":"/status/phase","value":"Online"}]`, "runner-1", identity.RunnerType, "", 200},
+		{"other runner", "PATCH", "application/merge-patch+json", "{}", "runner-2", identity.RunnerType, "", 403},
+		{"ops", "PATCH", "application/merge-patch+json", `{"status":{"phase":"Evicted"}}`, "ops", identity.UserType, identity.OpsScope, 200},
+		{"admin", "PUT", "application/json", "{}", "admin", identity.UserType, identity.AdminScope, 200},
+		{"ordinary user", "PATCH", "application/merge-patch+json", "{}", "user", identity.UserType, identity.UserScope, 403},
+		{"version conflict", "PATCH", "application/merge-patch+json", `{"metadata":{"resourceVersion":"6"},"status":{"phase":"Online"}}`, "runner-1", identity.RunnerType, "", 409},
+		{"invalid state", "PATCH", "application/merge-patch+json", `{"status":{"phase":"Unknown"}}`, "runner-1", identity.RunnerType, "", 422},
+		{"missing runner", "PUT", "application/json", "{}", "runner-1", identity.RunnerType, "", 404},
+		{"invalid JSON", "PATCH", "application/merge-patch+json", "{", "runner-1", identity.RunnerType, "", 400},
+		{"body limit", "PUT", "application/json", "{}", "runner-1", identity.RunnerType, "", 413},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writes := 0
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/apis/iam.ebs/v1/users/"+tc.subject && tc.typ == identity.UserType {
+					body := `{"metadata":{"name":"` + tc.subject + `"},"spec":{"enabled":true,"scopes":["` + string(tc.scope) + `"]}}`
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+				}
+				if r.URL.Path != "/apis/ebs/v1/runners/runner-1/status" || r.Method != tc.method {
+					t.Fatalf("unexpected request (no preliminary Runner GET expected): %s %s", r.Method, r.URL)
+				}
+				writes++
+				raw, err := io.ReadAll(r.Body)
+				if err != nil || string(raw) != tc.body || r.Header.Get("Content-Type") != tc.media {
+					t.Fatalf("request changed: headers=%v body=%s err=%v", r.Header, raw, err)
+				}
+				return &http.Response{StatusCode: tc.want, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("{}"))}, nil
+			}))
+			api.bodyLimit = 1
+			token, err := api.tokens.Issue(tc.subject, tc.typ, tc.scope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(tc.method, "/apis/ebs/v1/runners/runner-1/status", strings.NewReader(tc.body))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", tc.media)
+			response := httptest.NewRecorder()
+			api.Router().ServeHTTP(response, request)
+			wantWrites := 1
+			if tc.want == http.StatusForbidden {
+				wantWrites = 0
+			}
+			if response.Code != tc.want || writes != wantWrites {
+				t.Fatalf("status=%d writes=%d body=%s", response.Code, writes, response.Body)
+			}
+		})
+	}
+}
 
 func TestValidRunnerJobsQuery(t *testing.T) {
 	for _, test := range []struct {
@@ -140,10 +197,11 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			router := gin.New()
-			router.Use(middleware.PrepareQuery(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(middleware.NewRoutePolicies(routeRules()), api.auth),
-				middleware.LimitIdentity(api.limits))
-			registerForwardRoutes(router, make(map[middleware.RouteKey]middleware.RoutePolicy), api)
+			authHandler, err := auth.New(auth.Dependencies{IAM: iamclient.New(client), Tokens: tokens, BodyLimit: 1 << 20})
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := NewRouter(api, authHandler, nil)
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/runners/runner-1/jobs?"+tc.query, nil)
 			request.Header.Set("Authorization", "Bearer "+token)
@@ -211,6 +269,11 @@ func TestRunnerRoutesRequireAuthorization(t *testing.T) {
 				router.ServeHTTP(res, req)
 				if res.Code != status {
 					t.Fatalf("status=%d, want %d: %s", res.Code, status, res.Body)
+				}
+				if who.Type == identity.RunnerType && strings.HasPrefix(tc.path, "/other/jobs") {
+					if !strings.Contains(res.Body.String(), "Runner identity mismatch") || len(api.runnerWatches) != 0 {
+						t.Fatalf("ownership must be checked before preparing Runner Jobs: body=%s watches=%v", res.Body, api.runnerWatches)
+					}
 				}
 			})
 		}

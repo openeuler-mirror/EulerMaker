@@ -833,6 +833,8 @@ Project 创建和普通更新时将缺失的 `ebs.io/project-type` 补为 `perso
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次状态上报将其更新为 `Online`。
 
+Runner `/status` 更新保留旧 spec，并通过 `ResetObjectMetaForStatus` 保留 labels、annotations、finalizers、ownerReferences、generation 和 deletionTimestamp 等受保护元数据；对象身份及其余不可变元数据由通用更新校验保护。保留请求中的 resourceVersion 供原生存储执行版本冲突校验，不用旧值覆盖客户端前置条件。状态值及 activeJobs 非负约束由 Runner 状态校验执行。
+
 Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分配新 Job，但不触发已有 Job 中止；通过显式状态更新解除驱逐，Runner agent 的心跳与下线上报保留该状态。
 
 - 新建 Runner 的 `spec.instanceID` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。

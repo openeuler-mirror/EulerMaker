@@ -1,6 +1,7 @@
 package runner
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -26,7 +27,9 @@ func NewStorage() *scopedresource.Storage {
 			newR.Status = oldR.Status
 		},
 		CopySpec: func(obj, old runtime.Object) {
-			obj.(*ebsv1.Runner).Spec = old.(*ebsv1.Runner).Spec
+			newR, oldR := obj.(*ebsv1.Runner), old.(*ebsv1.Runner)
+			newR.Spec = oldR.Spec
+			metav1.ResetObjectMetaForStatus(&newR.ObjectMeta, &oldR.ObjectMeta)
 		},
 		Validate: func(obj runtime.Object) field.ErrorList {
 			return validation.ValidateRunner(obj.(*ebsv1.Runner))

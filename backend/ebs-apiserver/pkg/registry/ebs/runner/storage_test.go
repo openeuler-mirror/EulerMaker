@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -239,6 +240,55 @@ func TestStatusUpdateKeepsRequestedRunnerPhase(t *testing.T) {
 			}
 			if errs := s.ValidateUpdate(context.Background(), candidate, old); len(errs) != 0 {
 				t.Fatalf("status update failed: %v", errs)
+			}
+		})
+	}
+}
+
+func TestStatusUpdatePreservesRunnerMetadataAndSpec(t *testing.T) {
+	old := &ebsv1.Runner{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "runner-a", UID: "runner-uid", ResourceVersion: "7", Generation: 3,
+			Labels:            map[string]string{"pool": "gating"},
+			Annotations:       map[string]string{"example.com/note": "kept"},
+			Finalizers:        []string{"example.com/cleanup"},
+			OwnerReferences:   []metav1.OwnerReference{{APIVersion: "v1", Kind: "Owner", Name: "owner", UID: "owner-uid"}},
+			DeletionTimestamp: &metav1.Time{Time: time.Unix(100, 0)},
+		},
+		Spec: ebsv1.RunnerSpec{
+			InstanceID: "01234567-89ab-4def-8123-456789abcdef", Type: "ct", Arch: "aarch64",
+			Unschedulable: true,
+			Taints:        []ebsv1.RunnerTaint{{Key: "dedicated", Value: "gating", Effect: ebsv1.TaintEffectNoSchedule}},
+		},
+		Status: ebsv1.RunnerStatus{Phase: ebsv1.RunnerOffline},
+	}
+	for _, version := range []string{"7", "6"} {
+		t.Run(version, func(t *testing.T) {
+			candidate := old.DeepCopy()
+			candidate.ResourceVersion = version
+			candidate.Generation = 99
+			candidate.Labels = map[string]string{"pool": "other"}
+			candidate.Annotations = nil
+			candidate.Finalizers = nil
+			candidate.OwnerReferences = nil
+			candidate.DeletionTimestamp = nil
+			candidate.Spec = ebsv1.RunnerSpec{Type: "vm", Arch: "x86_64"}
+			candidate.Status = ebsv1.RunnerStatus{
+				Phase: ebsv1.RunnerOnline, ActiveJobs: 2, Heartbeat: metav1.NewTime(time.Unix(200, 0)),
+			}
+			wanted := candidate.Status
+			strategy := NewStorage().Status.(*genericregistry.Store).UpdateStrategy
+			strategy.PrepareForUpdate(context.Background(), candidate, old)
+			expectedMeta := old.ObjectMeta.DeepCopy()
+			expectedMeta.ResourceVersion = version
+			if !reflect.DeepEqual(candidate.ObjectMeta, *expectedMeta) || !reflect.DeepEqual(candidate.Spec, old.Spec) {
+				t.Fatalf("status update changed protected fields: %+v", candidate)
+			}
+			if !reflect.DeepEqual(candidate.Status, wanted) {
+				t.Fatalf("status was not preserved: %+v", candidate.Status)
+			}
+			if err := rest.BeforeUpdate(strategy, genericapirequest.WithNamespace(context.Background(), ""), candidate, old); err != nil {
+				t.Fatalf("status update rejected before storage version check: %v", err)
 			}
 		})
 	}

@@ -79,11 +79,10 @@ func TestUpdateVersionAndStatusBoundaries(t *testing.T) {
 		change                      func(mutation.Object)
 		want                        int
 	}{
-		{"runner status version", "runners", "status", func(o mutation.Object) { objectMap(o["metadata"])["resourceVersion"] = "2" }, 0},
 		{"runner ordinary version", "runners", "", func(o mutation.Object) { objectMap(o["metadata"])["resourceVersion"] = "2" }, 0},
 		{"job status version", "jobs", "status", func(o mutation.Object) { objectMap(o["metadata"])["resourceVersion"] = "2" }, http.StatusForbidden},
-		{"status spec protection", "runners", "status", func(o mutation.Object) { o["spec"] = map[string]any{"type": "vm"} }, http.StatusForbidden},
-		{"status metadata protection", "runners", "status", func(o mutation.Object) { objectMap(o["metadata"])["labels"] = map[string]any{"pool": "new"} }, http.StatusForbidden},
+		{"status spec protection", "jobs", "status", func(o mutation.Object) { o["spec"] = map[string]any{"type": "vm"} }, http.StatusForbidden},
+		{"status metadata protection", "jobs", "status", func(o mutation.Object) { objectMap(o["metadata"])["labels"] = map[string]any{"pool": "new"} }, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			old := mutation.Object{
@@ -108,17 +107,5 @@ func TestUpdateVersionAndStatusBoundaries(t *testing.T) {
 				t.Fatalf("error=%v, want status=%d", err, tc.want)
 			}
 		})
-	}
-}
-
-func TestRunnerActiveJobsStatusUpdate(t *testing.T) {
-	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}
-	route := Route{Resource: "runners", Name: "runner-1", Subresource: "status", Method: http.MethodPatch}
-	for _, count := range []int{2, 0} {
-		old := mutation.Object{"status": map[string]any{"phase": "Online", "activeJobs": 1}}
-		candidate := mutation.Object{"status": map[string]any{"phase": "Online", "activeJobs": count}}
-		if err := validateStatusUpdate(who, route, old, candidate); err != nil {
-			t.Fatalf("activeJobs=%d rejected: %v", count, err)
-		}
 	}
 }

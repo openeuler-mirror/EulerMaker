@@ -171,3 +171,33 @@ func TestServiceAuthorizationAudit(t *testing.T) {
 		})
 	}
 }
+
+func TestRoutePoliciesIsolation(t *testing.T) {
+	key := RouteKey{Method: http.MethodGet, Path: "/items"}
+	input := map[RouteKey]RoutePolicy{key: {
+		Access: RouteAccess{
+			Authentication: AuthenticationOptional,
+			Authorization:  policy.Rule{Identities: policy.AllowAnonymous | policy.AllowRunner},
+		},
+		Options: RouteOptions{Watch: true, ListLimit: 100},
+	}}
+	first := NewRoutePolicies(input)
+	input[key] = RoutePolicy{Access: RouteAccess{Authorization: policy.Rule{Identities: policy.AllowAdmin}}}
+	second := NewRoutePolicies(input)
+	delete(input, key)
+	if first.authentication(key.Method, key.Path) != AuthenticationOptional ||
+		first.rules[key].Access.Authorization.Identities != policy.AllowAnonymous|policy.AllowRunner ||
+		first.rules[key].Options != (RouteOptions{Watch: true, ListLimit: 100}) {
+		t.Fatal("first router rules were changed by another router or caller")
+	}
+	if second.authentication(key.Method, key.Path) != AuthenticationRequired ||
+		second.rules[key].Access.Authorization.Identities != policy.AllowAdmin ||
+		second.rules[key].Options != (RouteOptions{}) {
+		t.Fatal("second router rules were changed by caller")
+	}
+	for _, routes := range []*RoutePolicies{first, second, NewRoutePolicies(nil)} {
+		if routes.authentication(http.MethodPost, key.Path) != AuthenticationRequired {
+			t.Fatal("unlisted method must require authentication")
+		}
+	}
+}

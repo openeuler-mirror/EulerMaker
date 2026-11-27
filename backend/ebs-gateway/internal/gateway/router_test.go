@@ -1582,49 +1582,6 @@ func TestUserListIncludesAdminAccounts(t *testing.T) {
 	}
 }
 
-func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
-	old := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-1","resourceVersion":"7"},"spec":{"instanceID":"constant","type":"ct"},"status":{"phase":"Offline"}}`
-	writes := 0
-	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.Path != "/apis/ebs/v1/runners/runner-1/status" {
-			t.Fatalf("unexpected path %s", request.URL.Path)
-		}
-		switch request.Method {
-		case http.MethodGet:
-			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(old))}, nil
-		case http.MethodPut:
-			writes++
-			body, err := io.ReadAll(request.Body)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(string(body), `"phase":"Online"`) || !strings.Contains(string(body), `"instanceID":"constant"`) {
-				t.Errorf("invalid complete object forwarded: %s", body)
-			}
-			if request.Header.Get("Content-Type") != "application/json" || request.ContentLength != int64(len(body)) || request.Header.Get("Content-Length") != "" {
-				t.Errorf("invalid rewritten headers=%v content length=%d, body length=%d", request.Header, request.ContentLength, len(body))
-			}
-			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body)))}, nil
-		default:
-			t.Fatalf("unexpected method %s", request.Method)
-			return nil, nil
-		}
-	}))
-	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPatch, "/apis/ebs/v1/runners/runner-1/status", strings.NewReader(`{"status":{"phase":"Online"}}`))
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Content-Type", "application/merge-patch+json")
-	request.Header.Set("Content-Length", fmt.Sprint(request.ContentLength))
-	response := httptest.NewRecorder()
-	api.Router().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || writes != 1 {
-		t.Fatalf("status=%d writes=%d body=%q", response.Code, writes, response.Body.String())
-	}
-}
-
 func TestRunnerJobReadPreservesNotFound(t *testing.T) {
 	path := "/apis/ebs/v1/projects/team/jobs/deleted-job"
 	calls := 0
