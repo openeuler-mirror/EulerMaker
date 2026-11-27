@@ -587,7 +587,7 @@ apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 40
 | Project 子资源：Job（不含 `/abort`） | 主资源 `get/list`，禁止 `/status` 写入 | 同 Owner | 同 Owner | 仅已分配 Job 的 `get` 和 `/status` 的 `patch` | 同 Owner |
 | Job `/abort` | 本工程 POST | 本工程 POST | 仅 owner/member 工程 POST | 禁止 | 仅 owner/member 工程 POST |
 | Runner 范围 Job list/watch | 禁止 | 禁止 | 禁止 | 自身路径 `get/list/watch`，由 apiserver 按 `status.runner` 强制过滤 | 禁止 |
-| Runner | 禁止 | 禁止 | `get/list/update/patch/delete`，禁止创建，包括 `/status` 读写；禁止 Watch | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 同 Ops |
+| Runner | 禁止 | 禁止 | `get/list/update/patch/delete`，禁止创建，包括 `/status` 读写；禁止 Watch | 自身 `create/get/update/patch`，普通对象受字段白名单约束，`/status` 由 apiserver 校验；禁止 `list/watch/delete` | 同 Ops |
 | User 与用户密码 | 仅本人修改密码，禁止 User API | 仅本人修改密码，禁止 User API | 仅修改本人密码，禁止 User API | 禁止 | 所有 User 支持 `get/list`；仅非 Admin User 支持 `update/patch/delete`，另可修改本人密码 |
 | MachineAccount | 禁止 | 禁止 | 禁止 | 禁止 | 通过专用接口 `create`；资源 API 支持 `get/list/delete`，两类账号允许更新 Token 有效期，service 账号还允许更新工程范围和权限 |
 
@@ -704,7 +704,7 @@ metadata.finalizers
 metadata.ownerReferences
 ```
 
-除 Runner 外，`metadata.resourceVersion` 只能保持为 `oldObject` 的值；Runner 的版本值由 gateway 原样转发并由 apiserver 校验。路径中的 namespace、name 必须与候选对象的 `metadata.namespace`、`metadata.name` 一致；Runner 的 `apiVersion`、`kind`、对象结构和字段类型由 apiserver 严格解码，gateway 只核对其身份名称。缺失、冲突或试图跨 Project 移动对象均返回 400。普通对象路径只允许修改 `metadata` 和 `spec` 中角色有权修改的字段；Gateway 不比较候选对象与旧对象的 `status`，允许省略该字段。对于具有 `status` 的资源，apiserver 在普通 PUT/PATCH 时始终保留旧状态，即使请求携带不同的 `status` 也不生效。`/status` 路径只允许修改授权的 `status` 字段，`metadata`（除 `resourceVersion` 外）和 `spec` 必须与旧对象完全相同。
+除 Runner 外，`metadata.resourceVersion` 只能保持为 `oldObject` 的值；Runner 的版本值由 gateway 原样转发并由 apiserver 校验。路径中的 namespace、name 必须与候选对象的 `metadata.namespace`、`metadata.name` 一致；Runner 的 `apiVersion`、`kind`、对象结构和字段类型由 apiserver 严格解码，gateway 只核对其身份名称。缺失、冲突或试图跨 Project 移动对象均返回 400。普通对象路径只允许修改 `metadata` 和 `spec` 中角色有权修改的字段；Gateway 不比较候选对象与旧对象的 `status`，允许省略该字段。对于具有 `status` 的资源，apiserver 在普通 PUT/PATCH 时始终保留旧状态，即使请求携带不同的 `status` 也不生效。Job `/status` 路径只允许修改授权的 `status` 字段，`metadata` 和 `spec` 必须与旧对象完全相同。Runner `/status` 不执行 Gateway 的候选对象比较，直接由 apiserver 的状态更新策略保护 spec 和 metadata。
 
 字段比较后的角色规则：
 
@@ -715,7 +715,7 @@ metadata.ownerReferences
 | Owner/Member 更新 Project 子资源普通路径 | `metadata.labels`、`metadata.annotations`、`spec` | member 禁止 DELETE，但可按 4.8 节执行 update/patch |
 | Owner/Member 更新 Project 子资源 `/status` | `status` | 仅当对应资源暴露 `/status` 且 4.8 节允许该调用方更新时允许 |
 | Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch` | 路径名称必须等于 token 的 `sub`；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
-| Runner 更新自身 `/status` | `status.phase`、`status.conditions`、`status.capacity`、`status.allocatable`、`status.addresses`、`status.info`、`status.heartbeat` | 路径名称必须等于 token 的 `sub`；`spec` 和全部 metadata 保持不变 |
+| Runner 更新自身 `/status` | Gateway 原样转发 PUT/PATCH，由 apiserver 校验 Runner 状态 | 路径名称必须等于 token 的 `sub`；apiserver 保留旧 spec 和受保护 metadata，保留请求的 resourceVersion 用于版本冲突校验 |
 | Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.result`、`status.startTime`、`status.endTime`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `sub`；Runner 不得修改 `status.runner`；脚本结果及 missingDeps 的使用范围由 apiserver 校验 |
 | Admin 更新非管理员 User | `metadata.labels`、`metadata.annotations`、`spec.enabled`、`spec.scopes`、`spec.displayName`、`spec.email` | 旧对象和候选对象的 `spec.scopes` 均不得为 `["ebs:admin"]`；候选 scopes 仍由 apiserver 校验为单一合法 User scope |
 
@@ -801,9 +801,9 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 
 未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。已注册路由没有配置准入规则，或调用方身份不在允许集合时，`Authorize` 返回 403，Service 拒绝记录审计结果；不能因 GET 或管理员身份而绕过规则。无需 Bearer 认证的接口按匿名身份准入，不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由 Handler 处理。
 
-全局 `Authorize` 统一调用 Policy 执行身份准入、Service 授权及声明的对象归属校验。资源路由通过显式 `policy.Rule` 声明对象归属、Watch 归属和 Service permission，`Authorize` 仅适配 HTTP 参数、错误、审计和请求级旧对象，业务判断由 Policy 完成。Runner 路径名称仍由专用 Guard 校验，Job 分配关系由 `AssignedJob` 规则校验：普通读取只查询名称、命名空间和 `status.runner`，状态更新读取完整对象并供后续更新校验复用；Project owner/member、Service 的工程范围和 permission、更新字段权限保持不变。Project 用户更新授权读取完整旧对象，后续 PUT/PATCH 复用该对象，不重复 GET；其他 Project 归属检查只投影读取名称和标签。公开读取携带无效 Token 不降级匿名；公开 Job Watch 仍检查工程成员权限，Runner 通过自身任务列表 Watch。
+全局 `Authorize` 统一调用 Policy 执行身份准入、Service 授权及声明的对象归属校验。资源路由通过显式 `policy.Rule` 声明对象归属、Watch 归属和 Service permission，`Authorize` 仅适配 HTTP 参数、错误、审计和请求级旧对象，业务判断由 Policy 完成。Runner 路径名称由 `RunnerSelf` 规则校验，Job 分配关系由 `AssignedJob` 规则校验：普通读取只查询名称、命名空间和 `status.runner`，状态更新读取完整对象并供后续更新校验复用；Project owner/member、Service 的工程范围和 permission、更新字段权限保持不变。Project 用户更新授权读取完整旧对象，后续 PUT/PATCH 复用该对象，不重复 GET；其他 Project 归属检查只投影读取名称和标签。公开读取携带无效 Token 不降级匿名；公开 Job Watch 仍检查工程成员权限，Runner 通过自身任务列表 Watch。
 
-Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和 `/status` 读取只允许 Ops/Admin；普通对象读取、更新和状态更新允许 Ops/Admin 或 Runner。路由不再挂载重复的身份门卫。`prepareRunnerCreate` 校验注册正文；具名 Runner 读取、更新仍校验 Runner Token 的 Subject 与路径名称一致；更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；`prepareRunnerJobs` 保留路径归属、查询参数和 Watch 并发检查，名额持有到转发结束。通过这些检查后才进入 `upstream.Forward`。
+Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和 `/status` 读取只允许 Ops/Admin；普通对象读取、更新和状态更新允许 Ops/Admin 或 Runner。路由不再挂载重复的身份门卫。`prepareRunnerCreate` 校验注册正文；具名 Runner 读取、更新及任务列表通过统一 `RunnerSelf` 规则校验 Token Subject 与路径名称一致；普通对象更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；`/status` 原样转发，由 apiserver 保留旧 spec 和受保护 metadata，并校验状态及 resourceVersion。`prepareRunnerJobs` 仅保留查询参数和 Watch 并发检查，名额持有到转发结束。通过这些检查后才进入 `upstream.Forward`。
 
 路由使用 Gin，在 `internal/gateway/router.go` 按认证、OAuth、透传及其他接口分别声明和注册。每条定义包含方法、路径、认证模式、允许身份、查询选项、额外中间件及 Handler；透传组统一设置 `upstream.Forward`，不再维护第二份路径规则表。注册时检查重复路由、空 Handler、空中间件及不一致的认证或查询配置；显式无需认证的路由自动补齐匿名准入，其余路由缺少身份规则时启动失败。规则表完成后发布 Router 独有的只读副本，再开始服务。资源 Handler 保留对象归属、Service 授权和更新字段校验；身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iamclient`、`mutation`、`upstream`、`limit`。
 
@@ -1080,7 +1080,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |
 | AccessLabels | 普通用户、Ops 和 Admin 创建 Project 时统一写入当前 Token 的 owner user label；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 仅 Runner Token 可创建；普通用户、Ops/Admin、Service 拒绝且不得转发；创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护由运维管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
-| RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、spec 或 metadata |
+| RunnerStatus | Runner 仅可更新自身 Runner `/status`，Gateway 原样转发 PUT/PATCH，apiserver 保留 spec 和受保护 metadata；已分配 Job 的 status 仍按 Gateway 白名单校验，不能修改 Job runner、spec 或 metadata |
 | RateLimit | 认证后身份与匿名额度隔离、公开读取不重复扣减、429 和 Retry-After，以及登录/OAuth/Watch 专用限制 |
 | RouteIdentityAdmission | 全部已注册业务路由有规则、方法与模板精确匹配、未配置默认拒绝、角色与机器身份隔离、Service 拒绝审计，以及准入后仍执行对象归属和字段权限检查 |
 | MiddlewareChains | 健康检查独立链路、不消耗额度或产生审计、不访问 IAM；非探针路径仍受保护；业务 panic 恢复后仍记录一次含最终状态的审计 |

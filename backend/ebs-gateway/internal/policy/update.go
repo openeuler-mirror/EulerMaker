@@ -93,22 +93,6 @@ func objectMap(value any) map[string]any {
 	return result
 }
 
-func equalMetadataExceptVersion(old, next map[string]any) bool {
-	for key, value := range old {
-		if key != "resourceVersion" && !reflect.DeepEqual(value, next[key]) {
-			return false
-		}
-	}
-	for key := range next {
-		if key != "resourceVersion" {
-			if _, exists := old[key]; !exists {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func equalMetadataExceptUserFields(old, next map[string]any, allowVersion bool) bool {
 	for key, value := range old {
 		if key != "labels" && key != "annotations" && !(allowVersion && key == "resourceVersion") && !reflect.DeepEqual(value, next[key]) {
@@ -127,9 +111,6 @@ func equalMetadataExceptUserFields(old, next map[string]any, allowVersion bool) 
 
 func validateStatusUpdate(who identity.Principal, route Route, old, candidate mutation.Object) error {
 	metadataEqual := reflect.DeepEqual(old["metadata"], candidate["metadata"])
-	if route.Resource == "runners" {
-		metadataEqual = metadataEqual || equalMetadataExceptVersion(objectMap(old["metadata"]), objectMap(candidate["metadata"]))
-	}
 	if !reflect.DeepEqual(old["spec"], candidate["spec"]) || !metadataEqual {
 		return deny("status update cannot modify metadata or spec")
 	}
@@ -143,8 +124,6 @@ func validateStatusUpdate(who identity.Principal, route Route, old, candidate mu
 	newStatus := objectMap(candidate["status"])
 	var allowed map[string]bool
 	switch route.Resource {
-	case "runners":
-		allowed = map[string]bool{"phase": true, "conditions": true, "capacity": true, "allocatable": true, "activeJobs": true, "addresses": true, "info": true, "heartbeat": true}
 	case "jobs":
 		if oldStatus["runner"] != who.Subject || newStatus["runner"] != who.Subject {
 			return deny("Job is not assigned to Runner")

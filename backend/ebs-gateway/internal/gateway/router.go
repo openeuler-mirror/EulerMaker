@@ -326,27 +326,29 @@ func registerForwardRoutes(router *gin.Engine, rules map[middleware.RouteKey]mid
 			Path:           "/apis/ebs/v1/runners/:runner",
 			Authentication: middleware.AuthenticationRequired,
 			Authorization: policy.Rule{
-				Identities: policy.AllowRunner | policy.AllowPrivileged,
+				Identities:   policy.AllowRunner | policy.AllowPrivileged,
+				ObjectAccess: policy.RunnerSelf,
 			},
-			Middlewares: []gin.HandlerFunc{api.runnerReadGuard},
 		},
 		{
 			Method:         http.MethodPut,
 			Path:           "/apis/ebs/v1/runners/:runner",
 			Authentication: middleware.AuthenticationRequired,
 			Authorization: policy.Rule{
-				Identities: policy.AllowRunner | policy.AllowPrivileged,
+				Identities:   policy.AllowRunner | policy.AllowPrivileged,
+				ObjectAccess: policy.RunnerSelf,
 			},
-			Middlewares: []gin.HandlerFunc{api.runnerUpdateGuard},
+			Middlewares: []gin.HandlerFunc{api.prepareRunnerUpdate},
 		},
 		{
 			Method:         http.MethodPatch,
 			Path:           "/apis/ebs/v1/runners/:runner",
 			Authentication: middleware.AuthenticationRequired,
 			Authorization: policy.Rule{
-				Identities: policy.AllowRunner | policy.AllowPrivileged,
+				Identities:   policy.AllowRunner | policy.AllowPrivileged,
+				ObjectAccess: policy.RunnerSelf,
 			},
-			Middlewares: []gin.HandlerFunc{api.runnerUpdateGuard},
+			Middlewares: []gin.HandlerFunc{api.prepareRunnerUpdate},
 		},
 		{
 			Method:         http.MethodDelete,
@@ -365,18 +367,18 @@ func registerForwardRoutes(router *gin.Engine, rules map[middleware.RouteKey]mid
 			Path:           "/apis/ebs/v1/runners/:runner/status",
 			Authentication: middleware.AuthenticationRequired,
 			Authorization: policy.Rule{
-				Identities: policy.AllowRunner | policy.AllowPrivileged,
+				Identities:   policy.AllowRunner | policy.AllowPrivileged,
+				ObjectAccess: policy.RunnerSelf,
 			},
-			Middlewares: []gin.HandlerFunc{api.runnerStatusUpdateGuard},
 		},
 		{
 			Method:         http.MethodPatch,
 			Path:           "/apis/ebs/v1/runners/:runner/status",
 			Authentication: middleware.AuthenticationRequired,
 			Authorization: policy.Rule{
-				Identities: policy.AllowRunner | policy.AllowPrivileged,
+				Identities:   policy.AllowRunner | policy.AllowPrivileged,
+				ObjectAccess: policy.RunnerSelf,
 			},
-			Middlewares: []gin.HandlerFunc{api.runnerStatusUpdateGuard},
 		},
 		{
 			Method:         http.MethodGet,
@@ -384,7 +386,9 @@ func registerForwardRoutes(router *gin.Engine, rules map[middleware.RouteKey]mid
 			Options:        middleware.RouteOptions{Watch: true},
 			Authentication: middleware.AuthenticationRequired,
 			Authorization: policy.Rule{
-				Identities: policy.AllowRunner,
+				Identities:   policy.AllowRunner,
+				WatchAccess:  policy.RunnerSelf,
+				ObjectAccess: policy.RunnerSelf,
 			},
 			Middlewares: []gin.HandlerFunc{api.prepareRunnerJobs},
 		},
