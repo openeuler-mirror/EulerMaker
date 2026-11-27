@@ -19,13 +19,14 @@ func NewRouter(api *Handler, authHandler *auth.Handler, oauthHandler *oauth.Hand
 	_ = router.SetTrustedProxies(nil)
 	// Register probes before the business middleware chain to avoid auditing or throttling them.
 	registerHealthz(router)
+	access := middleware.NewRoutePolicies(routeRules())
 	router.Use(
 		middleware.Audit(api.now),
 		gin.Recovery(),
-		middleware.ValidateWatchRoute,
-		api.auth.AuthenticateRequest,
+		middleware.ValidateWatchRoute(access),
+		middleware.Authenticate(api.auth, access),
 		middleware.LimitIdentity(api.limits),
-		middleware.AdmitIdentity,
+		middleware.AdmitIdentity(access),
 	)
 
 	registerAuth(router, authHandler)

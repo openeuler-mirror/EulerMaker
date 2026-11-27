@@ -141,7 +141,7 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			router := gin.New()
-			router.Use(middleware.ValidateWatchRoute, api.auth.AuthenticateRequest,
+			router.Use(middleware.ValidateWatchRoute(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())),
 				middleware.LimitIdentity(api.limits))
 			registerRunners(router, api)
 			recorder := httptest.NewRecorder()

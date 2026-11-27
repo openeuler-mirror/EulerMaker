@@ -53,7 +53,15 @@ func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 
 func (a *testAPI) Router() *gin.Engine {
 	router := gin.New()
-	router.Use(a.auth.AuthenticateRequest, middleware.AdmitIdentity)
+	rules := middleware.NewRoutePolicies(map[middleware.RouteKey]middleware.RoutePolicy{
+		{Method: http.MethodPost, Path: "/auth/register"}:            {Authentication: middleware.AuthenticationNone, Identities: middleware.AllowAnonymous},
+		{Method: http.MethodPost, Path: "/auth/login"}:               {Authentication: middleware.AuthenticationNone, Identities: middleware.AllowAnonymous},
+		{Method: http.MethodPost, Path: "/auth/machine-token"}:       {Authentication: middleware.AuthenticationNone, Identities: middleware.AllowAnonymous},
+		{Method: http.MethodPost, Path: "/auth/check"}:               {Identities: middleware.AllowAuthenticated},
+		{Method: http.MethodPost, Path: "/auth/machineaccounts"}:     {Identities: middleware.AllowAdmin},
+		{Method: http.MethodPut, Path: "/auth/users/:name/password"}: {Identities: middleware.AllowUsers},
+	})
+	router.Use(middleware.Authenticate(a.auth, rules), middleware.AdmitIdentity(rules))
 	router.POST("/auth/register", a.RegisterUser)
 	router.POST("/auth/login", a.Login)
 	router.POST("/auth/machine-token", a.MachineToken)

@@ -9,6 +9,10 @@ import (
 )
 
 func TestValidateWatchRoute(t *testing.T) {
+	routes := NewRoutePolicies(map[RouteKey]RoutePolicy{
+		{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs"}: {Watch: true},
+		{http.MethodGet, "/apis/ebs/v1/runners/:runner/jobs"}:   {Watch: true},
+	})
 	for _, tc := range []struct {
 		name, method, pattern, path, query string
 		status                             int
@@ -30,7 +34,7 @@ func TestValidateWatchRoute(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
-			router.Use(ValidateWatchRoute)
+			router.Use(ValidateWatchRoute(routes))
 			handled := false
 			router.Handle(tc.method, tc.pattern, func(c *gin.Context) {
 				handled = true

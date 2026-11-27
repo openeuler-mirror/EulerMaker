@@ -1,4 +1,4 @@
-package middleware
+package gateway
 
 import (
 	"net/http"
@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ebs-gateway/internal/identity"
+	"ebs-gateway/internal/middleware"
 )
 
 func TestAdmitIdentity(t *testing.T) {
@@ -74,10 +75,10 @@ func TestAdmitIdentity(t *testing.T) {
 				called := false
 				decision := ""
 				router.Use(func(c *gin.Context) {
-					c.Set(principalKey, subject.who)
+					c.Set("principal", subject.who)
 					c.Next()
 					decision = c.GetString("serviceAuthorization")
-				}, AdmitIdentity)
+				}, middleware.AdmitIdentity(middleware.NewRoutePolicies(routeRules())))
 				router.Handle(tc.method, tc.path, func(c *gin.Context) {
 					called = true
 					c.Status(http.StatusNoContent)
@@ -99,4 +100,23 @@ func TestAdmitIdentity(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestRoutePolicyConsistency(t *testing.T) {
+	for route, rule := range routeRules() {
+		if rule.Identities == 0 {
+			t.Errorf("route has no allowed identities: %+v", route)
+		}
+		if rule.Watch && (route.Method != http.MethodGet || rule.Authentication == middleware.AuthenticationNone) {
+			t.Errorf("Watch must use GET and cannot bypass authentication: %+v", route)
+		}
+		if (rule.Authentication != middleware.AuthenticationRequired) != (rule.Identities&middleware.AllowAnonymous != 0) {
+			t.Errorf("anonymous admission and authentication disagree: %+v", route)
+		}
+	}
+}
+
+func hasRoutePolicy(method, path string) bool {
+	_, ok := routeRules()[middleware.RouteKey{Method: method, Path: path}]
+	return ok
 }

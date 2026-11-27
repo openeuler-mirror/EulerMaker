@@ -128,7 +128,7 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 	}
 	registered := map[string]bool{}
 	for _, route := range router.Routes() {
-		if route.Path != "/healthz" && !middleware.HasRoutePolicy(route.Method, route.Path) {
+		if route.Path != "/healthz" && !hasRoutePolicy(route.Method, route.Path) {
 			t.Fatalf("route has no identity admission policy: %s %s", route.Method, route.Path)
 		}
 		if route.Method == http.MethodHead && strings.HasPrefix(route.Path, "/apis/") {
@@ -690,8 +690,8 @@ func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
 		c.Next()
 		decision = c.GetString("serviceAuthorization")
 	})
-	router.Use(middleware.ValidateWatchRoute, api.auth.AuthenticateRequest,
-		middleware.LimitIdentity(api.limits), middleware.AdmitIdentity)
+	router.Use(middleware.ValidateWatchRoute(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())),
+		middleware.LimitIdentity(api.limits), middleware.AdmitIdentity(middleware.NewRoutePolicies(routeRules())))
 	registerConfigs(router, api.Handler)
 	registerScripts(router, api.Handler)
 	for _, tc := range []struct {
@@ -1654,7 +1654,7 @@ func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
-			router.Use(api.auth.AuthenticateRequest, func(c *gin.Context) {
+			router.Use(middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())), func(c *gin.Context) {
 				who := middleware.Principal(c)
 				if who.Type != identity.RunnerType || who.Subject != "runner-1" {
 					t.Fatalf("unexpected authenticated identity: %+v", who)

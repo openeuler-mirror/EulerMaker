@@ -39,18 +39,21 @@ func Principal(c *gin.Context) identity.Principal {
 	return value.(identity.Principal)
 }
 
-// AuthenticateRequest resolves identity once, defaulting to required authentication for unlisted routes.
-func (a *Auth) AuthenticateRequest(c *gin.Context) {
-	mode := routeAuthentication(c.Request.Method, c.FullPath())
-	if mode == authenticationNone || (mode == authenticationOptional &&
-		!policy.HasWatch(c.Request.URL.Query()) && c.GetHeader("Authorization") == "") {
+// Authenticate resolves identity once, defaulting to required authentication for unlisted routes.
+func Authenticate(a *Auth, routes *RoutePolicies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		mode := routes.authentication(c.Request.Method, c.FullPath())
+		if mode == AuthenticationNone || (mode == AuthenticationOptional &&
+			!policy.HasWatch(c.Request.URL.Query()) && c.GetHeader("Authorization") == "") {
+			c.Next()
+			return
+		}
+		if !a.verifyAccess(c) {
+			return
+		}
 		c.Next()
-		return
 	}
-	if !a.verifyAccess(c) {
-		return
-	}
-	c.Next()
+
 }
 
 func (a *Auth) verifyToken(header string) (identity.Principal, bool) {
