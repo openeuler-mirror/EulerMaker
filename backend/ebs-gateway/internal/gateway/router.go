@@ -112,11 +112,10 @@ func registerScripts(router *gin.Engine, api *Handler) {
 
 func registerProjects(router *gin.Engine, api *Handler) {
 	guard := api.projectGuard("")
-	read := api.publicReadGuard("projects", "")
-	router.GET("/apis/ebs/v1/projects", read, api.forwardResource)
+	router.GET("/apis/ebs/v1/projects", api.upstream.Forward)
 	router.POST("/apis/ebs/v1/projects", guard, api.prepareProjectCreate, api.upstream.Forward)
 
-	router.GET("/apis/ebs/v1/projects/:project", read, api.forwardResource)
+	router.GET("/apis/ebs/v1/projects/:project", api.upstream.Forward)
 	router.PUT("/apis/ebs/v1/projects/:project", guard, api.prepareProjectUpdate, api.upstream.Forward)
 	router.PATCH("/apis/ebs/v1/projects/:project", guard, api.prepareProjectUpdate, api.upstream.Forward)
 }
@@ -142,39 +141,35 @@ func registerRunners(router *gin.Engine, api *Handler) {
 func registerProjectScopedResources(router *gin.Engine, api *Handler) {
 	project := router.Group("/apis/ebs/v1/projects/:project")
 	guard := api.projectScopedGuard("builds", "")
-	readBuild := api.publicReadGuard("builds", "")
-	project.GET("/builds", readBuild, api.forwardResource)
+	project.GET("/builds", api.upstream.Forward)
 	project.POST("/builds", guard, api.upstream.Forward)
 
-	project.GET("/builds/:name", readBuild, api.forwardResource)
+	project.GET("/builds/:name", api.upstream.Forward)
 	project.DELETE("/builds/:name", guard, api.upstream.Forward)
 
-	project.GET("/builds/:name/status", api.publicReadGuard("builds", "status"), api.forwardResource)
+	project.GET("/builds/:name/status", api.upstream.Forward)
 
 	guard = api.projectScopedGuard("builds", "abort")
 	project.POST("/builds/:name/abort", guard, api.upstream.Forward)
 
-	readJob := api.publicReadGuard("jobs", "")
-	project.GET("/jobs", readJob, api.forwardResource)
+	project.GET("/jobs", api.jobWatchGuard, api.upstream.Forward)
 
-	project.GET("/jobs/:name", readJob, api.runnerJobReadGuard, api.forwardResource)
+	project.GET("/jobs/:name", api.runnerJobReadGuard, api.upstream.Forward)
 
 	guard = api.projectScopedGuard("jobs", "status")
-	project.GET("/jobs/:name/status", api.publicReadGuard("jobs", "status"), api.forwardResource)
+	project.GET("/jobs/:name/status", api.upstream.Forward)
 	project.PATCH("/jobs/:name/status", guard, api.prepareJobStatusUpdate, api.upstream.Forward)
 
 	guard = api.projectScopedGuard("jobs", "abort")
 	project.POST("/jobs/:name/abort", guard, api.upstream.Forward)
 
-	readOldJob := api.publicReadGuard("oldjobs", "")
-	project.GET("/oldjobs", readOldJob, api.forwardResource)
-	project.GET("/oldjobs/:name", readOldJob, api.forwardResource)
+	project.GET("/oldjobs", api.upstream.Forward)
+	project.GET("/oldjobs/:name", api.upstream.Forward)
 
 	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos"} {
-		read := api.publicReadGuard(resource, "")
-		project.GET("/"+resource, read, api.forwardResource)
-		project.GET("/"+resource+"/:name", read, api.forwardResource)
-		project.GET("/"+resource+"/:name/status", api.publicReadGuard(resource, "status"), api.forwardResource)
+		project.GET("/"+resource, api.upstream.Forward)
+		project.GET("/"+resource+"/:name", api.upstream.Forward)
+		project.GET("/"+resource+"/:name/status", api.upstream.Forward)
 	}
 }
 

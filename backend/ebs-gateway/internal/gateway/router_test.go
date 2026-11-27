@@ -1632,47 +1632,6 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 	}
 }
 
-func TestForwardResourceRequiresMatchingGuards(t *testing.T) {
-	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
-		t.Fatal("incomplete guard chain reached upstream")
-		return nil, nil
-	}))
-	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	jobs := api.publicReadGuard("jobs", "")
-	for _, tc := range []struct {
-		name, method, pattern, path string
-		guards                      []gin.HandlerFunc
-	}{
-		{"no guards", "GET", "/projects", "/projects", nil},
-		{"private resource marked public", "GET", "/configs/:name", "/configs/example", []gin.HandlerFunc{api.publicReadGuard("configs", "")}},
-		{"write marked public", "POST", "/projects", "/projects", []gin.HandlerFunc{api.publicReadGuard("projects", "")}},
-		{"missing job read", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{jobs}},
-		{"read guard before authorization", "GET", "/:project/jobs/:name", "/team/jobs/j", []gin.HandlerFunc{api.runnerJobReadGuard, jobs}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			router := gin.New()
-			router.Use(middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())), func(c *gin.Context) {
-				who := middleware.Principal(c)
-				if who.Type != identity.RunnerType || who.Subject != "runner-1" {
-					t.Fatalf("unexpected authenticated identity: %+v", who)
-				}
-				c.Next()
-			})
-			router.Handle(tc.method, tc.pattern, append(tc.guards, api.forwardResource)...)
-			request := httptest.NewRequest(tc.method, tc.path, nil)
-			request.Header.Set("Authorization", "Bearer "+token)
-			response := httptest.NewRecorder()
-			router.ServeHTTP(response, request)
-			if response.Code != http.StatusInternalServerError {
-				t.Fatalf("status=%d, want 500: %s", response.Code, response.Body)
-			}
-		})
-	}
-}
-
 func TestAdminCannotModifyAnotherOwnersProject(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Method == http.MethodGet && request.URL.Path == "/apis/ebs/v1/projects/team" {
@@ -1929,6 +1888,87 @@ func TestBuildActionChains(t *testing.T) {
 			router.ServeHTTP(response, request)
 			if response.Code != tc.want || forwarded != (tc.want != http.StatusForbidden) {
 				t.Fatalf("status=%d forwarded=%v body=%s", response.Code, forwarded, response.Body)
+			}
+		})
+	}
+}
+
+func TestPublicReadForwarding(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, query, wantQuery string
+	}{
+		{"list default", "/apis/ebs/v1/projects", "", "limit=100"},
+		{"list explicit", "/apis/ebs/v1/projects", "limit=20&labelSelector=team", "limit=20&labelSelector=team"},
+		{"list upper bound", "/apis/ebs/v1/projects", "limit=101", "limit=100"},
+		{"list invalid", "/apis/ebs/v1/projects", "limit=invalid", "limit=100"},
+		{"list zero", "/apis/ebs/v1/projects", "limit=0", "limit=100"},
+		{"list repeated", "/apis/ebs/v1/projects", "limit=10&limit=20", "limit=100"},
+		{"object", "/apis/ebs/v1/projects/team", "", ""},
+		{"project status projection", "/apis/ebs/v1/projects/team", "includeFields=status", "includeFields=status"},
+		{"build list default", "/apis/ebs/v1/projects/team/builds", "", "limit=100"},
+		{"build list explicit", "/apis/ebs/v1/projects/team/builds", "limit=20", "limit=20"},
+		{"build list upper bound", "/apis/ebs/v1/projects/team/builds", "limit=101", "limit=100"},
+		{"build detail", "/apis/ebs/v1/projects/team/builds/item", "includeFields=status", "includeFields=status"},
+		{"build status", "/apis/ebs/v1/projects/team/builds/item/status", "includeFields=status", "includeFields=status"},
+		{"job status", "/apis/ebs/v1/projects/team/jobs/item/status", "includeFields=status", "includeFields=status"},
+		{"job detail", "/apis/ebs/v1/projects/team/jobs/item", "includeFields=status", "includeFields=status"},
+		{"snapshots list default", "/apis/ebs/v1/projects/team/snapshots", "", "limit=100"},
+		{"snapshots list explicit", "/apis/ebs/v1/projects/team/snapshots", "limit=20", "limit=20"},
+		{"snapshots list upper bound", "/apis/ebs/v1/projects/team/snapshots", "limit=101", "limit=100"},
+		{"snapshots detail", "/apis/ebs/v1/projects/team/snapshots/item", "includeFields=status", "includeFields=status"},
+		{"oldjobs list default", "/apis/ebs/v1/projects/team/oldjobs", "", "limit=100"},
+		{"oldjobs list explicit", "/apis/ebs/v1/projects/team/oldjobs", "limit=20", "limit=20"},
+		{"oldjobs list upper bound", "/apis/ebs/v1/projects/team/oldjobs", "limit=101", "limit=100"},
+		{"oldjobs detail", "/apis/ebs/v1/projects/team/oldjobs/item", "includeFields=status", "includeFields=status"},
+		{"rpmrepo status", "/apis/ebs/v1/projects/team/rpmrepos/repo/status", "", ""},
+		{"rpmrepo list default", "/apis/ebs/v1/projects/team/rpmrepos", "", "limit=100"},
+		{"rpmrepo list explicit", "/apis/ebs/v1/projects/team/rpmrepos", "limit=20", "limit=20"},
+		{"rpmrepo list upper bound", "/apis/ebs/v1/projects/team/rpmrepos", "limit=101", "limit=100"},
+		{"rpmrepo detail", "/apis/ebs/v1/projects/team/rpmrepos/repo", "includeFields=status", "includeFields=status"},
+		{"rpmrepo status query", "/apis/ebs/v1/projects/team/rpmrepos/repo/status", "includeFields=status", "includeFields=status"},
+		{"snapshot status", "/apis/ebs/v1/projects/team/snapshots/item/status", "includeFields=status", "includeFields=status"},
+		{"buildinfo status", "/apis/ebs/v1/projects/team/buildinfos/item/status", "includeFields=status", "includeFields=status"},
+		{"buildgraph status", "/apis/ebs/v1/projects/team/buildgraphs/item/status", "includeFields=status", "includeFields=status"},
+		{"buildinfo list default", "/apis/ebs/v1/projects/team/buildinfos", "", "limit=100"},
+		{"buildinfo list explicit", "/apis/ebs/v1/projects/team/buildinfos", "limit=20", "limit=20"},
+		{"buildinfo list upper bound", "/apis/ebs/v1/projects/team/buildinfos", "limit=101", "limit=100"},
+		{"buildinfo detail", "/apis/ebs/v1/projects/team/buildinfos/item", "includeFields=status", "includeFields=status"},
+		{"buildgraph list default", "/apis/ebs/v1/projects/team/buildgraphs", "", "limit=100"},
+		{"buildgraph list explicit", "/apis/ebs/v1/projects/team/buildgraphs", "limit=20", "limit=20"},
+		{"buildgraph list upper bound", "/apis/ebs/v1/projects/team/buildgraphs", "limit=101", "limit=100"},
+		{"buildgraph detail", "/apis/ebs/v1/projects/team/buildgraphs/item", "includeFields=status", "includeFields=status"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if request.Method != http.MethodGet || request.URL.Path != tc.path || request.URL.RawQuery != tc.wantQuery {
+					t.Errorf("unexpected upstream request: %s %s", request.Method, request.URL)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": {"application/json"},
+						"Retry-After":  {"5"},
+						"Warning":      {`299 ebs-apiserver "example warning"`},
+					},
+					Body:    io.NopCloser(strings.NewReader(`{"items":[]}`)),
+					Request: request,
+				}, nil
+			}))
+			path := tc.path
+			if tc.query != "" {
+				path += "?" + tc.query
+			}
+			response := httptest.NewRecorder()
+			api.Router().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			if response.Code != http.StatusOK || calls != 1 {
+				t.Fatalf("status=%d upstream calls=%d body=%s", response.Code, calls, response.Body)
+			}
+			if response.Header().Get("Retry-After") != "5" ||
+				response.Header().Get("Warning") != `299 ebs-apiserver "example warning"` ||
+				response.Header().Get("Content-Type") != "application/json" {
+				t.Fatalf("upstream response headers changed: %v", response.Header())
 			}
 		})
 	}

@@ -50,8 +50,6 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 		return a.authorizeBuild(ctx, who, route)
 	case "jobs":
 		return a.authorizeJob(ctx, who, route)
-	case "snapshots", "buildinfos", "buildgraphs", "rpmrepos", "oldjobs":
-		return a.authorizeReadOnlyResource(ctx, who, route)
 	default:
 		return deny("resource is not exposed")
 	}
@@ -95,17 +93,6 @@ func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, r
 	}
 	if route.Subresource == "status" && isWrite(route.Method) {
 		return deny("user cannot update Job status")
-	}
-	_, err := a.projectMembership(ctx, who, route.Project)
-	return err
-}
-
-func (a *Authorizer) authorizeReadOnlyResource(ctx context.Context, who identity.Principal, route Route) error {
-	if route.Method != http.MethodGet {
-		return deny("resource is read-only through Gateway")
-	}
-	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
-		return nil
 	}
 	_, err := a.projectMembership(ctx, who, route.Project)
 	return err
@@ -163,33 +150,6 @@ func (a *Authorizer) jobAbort(ctx context.Context, who identity.Principal, route
 
 func isWrite(method string) bool {
 	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete
-}
-
-func IsPublicRead(route Route) bool {
-	if route.Resource == "oldjobs" && route.Subresource != "" {
-		return false
-	}
-	if route.Method != http.MethodGet {
-		return false
-	}
-	if route.Subresource != "" && route.Subresource != "status" {
-		return false
-	}
-	if route.Subresource == "status" && route.Name == "" {
-		return false
-	}
-	if route.Resource == "projects" {
-		return true
-	}
-	if route.Project == "" {
-		return false
-	}
-	switch route.Resource {
-	case "snapshots", "builds", "buildinfos", "buildgraphs", "rpmrepos", "jobs", "oldjobs":
-		return true
-	default:
-		return false
-	}
 }
 
 func HasWatch(query url.Values) bool {

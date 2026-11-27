@@ -108,21 +108,6 @@ func TestAuthorizationLookupBoundary(t *testing.T) {
 	}
 }
 
-func TestReadOnlyResourceAuthorization(t *testing.T) {
-	a := projectAuthorizer(t)
-	owner := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
-	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos", "oldjobs"} {
-		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
-			t.Run(resource+"/"+method, func(t *testing.T) {
-				route := Route{Resource: resource, Project: "team", Name: "item", Method: method}
-				if err := a.Authorize(context.Background(), owner, route); (err == nil) != (method == http.MethodGet) {
-					t.Fatalf("Authorize() error=%v, want allow=%v", err, method == http.MethodGet)
-				}
-			})
-		}
-	}
-}
-
 func TestBuildDeletionRequiresProjectOwner(t *testing.T) {
 	a := projectAuthorizer(t)
 	route := Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete}
@@ -145,13 +130,7 @@ func TestBuildDeletionRequiresProjectOwner(t *testing.T) {
 	}
 }
 
-func TestPublicRead(t *testing.T) {
-	if !IsPublicRead(Route{Resource: "jobs", Project: "team", Method: http.MethodGet}) {
-		t.Fatal("Project-scoped Job list should be public")
-	}
-	if IsPublicRead(Route{Resource: "runners", Method: http.MethodGet}) {
-		t.Fatal("Runner list must not be public")
-	}
+func TestHasWatch(t *testing.T) {
 	if !HasWatch(map[string][]string{"watch": {"false", "true"}}) {
 		t.Fatal("repeated watch parameter bypassed check")
 	}
