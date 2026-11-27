@@ -20,7 +20,6 @@ type Dependencies struct {
 	Tokens           *identity.Tokens
 	Now              func() time.Time
 	Limits           *limit.Buckets
-	IPLimits         *limit.Buckets
 	BodyLimit        int64
 	IAM              *iamclient.Client
 	LocalAuthEnabled bool
@@ -33,7 +32,6 @@ type Handler struct {
 	tokens                *identity.Tokens
 	now                   func() time.Time
 	limits                *limit.Buckets
-	ipLimits              *limit.Buckets
 	iam                   *iamclient.Client
 	auth                  *middleware.Auth
 	bodyLimit             int64
@@ -48,7 +46,7 @@ type Handler struct {
 }
 
 func NewHandler(deps Dependencies) (*Handler, error) {
-	if deps.Upstream == nil || deps.IAM == nil || deps.Tokens == nil || deps.Limits == nil || deps.IPLimits == nil {
+	if deps.Upstream == nil || deps.IAM == nil || deps.Tokens == nil || deps.Limits == nil {
 		return nil, fmt.Errorf("gateway dependencies are required")
 	}
 	if deps.Now == nil {
@@ -62,7 +60,6 @@ func NewHandler(deps Dependencies) (*Handler, error) {
 		upstream:              deps.Upstream,
 		tokens:                deps.Tokens,
 		limits:                deps.Limits,
-		ipLimits:              deps.IPLimits,
 		now:                   deps.Now,
 		iam:                   deps.IAM,
 		bodyLimit:             deps.BodyLimit,

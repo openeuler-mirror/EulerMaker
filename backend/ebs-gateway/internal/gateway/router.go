@@ -22,7 +22,6 @@ func NewRouter(api *Handler, oauthHandler *oauth.Handler) *gin.Engine {
 		middleware.Audit(api.now),
 		gin.Recovery(),
 		middleware.ValidateWatchRoute,
-		middleware.LimitIP(api.ipLimits),
 		api.auth.AuthenticateRequest,
 		middleware.LimitIdentity(api.limits),
 		middleware.AdmitIdentity,

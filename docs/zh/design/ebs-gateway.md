@@ -155,7 +155,6 @@ Gateway 不开放 Project 删除路由，工程删除由内部运维通过 apise
 Request
   -> Audit
   -> ValidateWatchRoute
-  -> LimitIP（认证前按客户端 IP）
   -> AuthenticateRequest（按路由认证模式解析当前身份）
   -> LimitIdentity（身份/IP 或匿名 IP）
   -> ProjectAuthorize
@@ -531,18 +530,15 @@ User API 的内部查询不能使用正在校验的普通用户 token，避免�
 
 ### 4.6 RateLimit
 
-通用限流在全局请求链执行，两层使用独立令牌桶，不在路由或业务 Guard 中重复扣减：
+通用限流在全局请求链的认证之后执行，不在路由或业务 Guard 中重复扣减：
 
-- `LimitIP` 位于 Watch 检查之后、认证之前，按客户端 IP 汇总请求，覆盖无效 Token、匿名写请求和未知路径，保护 Token 验证及 IAM 查询。额度耗尽返回 429，不再进入认证。
-- `LimitIdentity` 位于认证之后，匿名和已认证请求统一复用 `limits` 及相同的额度配置。已认证请求使用 `{type}/{sub}/{clientIP}`，没有认证身份的请求使用 `anonymous/{clientIP}`，不同 key 独立计数。此层覆盖公开资源、OpenAPI、providers、登录及注册入口；已认证用户读取公开资源也使用身份 key。认证失败不进入此层，但已消耗前置 IP 额度。
+- `LimitIdentity` 位于认证之后，匿名和已认证请求统一复用 `limits` 及相同的额度配置。已认证请求使用 `{type}/{sub}/{clientIP}`，没有认证身份的请求使用 `anonymous/{clientIP}`，不同 key 独立计数。此层覆盖公开资源、OpenAPI、providers、登录及注册入口；已认证用户读取公开资源也使用身份 key。认证失败不进入此层，也不消耗通用限流额度。
 - `GET /healthz` 使用独立链路，不进入认证或限流；限流器不包含健康检查特判。其他方法、相似路径仍走业务链。业务链中不支持的 Watch 在限流前返回 403。允许的 Watch 仅在建连时扣减请求额度，事件流不逐条扣减，Runner 并发 Watch 限制独立保留。
 
 配置：
 
 | 配置 | 默认值 | 说明 |
 |------|--------|------|
-| `--ip-rate-limit-per-sec` | `1000` | 认证前，每个客户端 IP 每秒补充令牌数 |
-| `--ip-rate-limit-burst` | `2000` | 认证前，每个客户端 IP 的突发桶容量 |
 | `--rate-limit-per-sec` | `100` | 每个身份/IP 或匿名 IP key 每秒补充令牌数 |
 | `--rate-limit-burst` | `200` | 每个身份/IP 或匿名 IP key 的桶容量 |
 
@@ -555,7 +551,7 @@ Retry-After: 1
 
 通用令牌桶按实例、按限流器最多保留 4096 个键；容量用尽时拒绝新键，已有键继续按原额度计算，不驱逐活跃记录。
 请求触发的过期扫描最多每分钟执行一次，清理空闲至少 10 分钟且额度已完全恢复的记录，避免清理导致额度提前重置。
-限流按 Gateway 副本独立计算，不提供集群全局配额。当前不信任转发头，客户端 IP 取自直接连接；位于 Nginx、NAT 或共享代理后的请求可能共用一个 IP 桶，部署时应按汇总流量调整前置 IP 额度，不能直接信任外部传入的 `X-Forwarded-For`。
+限流按 Gateway 副本独立计算，不提供集群全局配额。当前不信任转发头，客户端 IP 取自直接连接；位于 Nginx、NAT 或共享代理后的匿名请求及认证专用 IP 限制可能共用额度，不能直接信任外部传入的 `X-Forwarded-For`。
 
 登录、注册、机器换 Token、OAuth 的专用限制继续由各 Handler 执行，不因全局限流而删除。本地密码登录同时限制每个 IP 每分钟 20 次（桶容量 20）及每个用户名/IP 组合每分钟 5 次（桶容量 5），专用 IP 限流在正文解析和 IAM 查询前执行。专用限制保留各自的 `Retry-After`；通用额度通过不代表专用额度通过。
 
@@ -926,8 +922,6 @@ bash backend/ebs-gateway/hacks/update-openapi.sh --check
 | `--apiserver-client-cert` / `--apiserver-client-key` | 空 | 否 | apiserver 客户端证书与私钥，启用内部证书认证时成对提供 |
 | `--rate-limit-per-sec` | `100` | 否 | 身份/IP 与匿名 IP key 的每秒令牌数，必须是有限正数 |
 | `--rate-limit-burst` | `200` | 否 | 身份/IP 与匿名 IP key 的桶容量 |
-| `--ip-rate-limit-per-sec` | `1000` | 否 | 认证前每个 IP 每秒令牌数，必须是有限正数 |
-| `--ip-rate-limit-burst` | `2000` | 否 | 认证前 IP 桶容量 |
 | `--v` | `0` | 否 | klog verbosity |
 | `--vmodule` | 空 | 否 | 按 Go 文件名模式配置 klog verbosity |
 | `--logtostderr` | `true` | 否 | klog 日志输出到 stderr |
@@ -1075,7 +1069,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | AccessLabels | 普通用户、Ops 和 Admin 创建 Project 时统一写入当前 Token 的 owner user label；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 仅 Runner Token 可创建；普通用户、Ops/Admin、Service 拒绝且不得转发；创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护由运维管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
 | RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、spec 或 metadata |
-| RateLimit | 认证前 IP 限流保护 IAM、认证后身份与匿名额度隔离、公开读取不重复扣减、429 和 Retry-After，以及登录/OAuth/Watch 专用限制 |
+| RateLimit | 认证后身份与匿名额度隔离、公开读取不重复扣减、429 和 Retry-After，以及登录/OAuth/Watch 专用限制 |
 | RouteIdentityAdmission | 全部已注册业务路由有规则、方法与模板精确匹配、未配置默认拒绝、角色与机器身份隔离、Service 拒绝审计，以及准入后仍执行对象归属和字段权限检查 |
 | MiddlewareChains | 健康检查独立链路、不消耗额度或产生审计、不访问 IAM；非探针路径仍受保护；业务 panic 恢复后仍记录一次含最终状态的审计 |
 | Proxy | `/apis/ebs/v1/*` 原样透传 |

@@ -22,7 +22,7 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 全局 [AuthenticateRequest](internal/middleware/auth.go) 按方法和路由模板处理无需 Bearer 认证、可选认证和必须认证三类请求，默认必须认证。登录等凭据入口和 OpenAPI 不解析 Bearer Token；现有公开 GET 可匿名，但带 Token 时必须验证，Watch 必须认证。各路由不重复认证或通用限流，只负责业务授权；未触发限流时，未知路径匿名返回 401，认证成功后返回 404。
 认证、身份准入与 Watch 规则集中在 [routes.go](internal/middleware/routes.go) 的 `routePolicies`，每行一个方法和路由模板，声明认证模式、允许身份及 Watch 能力。全局 `AdmitIdentity` 在认证和身份限流之后执行，已注册但未配置规则的路由默认返回 403。规则允许进入业务校验，不替代工程归属、Service 的 projects/permissions 或字段修改权限。
 `GET /healthz` 在业务中间件挂载前直接注册 Handler，返回固定文本，不挂载 Recovery，也不经过审计、Watch 检查、认证和限流。业务链保持 Audit 在外、Recovery 在内，后续处理 panic 恢复后仍记录最终状态；认证和限流不包含健康检查特判。
-通用限流由 [limit.go](internal/middleware/limit.go) 在业务链全局执行：认证前按 IP 限流，认证后按身份类型/名称/IP 或匿名 IP 限流。登录、注册、机器换 Token、OAuth 和 Watch 并发限制继续保留，通用限流返回 429 和 `Retry-After: 1`。
+通用限流由 [limit.go](internal/middleware/limit.go) 在业务链全局执行：认证后按身份类型/名称/IP 或匿名 IP 限流。登录、注册、机器换 Token、OAuth 和 Watch 并发限制继续保留，通用限流返回 429 和 `Retry-After: 1`。
 指定 Job 的 GET 路由保留 `runnerJobReadGuard` 检查 Runner 归属，漏挂时拒绝转发。Runner 创建与任务列表仅允许 Runner 身份，列表与 `/status` 读取仅允许 Ops/Admin，由全局准入判断。路由内仅保留注册正文、Runner 名称匹配、更新字段、查询参数和 Watch 并发检查，然后交给 `forward`；所有业务路由都有准入规则的测试保障。
 Config 读写要求 Ops/Admin；`build-targets` 仅允许 User 身份，`service-endpoints` 仅允许 Runner 身份，均由统一规则表声明。公共写请求处理放在 `request.go`。
 Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
@@ -43,7 +43,7 @@ go run ./cmd \
 
 日志统一使用 klog 标准参数，包括 `--v`（默认 `0`）、`--vmodule` 和 `--logtostderr`（默认 `true`）。启动、正常退出及请求审计使用 `InfoS`，启动或退出失败使用 `ErrorS`，进程退出前执行 `Flush`。verbosity 不等同于最低严重级别，默认保留请求审计。User 身份逐请求读取 apiserver，不缓存。
 
-`--ip-rate-limit-per-sec` / `--ip-rate-limit-burst` 控制认证前的每 IP 额度，默认 `1000/2000`；`--rate-limit-per-sec` / `--rate-limit-burst` 统一控制身份/IP 与匿名 IP 的额度，默认 `100/200`。匿名和已认证请求复用同一个限流器，通过 `anonymous/{clientIP}` 与 `{type}/{sub}/{clientIP}` 隔离计数；已认证用户读取公开资源也使用身份 key。限流按副本独立计算，当前不信任转发头；经 Nginx 或 NAT 接入的请求可能共用一个客户端 IP，应按汇总流量调整前置 IP 额度。
+`--rate-limit-per-sec` / `--rate-limit-burst` 统一控制身份/IP 与匿名 IP 的额度，默认 `100/200`。匿名和已认证请求复用同一个限流器，通过 `anonymous/{clientIP}` 与 `{type}/{sub}/{clientIP}` 隔离计数；已认证用户读取公开资源也使用身份 key。限流按副本独立计算，当前不信任转发头；经 Nginx 或 NAT 接入的匿名请求及认证专用 IP 限制可能共用一个客户端 IP。无效 Token 在认证阶段被拒绝，不消耗身份限流额度。
 
 进程收到 SIGINT/SIGTERM 后最多等待 15 秒排空在途请求，再退出；超时会强制关闭连接并返回错误。部署的终止宽限期应留出排空及后台任务退出时间。
 

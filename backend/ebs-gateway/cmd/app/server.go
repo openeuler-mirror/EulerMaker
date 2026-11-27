@@ -41,8 +41,6 @@ type options struct {
 	maxBody         int64
 	rate            float64
 	burst           int
-	ipRate          float64
-	ipBurst         int
 }
 
 func newCommand(start func(options) error) *cobra.Command {
@@ -72,8 +70,6 @@ func newCommand(start func(options) error) *cobra.Command {
 	flags.Int64Var(&opts.maxBody, "max-request-body-bytes", 1<<20, "maximum write request size")
 	flags.Float64Var(&opts.rate, "rate-limit-per-sec", 100, "requests per second per authenticated identity/IP or anonymous IP")
 	flags.IntVar(&opts.burst, "rate-limit-burst", 200, "request burst per authenticated identity/IP or anonymous IP")
-	flags.Float64Var(&opts.ipRate, "ip-rate-limit-per-sec", 1000, "pre-authentication requests per second per client IP")
-	flags.IntVar(&opts.ipBurst, "ip-rate-limit-burst", 2000, "pre-authentication request burst per client IP")
 	return cmd
 }
 
@@ -96,12 +92,6 @@ func validateOptions(opts options) error {
 	}
 	if opts.burst <= 0 {
 		return fmt.Errorf("--rate-limit-burst must be greater than 0, got %d", opts.burst)
-	}
-	if opts.ipRate <= 0 || math.IsNaN(opts.ipRate) || math.IsInf(opts.ipRate, 0) {
-		return fmt.Errorf("--ip-rate-limit-per-sec must be a finite number greater than 0, got %g", opts.ipRate)
-	}
-	if opts.ipBurst <= 0 {
-		return fmt.Errorf("--ip-rate-limit-burst must be greater than 0, got %d", opts.ipBurst)
 	}
 	if (opts.clientCertFile == "") != (opts.clientKeyFile == "") {
 		return fmt.Errorf("--apiserver-client-cert and --apiserver-client-key must be provided together")
@@ -142,7 +132,6 @@ func run(opts options) error {
 		Tokens:           tokens,
 		Now:              time.Now,
 		Limits:           limit.New(opts.rate, opts.burst, time.Now),
-		IPLimits:         limit.New(opts.ipRate, opts.ipBurst, time.Now),
 		BodyLimit:        opts.maxBody,
 		IAM:              accounts,
 		LocalAuthEnabled: opts.oauthConfigFile == "",

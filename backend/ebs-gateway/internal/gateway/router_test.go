@@ -199,9 +199,9 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 		"/apis/ebs/v1/scripts/{name}":                          "get put patch delete",
 		"/apis/ebs/v1/runners/{runner}/jobs":                   "get",
 		"/apis/ebs/v1/service-endpoints":                       "get",
-		"/apis/iam.ebs/v1/users":                         "get",
-		"/apis/iam.ebs/v1/machineaccounts":               "get",
-		"/apis/iam.ebs/v1/machineaccounts/{name}":        "get delete put patch",
+		"/apis/iam.ebs/v1/users":                               "get",
+		"/apis/iam.ebs/v1/machineaccounts":                     "get",
+		"/apis/iam.ebs/v1/machineaccounts/{name}":              "get delete put patch",
 	} {
 		if len(document.Paths[path]) != len(strings.Fields(methods)) {
 			t.Fatalf("methods for %s: %v", path, document.Paths[path])
@@ -245,7 +245,6 @@ func newTestAPIWithConfig(t *testing.T, transport http.RoundTripper, burst int, 
 	api, err := NewHandler(Dependencies{
 		Upstream: client, IAM: accounts, Tokens: tokens, Now: now,
 		Limits: limit.New(100, burst, now), BodyLimit: 1 << 20, LocalAuthEnabled: cfg.PublicBaseURL == "",
-		IPLimits: limit.New(1000, 2000, now),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -883,7 +882,7 @@ func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
 		c.Next()
 		decision = c.GetString("serviceAuthorization")
 	})
-	router.Use(middleware.ValidateWatchRoute, middleware.LimitIP(api.ipLimits), api.auth.AuthenticateRequest,
+	router.Use(middleware.ValidateWatchRoute, api.auth.AuthenticateRequest,
 		middleware.LimitIdentity(api.limits), middleware.AdmitIdentity)
 	registerConfigs(router, api.Handler)
 	registerScripts(router, api.Handler)
@@ -1320,12 +1319,11 @@ func TestHealthAndBusinessMiddlewareChains(t *testing.T) {
 		lookups++
 		panic("test account lookup panic")
 	}))
-	api.ipLimits = limit.New(1, 1, api.now)
 	api.limits = limit.New(1, 1, api.now)
 	router := api.Router()
 	for _, exhausted := range []bool{false, true} {
 		if exhausted {
-			if !api.ipLimits.Allow("192.0.2.1") || !api.limits.Allow("anonymous/192.0.2.1") {
+			if !api.limits.Allow("anonymous/192.0.2.1") {
 				t.Fatal("health requests consumed rate limit allowance")
 			}
 		}
@@ -1352,8 +1350,8 @@ func TestHealthAndBusinessMiddlewareChains(t *testing.T) {
 		request.RemoteAddr = "192.0.2.1:1234"
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)
-		if response.Code != http.StatusTooManyRequests {
-			t.Fatalf("%s %s bypassed business limits: %d", methodPath.method, methodPath.path, response.Code)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s bypassed business authentication: %d", methodPath.method, methodPath.path, response.Code)
 		}
 	}
 
@@ -1378,53 +1376,6 @@ func TestHealthAndBusinessMiddlewareChains(t *testing.T) {
 	}
 	if strings.Count(audit.String(), `"HTTP request"`) != 1 || strings.Contains(audit.String(), token) {
 		t.Fatalf("unexpected panic audit: %s", audit.String())
-	}
-}
-
-func TestGlobalIPLimitBeforeAuthentication(t *testing.T) {
-	lookups, forwards := 0, 0
-	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		body := `{"items":[]}`
-		if r.URL.Path == "/apis/iam.ebs/v1/users/alice" {
-			lookups++
-			body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
-		} else {
-			forwards++
-		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
-	}))
-	api.ipLimits = limit.New(1, 1, api.now)
-	token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	router := api.Router()
-	for _, tc := range []struct {
-		path, address, token string
-		status               int
-		lookups, forwards    int
-	}{
-		{"/apis/ebs/v1/projects", "192.0.2.1:1234", "invalid", 401, 0, 0},
-		{"/apis/ebs/v1/projects", "192.0.2.1:1234", token, 429, 0, 0},
-		{"/auth/providers", "192.0.2.1:1234", "", 429, 0, 0},
-		{"/unknown", "192.0.2.1:1234", "", 429, 0, 0},
-		{"/healthz", "192.0.2.1:1234", "invalid", 200, 0, 0},
-		{"/apis/ebs/v1/projects?watch=true", "192.0.2.1:1234", token, 403, 0, 0},
-		{"/apis/ebs/v1/projects", "192.0.2.2:1234", token, 200, 1, 1},
-	} {
-		request := httptest.NewRequest(http.MethodGet, tc.path, nil)
-		request.RemoteAddr = tc.address
-		if tc.token != "" {
-			request.Header.Set("Authorization", "Bearer "+tc.token)
-		}
-		response := httptest.NewRecorder()
-		router.ServeHTTP(response, request)
-		if response.Code != tc.status || lookups != tc.lookups || forwards != tc.forwards {
-			t.Fatalf("%s: status=%d lookups=%d forwards=%d, want %d/%d/%d", tc.path, response.Code, lookups, forwards, tc.status, tc.lookups, tc.forwards)
-		}
-		if tc.status == 429 && response.Header().Get("Retry-After") != "1" {
-			t.Fatal("missing retry delay")
-		}
 	}
 }
 
