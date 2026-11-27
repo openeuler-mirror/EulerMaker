@@ -68,7 +68,7 @@ func TestAuthorizationLookupBoundary(t *testing.T) {
 		lookup bool
 		status int
 	}{
-		{"admin creates Build", identity.Principal{Type: identity.UserType, Scope: identity.AdminScope}, Route{Resource: "builds", Project: "team", Method: http.MethodPost}, false, 0},
+		{"admin creates Build", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "builds", Project: "team", Method: http.MethodPost}, true, 503},
 		{"admin deletes Build", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete}, true, 503},
 		{"admin updates Project", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true, 503},
 		{"user creates Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "projects", Method: http.MethodPost}, false, 0},

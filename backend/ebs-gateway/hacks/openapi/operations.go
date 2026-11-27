@@ -308,7 +308,7 @@ func permissions(resource, part, method string) ([]object, string) {
 			description += " Runner tokens may GET only their assigned Jobs."
 		}
 		if resource == "jobs" && part == "list" {
-			description += " Watch requires authenticated project access, returns newline-delimited WatchEvent JSON instead of JobList and cannot use field projection; restart List after 410."
+			description += " Watch requires a Project owner/member user, including Ops/Admin without a cross-project override, returns newline-delimited WatchEvent JSON instead of JobList and cannot use field projection; restart List after 410."
 		}
 		return optionalBearer, description
 	}
@@ -334,10 +334,10 @@ func permissions(resource, part, method string) ([]object, string) {
 		return bearer, "Project owner or Admin; members cannot delete child resources."
 	}
 	if resource == "builds" && part == "list" && method == "post" {
-		return bearer, "Project owner/member or Admin, or service token with this Project in MachineAccount.spec.projects and builds:create in spec.permissions. Grants are read on each request; missing grants return 403. Does not grant builds:abort. Build inputs remain subject to apiserver validation."
+		return bearer, "Project owner/member only for user tokens, including Ops/Admin without a cross-project override; or service token with this Project in MachineAccount.spec.projects and builds:create in spec.permissions. Grants are read on each request; missing grants return 403. Does not grant builds:abort. Build inputs remain subject to apiserver validation."
 	}
 	if resource == "builds" && part == "abort" {
-		return bearer, "Project owner/member or Admin, or service token with this Project in MachineAccount.spec.projects and builds:abort in spec.permissions. Grants are read on each request; missing grants return 403. Independent of builds:create; the Build need not have been created by this account. Apiserver handles the existing abort protocol."
+		return bearer, "Project owner/member only for user tokens, including Ops/Admin without a cross-project override; or service token with this Project in MachineAccount.spec.projects and builds:abort in spec.permissions. Grants are read on each request; missing grants return 403. Independent of builds:create; the Build need not have been created by this account. Apiserver handles the existing abort protocol."
 	}
 	return bearer, "Project owner/member or Admin. Ops has ordinary project-member access, not a cross-project override."
 }

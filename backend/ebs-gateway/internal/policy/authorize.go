@@ -74,9 +74,6 @@ func (a *Authorizer) authorizeBuild(ctx context.Context, who identity.Principal,
 		}
 		return nil
 	}
-	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
-		return nil
-	}
 	_, err := a.projectMembership(ctx, who, route.Project)
 	return err
 }
@@ -96,20 +93,11 @@ func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, r
 		}
 		return deny("Runner project access denied")
 	}
-	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
-		if route.Subresource == "status" {
-			return deny("Admin cannot update Job status")
-		}
-		return nil
-	}
-	_, err := a.projectMembership(ctx, who, route.Project)
-	if err != nil {
-		return err
-	}
 	if route.Subresource == "status" && isWrite(route.Method) {
 		return deny("user cannot update Job status")
 	}
-	return nil
+	_, err := a.projectMembership(ctx, who, route.Project)
+	return err
 }
 
 func (a *Authorizer) authorizeReadOnlyResource(ctx context.Context, who identity.Principal, route Route) error {
