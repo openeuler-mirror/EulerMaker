@@ -107,7 +107,7 @@ func TestRoutePolicyConsistency(t *testing.T) {
 		if rule.Identities == 0 {
 			t.Errorf("route has no allowed identities: %+v", route)
 		}
-		if rule.Watch && (route.Method != http.MethodGet || rule.Authentication == middleware.AuthenticationNone) {
+		if rule.Options.Watch && (route.Method != http.MethodGet || rule.Authentication == middleware.AuthenticationNone) {
 			t.Errorf("Watch must use GET and cannot bypass authentication: %+v", route)
 		}
 		if (rule.Authentication != middleware.AuthenticationRequired) != (rule.Identities&middleware.AllowAnonymous != 0) {
@@ -119,4 +119,24 @@ func TestRoutePolicyConsistency(t *testing.T) {
 func hasRoutePolicy(method, path string) bool {
 	_, ok := routeRules()[middleware.RouteKey{Method: method, Path: path}]
 	return ok
+}
+
+func TestRouteListLimits(t *testing.T) {
+	expected := map[string]bool{"/apis/ebs/v1/projects": true}
+	for _, resource := range []string{"builds", "jobs", "oldjobs", "snapshots", "buildinfos", "buildgraphs", "rpmrepos"} {
+		expected["/apis/ebs/v1/projects/:project/"+resource] = true
+	}
+	for key, rule := range routeRules() {
+		want := 0
+		if key.Method == http.MethodGet && expected[key.Path] {
+			want = 100
+			delete(expected, key.Path)
+		}
+		if rule.Options.ListLimit != want {
+			t.Errorf("%s %s: list limit=%d, want %d", key.Method, key.Path, rule.Options.ListLimit, want)
+		}
+	}
+	if len(expected) != 0 {
+		t.Fatalf("list routes lack rules: %v", expected)
+	}
 }

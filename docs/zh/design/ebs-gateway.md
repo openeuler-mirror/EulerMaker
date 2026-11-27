@@ -154,7 +154,7 @@ Gateway 不开放 Project 删除路由，工程删除由内部运维通过 apise
 ```text
 Request
   -> Audit
-  -> ValidateWatchRoute
+  -> PrepareQuery
   -> Authenticate（按路由认证模式解析当前身份）
   -> LimitIdentity（身份/IP 或匿名 IP）
   -> ProjectAuthorize
@@ -180,7 +180,7 @@ Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 
 | Job | `/apis/ebs/v1/projects/{project}/jobs[/{name}]`、`/projects/{project}/jobs/{name}/status` |
 | 历史 Job | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]`，仅 GET，无 `/status` |
 
-`GET /apis/ebs/v1/build-targets` 仅供已认证用户读取可选的发行版及其架构，与 `service-endpoints` 通过全局请求认证和限流。限流未触发时，非 Watch 请求携带无效 Token 或未登录时返回 401；Watch 请求由全局 `ValidateWatchRoute` 在认证前拒绝并返回 403，全局准入规则拒绝 Runner、Service 身份。Gateway 读取内置构建配置，仅返回按名称排序的 `items[].distro` 和 `items[].arches`，不返回镜像地址、Config 元数据或原文。配置不可用时返回 503。Config 不应存放凭据。
+`GET /apis/ebs/v1/build-targets` 仅供已认证用户读取可选的发行版及其架构，与 `service-endpoints` 通过全局请求认证和限流。限流未触发时，非 Watch 请求携带无效 Token 或未登录时返回 401；Watch 请求由全局 `PrepareQuery` 在认证前拒绝并返回 403，全局准入规则拒绝 Runner、Service 身份。Gateway 读取内置构建配置，仅返回按名称排序的 `items[].distro` 和 `items[].arches`，不返回镜像地址、Config 元数据或原文。配置不可用时返回 503。Config 不应存放凭据。
 
 Runner 通过专用服务地址投影接口读取 Artifact Manager 和 Git Server 的 Runner 地址，不改变上述 Config 读取权限。接口、授权和响应契约见 4.11 节。
 
@@ -763,7 +763,7 @@ gateway 使用反向代理将请求转发到 `ebs-apiserver`。
 
 固定路径为 `GET /apis/ebs/v1/service-endpoints`。仅 `type=runner` 的有效 Token 可调用，所有 Runner 获取同一份地址列表，无需在路径或参数中指定 Runner 名。Gateway 每次读取 `Config/services`，返回 `artifactManagers` 和 `gitServer` 两个同级字段，仅包含 Runner 内外网地址；接口不接收 Job 或 Project 参数，也不查询 Job、Project 或选择上传实例。Runner 无需获得 原始 Config 的直接读取权限。
 
-Watch 请求由全局 `ValidateWatchRoute` 在认证前返回 403；Runner 请求通过认证和限流后，携带其他查询参数（包括 `watch=false`）时，Handler 返回 400。
+Watch 请求由全局 `PrepareQuery` 在认证前返回 403；Runner 请求通过认证和限流后，携带其他查询参数（包括 `watch=false`）时，Handler 返回 400。
 
 响应示例：
 
@@ -789,7 +789,9 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 
 `Authenticate` 按 HTTP 方法和 Gin `c.FullPath()` 精确分类，未列出的路由默认必须认证，不按 URL 前缀放行：
 
-规则统一维护于 `internal/gateway/routes.go` 的 `routeRules()`，以 `middleware.RouteKey{Method, Path}` 为键，每行声明认证模式、允许身份集合和 Watch 能力。`NewRouter` 创建独立的 `RoutePolicies` 副本并注入中间件；构造时复制规则，后续修改源 map 不影响已有 Router，不使用可变的全局规则表。身份区分匿名、普通用户、Ops、Admin、Runner、Service；User 角色只在身份类型为 User 时生效。`Authenticate`、`AdmitIdentity` 和 `ValidateWatchRoute` 读取同一张表，不各自维护路径分支。健康检查在业务链外注册，不加入规则表。
+非 Watch 请求中，`PrepareQuery` 仅对显式配置 `ListLimit` 的 GET 列表处理分页。当前 Project、Build、Job、OldJob、Snapshot、BuildInfo、BuildGraph、RpmRepo 列表上限为 100；缺失、非法、重复或超出上限的 `limit` 设置为上限，合法值及其他查询参数保留。Runner、IAM、Config、Script 列表及对象读取不受该分页规则影响。Watch 保留原始查询参数，不套用普通列表上限。
+
+规则统一维护于 `internal/gateway/routes.go` 的 `routeRules()`，以 `middleware.RouteKey{Method, Path}` 为键，每行声明认证模式、允许身份集合，`Options` 单独保存 Watch 开关和列表分页上限。`NewRouter` 创建独立的 `RoutePolicies` 副本并注入中间件；构造时复制规则，后续修改源 map 不影响已有 Router，不使用可变的全局规则表。身份区分匿名、普通用户、Ops、Admin、Runner、Service；User 角色只在身份类型为 User 时生效。`Authenticate`、`AdmitIdentity` 和 `PrepareQuery` 读取同一张表，不各自维护路径分支。健康检查在业务链外注册，不加入规则表。
 
 | 认证模式 | 路由范围 | 行为 |
 |----------|----------|------|
@@ -855,7 +857,7 @@ GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
 GET /apis/ebs/v1/projects/{project}/jobs?watch=true
 ```
 
-全局 `ValidateWatchRoute` 按 HTTP 方法和 `c.FullPath()` 精确匹配上述两类 GET 路由模板，不按原始 URL 前缀放行。非 Watch 请求直接继续；其他已匹配路由的 Watch 请求在认证、限流前返回 403，无论是否携带有效 Token。未匹配路由交给既有 `NoRoute`，匿名返回 401、认证成功后返回 404。允许列表只确认接口支持 Watch，不授予访问权限：两类列表仍执行认证、资源授权、查询参数和适用的并发检查，匿名请求返回 401。Runner token 通过自身 Runner 范围接口 Watch Job；用户通过工程 Job 列表建立 Watch 时必须为该工程的 owner/member，Ops/Admin 不享有跨工程访问特权。
+全局 `PrepareQuery` 按 HTTP 方法和 `c.FullPath()` 精确匹配上述两类 GET 路由模板，不按原始 URL 前缀放行。非 Watch 请求仅对配置 `ListLimit` 的 GET 列表规范化分页；其他已匹配路由的 Watch 请求在认证、限流前返回 403，无论是否携带有效 Token。未匹配路由交给既有 `NoRoute`，匿名返回 401、认证成功后返回 404。允许列表只确认接口支持 Watch，不授予访问权限：两类列表仍执行认证、资源授权、查询参数和适用的并发检查，匿名请求返回 401。Runner token 通过自身 Runner 范围接口 Watch Job；用户通过工程 Job 列表建立 Watch 时必须为该工程的 owner/member，Ops/Admin 不享有跨工程访问特权。
 
 每个 Gateway 实例内，同一 Runner 同时最多建立一个 Runner 范围 Job watch。超过限制返回429并包含 `Retry-After`；连接正常结束、上游失败或客户端断开时必须释放计数。Runner watch建议使用不超过300秒的 `timeoutSeconds` 定期重连，使 token和权限能够重新校验。
 

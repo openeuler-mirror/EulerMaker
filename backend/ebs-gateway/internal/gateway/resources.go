@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -58,7 +57,6 @@ func (a *Handler) publicReadGuard(resource, subresource string) gin.HandlerFunc 
 			a.authorizeAuthenticatedRoute(c, route)
 			return
 		}
-		preparePublicRead(c, route)
 		allowResource(c, route)
 	}
 }
@@ -124,17 +122,6 @@ func prepareServiceAudit(c *gin.Context, route policy.Route) {
 	c.Set("serviceProject", project)
 	c.Set("servicePermission", string(permission))
 	c.Set("serviceAuthorization", "denied")
-}
-
-func preparePublicRead(c *gin.Context, route policy.Route) {
-	if route.Name == "" && route.Subresource == "" {
-		query := c.Request.URL.Query()
-		limit, err := strconv.Atoi(query.Get("limit"))
-		if err != nil || limit < 1 || limit > 100 || len(query["limit"]) != 1 {
-			query.Set("limit", "100")
-			c.Request.URL.RawQuery = query.Encode()
-		}
-	}
 }
 
 func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route) bool {

@@ -23,7 +23,7 @@ func NewRouter(api *Handler, authHandler *auth.Handler, oauthHandler *oauth.Hand
 	router.Use(
 		middleware.Audit(api.now),
 		gin.Recovery(),
-		middleware.ValidateWatchRoute(access),
+		middleware.PrepareQuery(access),
 		middleware.Authenticate(api.auth, access),
 		middleware.LimitIdentity(api.limits),
 		middleware.AdmitIdentity(access),

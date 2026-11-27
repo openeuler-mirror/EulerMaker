@@ -51,7 +51,7 @@ func routeRules() map[middleware.RouteKey]middleware.RoutePolicy {
 		{Method: http.MethodPatch, Path: "/apis/ebs/v1/scripts/:name"}:  {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowPrivileged},
 		{Method: http.MethodDelete, Path: "/apis/ebs/v1/scripts/:name"}: {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowPrivileged},
 
-		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects"}:            {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
+		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects"}:            {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers, Options: middleware.RouteOptions{ListLimit: 100}},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project"}:   {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 		{Method: http.MethodPost, Path: "/apis/ebs/v1/projects"}:           {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowUsers},
 		{Method: http.MethodPut, Path: "/apis/ebs/v1/projects/:project"}:   {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowUsers | middleware.AllowService},
@@ -66,37 +66,37 @@ func routeRules() map[middleware.RouteKey]middleware.RoutePolicy {
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/runners/:runner/status"}:   {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowPrivileged},
 		{Method: http.MethodPut, Path: "/apis/ebs/v1/runners/:runner/status"}:   {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowRunner | middleware.AllowPrivileged},
 		{Method: http.MethodPatch, Path: "/apis/ebs/v1/runners/:runner/status"}: {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowRunner | middleware.AllowPrivileged},
-		{Method: http.MethodGet, Path: "/apis/ebs/v1/runners/:runner/jobs"}:     {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowRunner, Watch: true},
+		{Method: http.MethodGet, Path: "/apis/ebs/v1/runners/:runner/jobs"}:     {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowRunner, Options: middleware.RouteOptions{Watch: true}},
 
-		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/builds"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
+		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/builds"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers, Options: middleware.RouteOptions{ListLimit: 100}},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/builds/:name"}:        {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/builds/:name/status"}: {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 		{Method: http.MethodPost, Path: "/apis/ebs/v1/projects/:project/builds"}:             {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowUsers | middleware.AllowService},
 		{Method: http.MethodDelete, Path: "/apis/ebs/v1/projects/:project/builds/:name"}:     {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowUsers},
 		{Method: http.MethodPost, Path: "/apis/ebs/v1/projects/:project/builds/:name/abort"}: {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowUsers | middleware.AllowService},
 
-		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/jobs"}:                {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers, Watch: true},
+		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/jobs"}:                {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers, Options: middleware.RouteOptions{Watch: true, ListLimit: 100}},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/jobs/:name"}:          {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers | middleware.AllowRunner},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/jobs/:name/status"}:   {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 		{Method: http.MethodPatch, Path: "/apis/ebs/v1/projects/:project/jobs/:name/status"}: {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowRunner},
 		{Method: http.MethodPost, Path: "/apis/ebs/v1/projects/:project/jobs/:name/abort"}:   {Authentication: middleware.AuthenticationRequired, Identities: middleware.AllowUsers},
 
-		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/oldjobs"}:       {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
+		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/oldjobs"}:       {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers, Options: middleware.RouteOptions{ListLimit: 100}},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/oldjobs/:name"}: {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 
-		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/snapshots"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
+		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/snapshots"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers, Options: middleware.RouteOptions{ListLimit: 100}},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/snapshots/:name"}:        {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/snapshots/:name/status"}: {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 
-		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/buildinfos"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
+		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/buildinfos"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers, Options: middleware.RouteOptions{ListLimit: 100}},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/buildinfos/:name"}:        {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/buildinfos/:name/status"}: {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 
-		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/buildgraphs"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
+		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/buildgraphs"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers, Options: middleware.RouteOptions{ListLimit: 100}},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/buildgraphs/:name"}:        {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/buildgraphs/:name/status"}: {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 
-		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/rpmrepos"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
+		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/rpmrepos"}:              {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers, Options: middleware.RouteOptions{ListLimit: 100}},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/rpmrepos/:name"}:        {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 		{Method: http.MethodGet, Path: "/apis/ebs/v1/projects/:project/rpmrepos/:name/status"}: {Authentication: middleware.AuthenticationOptional, Identities: middleware.AllowAnonymous | middleware.AllowUsers},
 	}
