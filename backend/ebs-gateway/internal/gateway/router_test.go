@@ -690,7 +690,7 @@ func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
 		c.Next()
 		decision = c.GetString("serviceAuthorization")
 	})
-	router.Use(middleware.ValidateWatchRoute(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())),
+	router.Use(middleware.PrepareQuery(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())),
 		middleware.LimitIdentity(api.limits), middleware.AdmitIdentity(middleware.NewRoutePolicies(routeRules())))
 	registerConfigs(router, api.Handler)
 	registerScripts(router, api.Handler)

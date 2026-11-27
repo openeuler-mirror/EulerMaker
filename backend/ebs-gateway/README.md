@@ -19,9 +19,9 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/upstream` | 可信内部读取和流式反向代理 |
 | `internal/limit` | 请求令牌桶 |
 
-从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的授权和公开读取处理。全局 [ValidateWatchRoute](internal/middleware/watch.go) 按 GET 方法和 Gin 路由模板仅允许 Project Job 列表、Runner 任务列表请求 Watch；其他已匹配路由在认证前返回 403，未匹配路由沿用 NoRoute。允许的 Watch 仍须通过后续认证、授权和查询检查。
+从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的授权和公开读取处理。全局 [PrepareQuery](internal/middleware/query.go) 按 GET 方法和 Gin 路由模板仅允许 Project Job 列表、Runner 任务列表请求 Watch；其他已匹配路由在认证前返回 403，未匹配路由沿用 NoRoute。允许的 Watch 仍须通过后续认证、授权和查询检查。非 Watch 请求仅在配置了 `ListLimit` 的 GET 列表上规范化 `limit`；Project 及其公开子资源列表上限为 100，其余查询参数、对象读取和 Watch 参数保持原样。
 全局 [Authenticate](internal/middleware/auth.go) 按方法和路由模板处理无需 Bearer 认证、可选认证和必须认证三类请求，默认必须认证。登录等凭据入口和 OpenAPI 不解析 Bearer Token；现有公开 GET 可匿名，但带 Token 时必须验证，Watch 必须认证。各路由不重复认证或通用限流，只负责业务授权；未触发限流时，未知路径匿名返回 401，认证成功后返回 404。
-认证、身份准入与 Watch 规则集中在 [routes.go](internal/gateway/routes.go) 的 `routeRules()`，每行一个方法和路由模板，声明认证模式、允许身份及 Watch 能力。`NewRouter` 为每个 Router 创建独立的 `RoutePolicies` 只读副本，认证、身份准入和 Watch 中间件共用该副本，不依赖可变的全局规则表。全局 `AdmitIdentity` 在认证和身份限流之后执行，已注册但未配置规则的路由默认返回 403。规则允许进入业务校验，不替代工程归属、Service 的 projects/permissions 或字段修改权限。
+认证、身份准入与 Watch 规则集中在 [routes.go](internal/gateway/routes.go) 的 `routeRules()`，每行一个方法和路由模板，声明认证模式、允许身份，并用 `Options` 配置 Watch 和列表分页上限。`NewRouter` 为每个 Router 创建独立的 `RoutePolicies` 只读副本，认证、身份准入和 Watch 中间件共用该副本，不依赖可变的全局规则表。全局 `AdmitIdentity` 在认证和身份限流之后执行，已注册但未配置规则的路由默认返回 403。规则允许进入业务校验，不替代工程归属、Service 的 projects/permissions 或字段修改权限。
 `GET /healthz` 在业务中间件挂载前直接注册 Handler，返回固定文本，不挂载 Recovery，也不经过审计、Watch 检查、认证和限流。业务链保持 Audit 在外、Recovery 在内，后续处理 panic 恢复后仍记录最终状态；认证和限流不包含健康检查特判。
 通用限流由 [limit.go](internal/middleware/limit.go) 在业务链全局执行：认证后按身份类型/名称/IP 或匿名 IP 限流。登录、注册、机器换 Token、OAuth 和 Watch 并发限制继续保留，通用限流返回 429 和 `Retry-After: 1`。
 指定 Job 的 GET 路由保留 `runnerJobReadGuard` 检查 Runner 归属，漏挂时拒绝转发。Runner 创建与任务列表仅允许 Runner 身份，列表与 `/status` 读取仅允许 Ops/Admin，由全局准入判断。路由内仅保留注册正文、Runner 名称匹配、更新字段、查询参数和 Watch 并发检查，然后交给 `upstream.Forward`；所有业务路由都有准入规则的测试保障。

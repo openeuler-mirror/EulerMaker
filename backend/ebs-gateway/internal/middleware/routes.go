@@ -34,7 +34,12 @@ const (
 type RoutePolicy struct {
 	Authentication AuthenticationMode
 	Identities     RouteIdentities
-	Watch          bool
+	Options        RouteOptions
+}
+
+type RouteOptions struct {
+	Watch     bool
+	ListLimit int
 }
 
 // RoutePolicies holds an immutable, router-local copy of the access rules.
