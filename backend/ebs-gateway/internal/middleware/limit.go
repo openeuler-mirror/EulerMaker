@@ -9,17 +9,6 @@ import (
 	"ebs-gateway/internal/limit"
 )
 
-// LimitIP bounds requests before token verification and account lookups.
-func LimitIP(limits *limit.Buckets) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if !limits.Allow(c.ClientIP()) {
-			AbortRateLimited(c, 1, "too many requests")
-			return
-		}
-		c.Next()
-	}
-}
-
 // LimitIdentity uses separate keys for authenticated identities and anonymous clients.
 func LimitIdentity(limits *limit.Buckets) gin.HandlerFunc {
 	return func(c *gin.Context) {
