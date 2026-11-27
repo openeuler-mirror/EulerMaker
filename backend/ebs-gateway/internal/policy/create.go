@@ -15,13 +15,6 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 	if err != nil {
 		return nil, &Error{Status: http.StatusBadRequest, Message: "invalid JSON object"}
 	}
-	if route.Project != "" {
-		if meta := objectMap(object["metadata"]); meta != nil {
-			if namespace, present := meta["namespace"]; present && namespace != route.Project {
-				return nil, &Error{Status: http.StatusBadRequest, Message: "object Project mismatch"}
-			}
-		}
-	}
 	switch route.Resource {
 	case "projects":
 		if err := a.prepareProjectCreate(ctx, who, object); err != nil {

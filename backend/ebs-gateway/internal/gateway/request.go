@@ -9,31 +9,31 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ebs-gateway/internal/identity"
+	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/mutation"
 	"ebs-gateway/internal/policy"
 )
 
-func (a *Handler) forwardRequest(c *gin.Context, who identity.Principal, route policy.Route) {
-	if route.Method == http.MethodPost && route.Subresource == "" {
-		if !a.prepareCreate(c, who, route) {
-			return
-		}
+func (a *Handler) prepareProjectCreate(c *gin.Context) {
+	route := policy.Route{Resource: "projects", Method: c.Request.Method}
+	if !a.prepareCreate(c, middleware.Principal(c), route) {
+		c.Abort()
+		return
 	}
-	if (route.Method == http.MethodPost && route.Subresource == "abort") || route.Method == http.MethodDelete {
-		if !a.limitWriteBody(c) {
-			return
-		}
-	}
-	if route.Method == http.MethodPut || route.Method == http.MethodPatch {
-		if !a.prepareUpdate(c, who, route) {
-			return
-		}
-	}
-	a.forward(c)
+	c.Next()
 }
 
-func (a *Handler) forward(c *gin.Context) {
-	a.upstream.Forward(c)
+func (a *Handler) prepareProjectUpdate(c *gin.Context) {
+	route := policy.Route{
+		Resource: "projects",
+		Name:     c.Param("project"),
+		Method:   c.Request.Method,
+	}
+	if !a.prepareUpdate(c, middleware.Principal(c), route) {
+		c.Abort()
+		return
+	}
+	c.Next()
 }
 
 func (a *Handler) readWriteBody(c *gin.Context) ([]byte, bool) {
@@ -48,16 +48,6 @@ func (a *Handler) readWriteBody(c *gin.Context) ([]byte, bool) {
 		return nil, false
 	}
 	return raw, true
-}
-
-func (a *Handler) limitWriteBody(c *gin.Context) bool {
-	raw, ok := a.readWriteBody(c)
-	if !ok {
-		return false
-	}
-	c.Request.Body = io.NopCloser(bytes.NewReader(raw))
-	c.Request.ContentLength = int64(len(raw))
-	return true
 }
 
 func (a *Handler) prepareCreate(c *gin.Context, who identity.Principal, route policy.Route) bool {

@@ -24,7 +24,7 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 认证、身份准入与 Watch 规则集中在 [routes.go](internal/middleware/routes.go) 的 `routePolicies`，每行一个方法和路由模板，声明认证模式、允许身份及 Watch 能力。全局 `AdmitIdentity` 在认证和身份限流之后执行，已注册但未配置规则的路由默认返回 403。规则允许进入业务校验，不替代工程归属、Service 的 projects/permissions 或字段修改权限。
 `GET /healthz` 在业务中间件挂载前直接注册 Handler，返回固定文本，不挂载 Recovery，也不经过审计、Watch 检查、认证和限流。业务链保持 Audit 在外、Recovery 在内，后续处理 panic 恢复后仍记录最终状态；认证和限流不包含健康检查特判。
 通用限流由 [limit.go](internal/middleware/limit.go) 在业务链全局执行：认证后按身份类型/名称/IP 或匿名 IP 限流。登录、注册、机器换 Token、OAuth 和 Watch 并发限制继续保留，通用限流返回 429 和 `Retry-After: 1`。
-指定 Job 的 GET 路由保留 `runnerJobReadGuard` 检查 Runner 归属，漏挂时拒绝转发。Runner 创建与任务列表仅允许 Runner 身份，列表与 `/status` 读取仅允许 Ops/Admin，由全局准入判断。路由内仅保留注册正文、Runner 名称匹配、更新字段、查询参数和 Watch 并发检查，然后交给 `forward`；所有业务路由都有准入规则的测试保障。
+指定 Job 的 GET 路由保留 `runnerJobReadGuard` 检查 Runner 归属，漏挂时拒绝转发。Runner 创建与任务列表仅允许 Runner 身份，列表与 `/status` 读取仅允许 Ops/Admin，由全局准入判断。路由内仅保留注册正文、Runner 名称匹配、更新字段、查询参数和 Watch 并发检查，然后交给 `upstream.Forward`；所有业务路由都有准入规则的测试保障。
 Config 读写要求 Ops/Admin；`build-targets` 仅允许 User 身份，`service-endpoints` 仅允许 Runner 身份，均由统一规则表声明。公共写请求处理放在 `request.go`。
 Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
 测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
@@ -89,6 +89,7 @@ Gateway 端已提供 `/auth/providers` 和 `/auth/oauth/*`，前端已接入回�
 - Snapshot、BuildInfo、RpmRepo 的集合、对象及对象 `/status` 仅注册 GET。
 - Gateway 不向上游注入用户或 Runner 身份头；转发时仍移除外部 Bearer Token。Config、Script 和 MachineAccount 的 PUT/PATCH 保留原始方法和正文，由 apiserver 校验；其他更新先读取服务端对象、生成完整候选对象并校验受保护字段，然后以 PUT 转发。
 - Build 创建、中止及工程 Job Watch 要求用户是工程 owner/member，Ops/Admin 不享有跨工程特权；普通公开读取不校验成员关系。Service Token 的 Build 创建和中止仍分别校验工程范围及 `builds:create`、`builds:abort` 权限。
+- Build 创建、中止、删除、Job 中止和 Runner 删除通过授权后直接代理，不预读或重写正文；输入与状态校验由 apiserver 负责。Project 创建/更新及 Job 状态更新在路由中显式挂载正文处理，保留身份和字段保护。
 - Build 的 PUT/PATCH 不开放；Job `/abort` 仅 Project owner/member 用户可调用；Runner 只可管理自身对象和已分配 Job。
 
 上游 Transport 的响应头超时为 30 秒，从请求正文发送完成后开始计时；透传请求等待响应头超时返回 502。收到响应头后的 Watch 流不受该超时限制，仍持续转发，并随客户端取消关闭上游请求。内部 `Do` 调用另有包含正文读取的 30 秒总超时。

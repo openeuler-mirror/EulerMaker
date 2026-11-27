@@ -281,11 +281,13 @@ func TestRunnerWriteChecksBeforeForwarding(t *testing.T) {
 		{"registration identity mismatch", "POST", "", `{"metadata":{"name":"other"}}`, http.StatusForbidden},
 		{"invalid registration", "POST", "", `{`, http.StatusBadRequest},
 		{"update", "PUT", "/runner-1", `{"metadata":{"name":"runner-1","resourceVersion":"1"},"spec":{"arch":"aarch64"}}`, http.StatusOK},
+		{"patch", "PATCH", "/runner-1", `{"spec":{"arch":"aarch64"}}`, http.StatusOK},
 		{"protected field", "PATCH", "/runner-1", `{"spec":{"taints":[]}}`, http.StatusForbidden},
 		{"invalid patch", "PATCH", "/runner-1", `{`, http.StatusBadRequest},
 		{"missing Runner", "PUT", "/missing", `{}`, http.StatusNotFound},
 		{"delete", "DELETE", "/runner-1", `{}`, http.StatusOK},
-		{"oversized delete", "DELETE", "/runner-1", strings.Repeat(" ", 257), http.StatusRequestEntityTooLarge},
+		{"delete exceeds Gateway body limit", "DELETE", "/runner-1", strings.Repeat(" ", 257), http.StatusOK},
+		{"delete rejected by apiserver", "DELETE", "/runner-1", `{}`, http.StatusRequestEntityTooLarge},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writes := 0
@@ -296,6 +298,22 @@ func TestRunnerWriteChecksBeforeForwarding(t *testing.T) {
 					body = `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`
 				} else if r.Method != http.MethodGet {
 					writes++
+					if tc.method == http.MethodDelete {
+						raw, err := io.ReadAll(r.Body)
+						if err != nil || r.Method != http.MethodDelete || string(raw) != tc.body ||
+							r.Header.Get("Content-Type") != "application/json" {
+							t.Fatalf("unexpected delete: method=%s body=%s err=%v", r.Method, raw, err)
+						}
+						status = tc.status
+					}
+					if tc.method == http.MethodPut || tc.method == http.MethodPatch {
+						raw, err := io.ReadAll(r.Body)
+						if err != nil || r.Method != http.MethodPut ||
+							!strings.Contains(string(raw), `"resourceVersion":"1"`) ||
+							!strings.Contains(string(raw), `"arch":"aarch64"`) {
+							t.Fatalf("unexpected prepared update: method=%s body=%s err=%v", r.Method, raw, err)
+						}
+					}
 				} else if strings.HasSuffix(r.URL.Path, "/missing") {
 					status = http.StatusNotFound
 				}
@@ -319,7 +337,7 @@ func TestRunnerWriteChecksBeforeForwarding(t *testing.T) {
 			res := httptest.NewRecorder()
 			api.Router().ServeHTTP(res, req)
 			wantWrites := 0
-			if tc.status == http.StatusOK {
+			if tc.status == http.StatusOK || tc.method == http.MethodDelete {
 				wantWrites = 1
 			}
 			if res.Code != tc.status || writes != wantWrites {

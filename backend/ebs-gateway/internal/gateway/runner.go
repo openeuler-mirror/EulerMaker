@@ -44,14 +44,6 @@ func (a *Handler) runnerUpdateGuard(c *gin.Context) {
 	c.Next()
 }
 
-func (a *Handler) runnerDeleteGuard(c *gin.Context) {
-	if !a.limitWriteBody(c) {
-		c.Abort()
-		return
-	}
-	c.Next()
-}
-
 func (a *Handler) runnerStatusUpdateGuard(c *gin.Context) {
 	route := policy.Route{
 		Resource:    "runners",
