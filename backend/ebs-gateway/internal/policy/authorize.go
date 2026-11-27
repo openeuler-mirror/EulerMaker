@@ -82,6 +82,9 @@ func (a *Authorizer) authorizeBuild(ctx context.Context, who identity.Principal,
 }
 
 func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, route Route) error {
+	if route.Subresource == "" && (route.Method == http.MethodPut || route.Method == http.MethodPatch) {
+		return deny("Job updates are not exposed through Gateway")
+	}
 	if route.Subresource == "abort" {
 		return a.jobAbort(ctx, who, route)
 	}
