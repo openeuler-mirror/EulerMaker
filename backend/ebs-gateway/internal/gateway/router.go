@@ -6,10 +6,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/auth"
 	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/oauth"
 	"ebs-gateway/internal/openapi"
+	"ebs-gateway/internal/policy"
 )
 
 type routeDefinition struct {
@@ -287,21 +289,29 @@ func registerForwardRoutes(router *gin.Engine, rules map[middleware.RouteKey]mid
 			Path:           "/apis/ebs/v1/projects",
 			Authentication: middleware.AuthenticationRequired,
 			Identities:     middleware.AllowUsers,
-			Middlewares:    []gin.HandlerFunc{api.projectGuard(""), api.prepareProjectCreate},
+			Middlewares:    []gin.HandlerFunc{api.prepareProjectCreate},
 		},
 		{
 			Method:         http.MethodPut,
 			Path:           "/apis/ebs/v1/projects/:project",
 			Authentication: middleware.AuthenticationRequired,
 			Identities:     middleware.AllowUsers | middleware.AllowService,
-			Middlewares:    []gin.HandlerFunc{api.projectGuard(""), api.prepareProjectUpdate},
+			Middlewares: []gin.HandlerFunc{api.authorizeResource(policy.Rule{
+				Identities:        policy.AllowUsers | policy.AllowService,
+				ObjectAccess:      policy.ProjectOwnerUpdate,
+				ServicePermission: iamv1.MachinePermissionProjectsUpdate,
+			}), api.prepareProjectUpdate},
 		},
 		{
 			Method:         http.MethodPatch,
 			Path:           "/apis/ebs/v1/projects/:project",
 			Authentication: middleware.AuthenticationRequired,
 			Identities:     middleware.AllowUsers | middleware.AllowService,
-			Middlewares:    []gin.HandlerFunc{api.projectGuard(""), api.prepareProjectUpdate},
+			Middlewares: []gin.HandlerFunc{api.authorizeResource(policy.Rule{
+				Identities:        policy.AllowUsers | policy.AllowService,
+				ObjectAccess:      policy.ProjectOwnerUpdate,
+				ServicePermission: iamv1.MachinePermissionProjectsUpdate,
+			}), api.prepareProjectUpdate},
 		},
 		{
 			Method:         http.MethodGet,
@@ -395,21 +405,29 @@ func registerForwardRoutes(router *gin.Engine, rules map[middleware.RouteKey]mid
 			Path:           "/apis/ebs/v1/projects/:project/builds",
 			Authentication: middleware.AuthenticationRequired,
 			Identities:     middleware.AllowUsers | middleware.AllowService,
-			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("builds", "")},
+			Middlewares: []gin.HandlerFunc{api.authorizeResource(policy.Rule{
+				Identities:        policy.AllowUsers | policy.AllowService,
+				ObjectAccess:      policy.ProjectMember,
+				ServicePermission: iamv1.MachinePermissionBuildsCreate,
+			})},
 		},
 		{
 			Method:         http.MethodDelete,
 			Path:           "/apis/ebs/v1/projects/:project/builds/:name",
 			Authentication: middleware.AuthenticationRequired,
 			Identities:     middleware.AllowUsers,
-			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("builds", "")},
+			Middlewares:    []gin.HandlerFunc{api.authorizeResource(policy.Rule{Identities: policy.AllowUsers, ObjectAccess: policy.ProjectOwner})},
 		},
 		{
 			Method:         http.MethodPost,
 			Path:           "/apis/ebs/v1/projects/:project/builds/:name/abort",
 			Authentication: middleware.AuthenticationRequired,
 			Identities:     middleware.AllowUsers | middleware.AllowService,
-			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("builds", "abort")},
+			Middlewares: []gin.HandlerFunc{api.authorizeResource(policy.Rule{
+				Identities:        policy.AllowUsers | policy.AllowService,
+				ObjectAccess:      policy.ProjectMember,
+				ServicePermission: iamv1.MachinePermissionBuildsAbort,
+			})},
 		},
 		{
 			Method:         http.MethodGet,
@@ -417,7 +435,7 @@ func registerForwardRoutes(router *gin.Engine, rules map[middleware.RouteKey]mid
 			Options:        middleware.RouteOptions{ListLimit: 100, Watch: true},
 			Authentication: middleware.AuthenticationOptional,
 			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
-			Middlewares:    []gin.HandlerFunc{api.jobWatchGuard},
+			Middlewares:    []gin.HandlerFunc{api.authorizeResource(policy.Rule{Identities: policy.AllowAnonymous | policy.AllowUsers, WatchAccess: policy.ProjectMember})},
 		},
 		{
 			Method:         http.MethodGet,
@@ -437,14 +455,14 @@ func registerForwardRoutes(router *gin.Engine, rules map[middleware.RouteKey]mid
 			Path:           "/apis/ebs/v1/projects/:project/jobs/:name/status",
 			Authentication: middleware.AuthenticationRequired,
 			Identities:     middleware.AllowRunner,
-			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("jobs", "status"), api.prepareJobStatusUpdate},
+			Middlewares:    []gin.HandlerFunc{api.authorizeResource(policy.Rule{Identities: policy.AllowRunner}), api.prepareJobStatusUpdate},
 		},
 		{
 			Method:         http.MethodPost,
 			Path:           "/apis/ebs/v1/projects/:project/jobs/:name/abort",
 			Authentication: middleware.AuthenticationRequired,
 			Identities:     middleware.AllowUsers,
-			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("jobs", "abort")},
+			Middlewares:    []gin.HandlerFunc{api.authorizeResource(policy.Rule{Identities: policy.AllowUsers, ObjectAccess: policy.ProjectMember})},
 		},
 		{
 			Method:         http.MethodGet,

@@ -801,7 +801,7 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 
 未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。已注册路由没有配置准入规则，或调用方身份不在允许集合时，`AdmitIdentity` 返回 403，Service 拒绝记录审计结果；不能因 GET 或管理员身份而绕过规则。无需 Bearer 认证的接口按匿名身份准入，不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由 Handler 处理。
 
-全局身份准入只决定能否进入业务处理：Runner 仍须匹配路径名称及 Job 分配关系；Project owner/member、Service 的工程范围和 permission、更新字段权限均由后续业务校验处理。公开读取携带无效 Token 不降级匿名；公开 Job Watch 仍检查工程成员权限，Runner 通过自身任务列表 Watch。
+全局身份准入只决定能否进入业务处理。资源路由通过显式 `policy.Rule` 声明对象归属、Watch 归属和 Service permission，`authorizeResource` 适配 HTTP 参数、错误、审计和请求级旧对象，业务判断由 Policy 完成。Runner 仍须匹配路径名称及 Job 分配关系；Project owner/member、Service 的工程范围和 permission、更新字段权限保持不变。Project 用户更新授权读取完整旧对象，后续 PUT/PATCH 复用该对象，不重复 GET；其他 Project 归属检查只投影读取名称和标签。公开读取携带无效 Token 不降级匿名；公开 Job Watch 仍检查工程成员权限，Runner 通过自身任务列表 Watch。
 
 Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和 `/status` 读取只允许 Ops/Admin；普通对象读取、更新和状态更新允许 Ops/Admin 或 Runner。路由不再挂载重复的身份门卫。`prepareRunnerCreate` 校验注册正文；具名 Runner 读取、更新仍校验 Runner Token 的 Subject 与路径名称一致；更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；`prepareRunnerJobs` 保留路径归属、查询参数和 Watch 并发检查，名额持有到转发结束。通过这些检查后才进入 `upstream.Forward`。
 

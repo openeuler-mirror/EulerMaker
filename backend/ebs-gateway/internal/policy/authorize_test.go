@@ -2,7 +2,6 @@ package policy
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -17,209 +16,133 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
-func TestProjectAuthorizationMatrix(t *testing.T) {
-	a := projectAuthorizer(t)
-	tests := []struct {
-		name  string
-		who   identity.Principal
-		route Route
-		allow bool
-	}{
-		{"owner updates Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true},
-		{"owner cannot delete Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "projects", Name: "team", Method: http.MethodDelete}, false},
-		{"ops owner cannot delete Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.OpsScope}, Route{Resource: "projects", Name: "team", Method: http.MethodDelete}, false},
-		{"ops owner updates Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.OpsScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true},
-		{"member cannot update Project", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, false},
-		{"admin may create Project", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "projects", Method: http.MethodPost}, true},
-		{"admin cannot update Project", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPut}, false},
-		{"admin owner may reach purpose validation", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.AdminScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true},
-		{"ops non-owner cannot update Project", identity.Principal{Type: identity.UserType, Subject: "ops", Scope: identity.OpsScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, false},
-		{"admin cannot update Project status", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "projects", Name: "team", Subresource: "status", Method: http.MethodPatch}, false},
-		{"admin cannot delete Project", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "projects", Name: "team", Method: http.MethodDelete}, false},
-		{"member cannot create Job", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Method: http.MethodPost}, false},
-		{"owner cannot delete Job", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Name: "j", Method: http.MethodDelete}, false},
-		{"member cannot update Job", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Name: "j", Method: http.MethodPut}, false},
-		{"member cannot delete Job", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Name: "j", Method: http.MethodDelete}, false},
-		{"outsider cannot create Job", identity.Principal{Type: identity.UserType, Subject: "charlie", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Method: http.MethodPost}, false},
-		{"ops without membership cannot write", identity.Principal{Type: identity.UserType, Subject: "ops", Scope: identity.OpsScope}, Route{Resource: "jobs", Project: "team", Method: http.MethodPost}, false},
-		{"admin cannot update Job status", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "status", Method: http.MethodPatch}, false},
-		{"owner may abort Job", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, true},
-		{"member may abort Job", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, true},
-		{"outsider admin cannot abort Job", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, false},
-		{"admin cannot create Snapshot", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "snapshots", Project: "team", Method: http.MethodPost}, false},
-		{"owner cannot update BuildInfo", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "buildinfos", Project: "team", Name: "b", Method: http.MethodPut}, false},
-		{"admin cannot update RpmRepo status", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "rpmrepos", Project: "team", Name: "r", Subresource: "status", Method: http.MethodPatch}, false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := a.Authorize(context.Background(), test.who, test.route)
-			if (err == nil) != test.allow {
-				t.Fatalf("Authorize() error = %v, want allow=%v", err, test.allow)
-			}
-		})
-	}
-}
-
-func TestAuthorizationLookupBoundary(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		who    identity.Principal
-		route  Route
-		lookup bool
-		status int
-	}{
-		{"admin creates Build", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "builds", Project: "team", Method: http.MethodPost}, true, 503},
-		{"admin deletes Build", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete}, true, 503},
-		{"admin updates Project", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true, 503},
-		{"user creates Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "projects", Method: http.MethodPost}, false, 0},
-		{"admin aborts Job", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, true, 503},
-		{"admin updates Job status", identity.Principal{Type: identity.UserType, Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "status", Method: http.MethodPatch}, false, 403},
-		{"admin cannot update Job", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "team", Name: "j", Method: http.MethodPut}, false, 403},
-		{"owner cannot patch Job", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Name: "j", Method: http.MethodPatch}, false, 403},
-		{"runner reads Job", identity.Principal{Type: identity.RunnerType}, Route{Resource: "jobs", Project: "team", Name: "j", Method: http.MethodGet}, false, 0},
-		{"runner updates Job status", identity.Principal{Type: identity.RunnerType}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "status", Method: http.MethodPatch}, false, 0},
-		{"runner deletes Job", identity.Principal{Type: identity.RunnerType}, Route{Resource: "jobs", Project: "team", Name: "j", Method: http.MethodDelete}, false, 403},
-		{"runner reads Snapshot", identity.Principal{Type: identity.RunnerType}, Route{Resource: "snapshots", Project: "team", Name: "s", Method: http.MethodGet}, false, 403},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			lookups := 0
-			client, err := upstream.New("https://api.example", roundTripFunc(func(*http.Request) (*http.Response, error) {
-				lookups++
-				return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader(""))}, nil
-			}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = New(client).Authorize(context.Background(), tc.who, tc.route)
-			if (lookups == 1) != tc.lookup || lookups > 1 {
-				t.Fatalf("lookups=%d, want lookup=%v", lookups, tc.lookup)
-			}
-			if tc.status == 0 {
-				if err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			var classified *Error
-			if !errors.As(err, &classified) || classified.Status != tc.status {
-				t.Fatalf("error=%v, want status %d", err, tc.status)
-			}
-		})
-	}
-}
-
-func TestBuildDeletionRequiresProjectOwner(t *testing.T) {
-	a := projectAuthorizer(t)
-	route := Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete}
-	for _, scope := range []identity.Scope{identity.UserScope, identity.OpsScope, identity.AdminScope} {
-		for _, subject := range []string{"alice", "bob", "charlie"} {
-			t.Run(string(scope)+"/"+subject, func(t *testing.T) {
-				who := identity.Principal{Type: identity.UserType, Subject: subject, Scope: scope}
-				err := a.Authorize(context.Background(), who, route)
-				if subject == "alice" {
-					if err != nil {
-						t.Fatalf("owner deletion denied: %v", err)
-					}
-					return
-				}
-				if denied, ok := err.(*Error); !ok || denied.Status != http.StatusForbidden {
-					t.Fatalf("non-owner deletion error = %v, want Forbidden", err)
-				}
-			})
-		}
-	}
-}
-
 func TestHasWatch(t *testing.T) {
 	if !HasWatch(map[string][]string{"watch": {"false", "true"}}) {
 		t.Fatal("repeated watch parameter bypassed check")
 	}
 }
 
-func TestServiceOperationAllowlist(t *testing.T) {
-	a := &Authorizer{}
-	who := identity.Principal{
-		Type: identity.ServiceType, Subject: "automation",
-		ServiceGrants: &identity.ServiceGrants{
-			Projects: []string{"team"},
-			Permissions: []iamv1.MachineAccountPermission{
-				iamv1.MachinePermissionProjectsUpdate, iamv1.MachinePermissionBuildsCreate, iamv1.MachinePermissionBuildsAbort,
-			},
-		},
-	}
-	for _, test := range []struct {
-		route Route
-		allow bool
+func TestServiceMissingGrants(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		grants *identity.ServiceGrants
 	}{
-		{Route{Resource: "projects", Name: "team", Method: http.MethodPut}, true},
-		{Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true},
-		{Route{Resource: "projects", Name: "other", Method: http.MethodPatch}, false},
-		{Route{Resource: "projects", Name: "team", Method: http.MethodGet}, false},
-		{Route{Resource: "projects", Name: "team", Subresource: "status", Method: http.MethodPut}, false},
-		{Route{Resource: "projects", Method: http.MethodPost}, false},
-		{Route{Resource: "projects", Method: http.MethodPut}, false},
-		{Route{Resource: "builds", Project: "team", Method: http.MethodPost}, true},
-		{Route{Resource: "builds", Project: "other", Method: http.MethodPost}, false},
-		{Route{Resource: "builds", Method: http.MethodPost}, false},
-		{Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodPost}, false},
-		{Route{Resource: "builds", Project: "team", Name: "b", Subresource: "abort", Method: http.MethodPost}, true},
-		{Route{Resource: "builds", Project: "other", Name: "b", Subresource: "abort", Method: http.MethodPost}, false},
-		{Route{Resource: "builds", Project: "team", Subresource: "abort", Method: http.MethodPost}, false},
-		{Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, false},
-		{Route{Resource: "jobs", Project: "team", Method: http.MethodPost}, false},
-		{Route{Resource: "machineaccounts", Method: http.MethodGet}, false},
+		{"missing grants", nil},
+		{"empty grants", &identity.ServiceGrants{}},
+		{"missing projects", &identity.ServiceGrants{Permissions: []iamv1.MachineAccountPermission{iamv1.MachinePermissionBuildsCreate}}},
+		{"missing permissions", &identity.ServiceGrants{Projects: []string{"team"}}},
 	} {
-		err := a.Authorize(context.Background(), who, test.route)
-		if (err == nil) != test.allow {
-			t.Errorf("Authorize(%+v) = %v, want allowed=%v", test.route, err, test.allow)
-		}
-	}
-}
-
-func TestServicePermissionsAreIndependent(t *testing.T) {
-	operations := []struct {
-		permission iamv1.MachineAccountPermission
-		route      Route
-	}{
-		{iamv1.MachinePermissionProjectsUpdate, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}},
-		{iamv1.MachinePermissionBuildsCreate, Route{Resource: "builds", Project: "team", Method: http.MethodPost}},
-		{iamv1.MachinePermissionBuildsAbort, Route{Resource: "builds", Project: "team", Name: "b", Subresource: "abort", Method: http.MethodPost}},
-	}
-	for _, granted := range operations {
-		who := identity.Principal{Type: identity.ServiceType, ServiceGrants: &identity.ServiceGrants{
-			Projects: []string{"team"}, Permissions: []iamv1.MachineAccountPermission{granted.permission},
-		}}
-		for _, requested := range operations {
-			err := (&Authorizer{}).Authorize(context.Background(), who, requested.route)
-			if (err == nil) != (granted.permission == requested.permission) {
-				t.Errorf("granted=%s requested=%s err=%v", granted.permission, requested.permission, err)
+		t.Run(tc.name, func(t *testing.T) {
+			who := identity.Principal{Type: identity.ServiceType, Subject: "service", ServiceGrants: tc.grants}
+			rule := Rule{Identities: AllowService, ServicePermission: iamv1.MachinePermissionBuildsCreate}
+			_, err := New(nil, 1<<20).Authorize(context.Background(), who, Request{Project: "team"}, rule)
+			if err == nil {
+				t.Fatal("service without grants was allowed")
 			}
-		}
-	}
-	for _, grants := range []*identity.ServiceGrants{nil, {}, {Projects: []string{"team"}}, {
-		Permissions: []iamv1.MachineAccountPermission{iamv1.MachinePermissionProjectsUpdate},
-	}} {
-		who := identity.Principal{Type: identity.ServiceType, ServiceGrants: grants}
-		if err := (&Authorizer{}).Authorize(context.Background(), who, operations[0].route); err == nil {
-			t.Errorf("incomplete grants allowed: %+v", grants)
-		}
+		})
 	}
 }
 
-func TestRunnerAuthorization(t *testing.T) {
-	a := projectAuthorizer(t)
-	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}
-	for _, test := range []struct {
-		route Route
-		allow bool
+func TestReadAssignedJobBody(t *testing.T) {
+	const body = "{\n  \"status\": {\"runner\": \"runner-1\"}\n}"
+	for _, tc := range []struct {
+		name, raw string
+		limit     int64
+		wantError bool
 	}{
-		{Route{Resource: "jobs", Project: "team", Name: "job-1", Method: http.MethodGet}, true},
-		{Route{Resource: "jobs", Project: "team", Name: "job-1", Subresource: "status", Method: http.MethodPatch}, true},
-		{Route{Resource: "jobs", Project: "team", Name: "job-1", Subresource: "status", Method: http.MethodGet}, false},
+		{"exact limit", body, int64(len(body)), false},
+		{"over limit", body, int64(len(body) - 1), true},
+		{"multiple objects", body + "{}", int64(len(body) + 2), true},
 	} {
-		err := a.Authorize(context.Background(), runner, test.route)
-		if (err == nil) != test.allow {
-			t.Errorf("Authorize(%+v) error=%v, want allow=%v", test.route, err, test.allow)
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := upstream.New("https://api.example", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/projects/team/jobs/job-1/status" || r.URL.RawQuery != "" {
+					t.Fatalf("unexpected lookup: %s %s", r.Method, r.URL)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(tc.raw))}, nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := New(client, tc.limit).ReadAssignedJob(context.Background(), "/apis/ebs/v1/projects/team/jobs/job-1/status", "runner-1", true)
+			if tc.wantError {
+				if classified, ok := err.(*Error); !ok || classified.Status != http.StatusBadGateway {
+					t.Fatalf("expected invalid upstream body: %v", err)
+				}
+			} else if err != nil || string(raw) != body {
+				t.Fatalf("raw=%s err=%v", raw, err)
+			}
+		})
+	}
+}
+
+func TestAuthorizeObject(t *testing.T) {
+	client, err := upstream.New("https://api.example", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := `{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.bob":"true"}}}`
+		if strings.Contains(r.URL.Path, "/jobs/") {
+			body = `{"status":{"runner":"runner-1"}}`
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(client, 1<<20)
+	for _, tc := range []struct {
+		name                string
+		who                 identity.Principal
+		access, watchAccess ObjectAccess
+		watch               bool
+		want                int
+		wantJob             bool
+	}{
+		{"owner", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, ProjectOwner, "", false, 0, false},
+		{"member not owner", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, ProjectOwner, "", false, 403, false},
+		{"admin member", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.AdminScope}, ProjectMember, "", false, 0, false},
+		{"admin outsider", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, ProjectMember, "", false, 403, false},
+		{"public list", identity.Principal{}, "", ProjectMember, false, 0, false},
+		{"watch member", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, "", ProjectMember, true, 0, false},
+		{"watch outsider", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, "", ProjectMember, true, 403, false},
+		{"self", identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}, RunnerSelf, "", false, 0, false},
+		{"other runner", identity.Principal{Type: identity.RunnerType, Subject: "runner-2"}, RunnerSelf, "", false, 403, false},
+		{"ops manages runner", identity.Principal{Type: identity.UserType, Subject: "ops", Scope: identity.OpsScope}, RunnerSelf, "", false, 0, false},
+		{"assigned job", identity.Principal{Type: identity.RunnerType, Subject: "runner-1"}, AssignedJob, "", false, 0, true},
+		{"other job", identity.Principal{Type: identity.RunnerType, Subject: "runner-2"}, AssignedJob, "", false, 403, false},
+		{"public job", identity.Principal{}, AssignedJob, "", false, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := Request{Method: http.MethodPatch, Project: "team", Runner: "runner-1", Path: "/apis/ebs/v1/projects/team/jobs/job-1", Watch: tc.watch}
+			rule := Rule{Identities: AllowAnonymous | AllowUsers | AllowRunner, ObjectAccess: tc.access, WatchAccess: tc.watchAccess}
+			result, err := a.Authorize(context.Background(), tc.who, request, rule)
+			status := 0
+			if err != nil {
+				status = err.(*Error).Status
+			}
+			if status != tc.want || (err == nil && (len(result.UpdateObject) > 0) != tc.wantJob) {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestAuthorizeService(t *testing.T) {
+	permissions := []iamv1.MachineAccountPermission{
+		iamv1.MachinePermissionProjectsUpdate, iamv1.MachinePermissionBuildsCreate, iamv1.MachinePermissionBuildsAbort,
+	}
+	a := New(nil, 1<<20)
+	for _, required := range permissions {
+		for _, granted := range permissions {
+			for _, project := range []string{"team", "other", ""} {
+				who := identity.Principal{
+					Type: identity.ServiceType, Subject: "sync",
+					ServiceGrants: &identity.ServiceGrants{Projects: []string{"team"}, Permissions: []iamv1.MachineAccountPermission{granted}},
+				}
+				rule := Rule{Identities: AllowService, ServicePermission: required, ObjectAccess: ProjectOwner}
+				_, err := a.Authorize(context.Background(), who, Request{Project: project}, rule)
+				if (err == nil) != (required == granted && project == "team") {
+					t.Errorf("required=%s granted=%s project=%q err=%v", required, granted, project, err)
+				}
+			}
 		}
 	}
 }

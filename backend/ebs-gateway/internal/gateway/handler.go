@@ -49,7 +49,7 @@ func NewHandler(deps Dependencies) (*Handler, error) {
 		now:           deps.Now,
 		bodyLimit:     deps.BodyLimit,
 		auth:          deps.Auth,
-		policy:        policy.New(deps.Upstream),
+		policy:        policy.New(deps.Upstream, deps.BodyLimit),
 		runnerWatches: sets.New[string](),
 	}, nil
 }

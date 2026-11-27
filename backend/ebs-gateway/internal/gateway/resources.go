@@ -1,8 +1,6 @@
 package gateway
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 
 	"ebs-gateway/internal/identity"
@@ -10,73 +8,42 @@ import (
 	"ebs-gateway/internal/policy"
 )
 
-func (a *Handler) projectGuard(subresource string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		a.authorizeAuthenticatedRoute(c, policy.Route{
-			Resource:    "projects",
-			Name:        c.Param("project"),
-			Subresource: subresource,
-			Method:      c.Request.Method,
-		})
-	}
-}
+const updateObjectKey = "ebs-gateway.authorizedUpdateObject"
 
-func (a *Handler) projectScopedGuard(resource, subresource string) gin.HandlerFunc {
+// authorizeResource adapts an explicit policy rule to the resource request.
+func (a *Handler) authorizeResource(rule policy.Rule) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		a.authorizeAuthenticatedRoute(c, policy.Route{
-			Resource:    resource,
-			Project:     c.Param("project"),
-			Name:        c.Param("name"),
-			Subresource: subresource,
-			Method:      c.Request.Method,
-		})
-	}
-}
-
-func (a *Handler) authorizeAuthenticatedRoute(c *gin.Context, route policy.Route) {
-	who := middleware.Principal(c)
-	if who.Type == "" {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "missing authenticated principal"})
-		return
-	}
-	if who.Type == identity.ServiceType {
-		prepareServiceAudit(c, route)
-	}
-	if a.authorizeResource(c, who, route) {
+		who := middleware.Principal(c)
+		request := policy.Request{
+			Method:  c.Request.Method,
+			Project: c.Param("project"),
+			Runner:  c.Param("runner"),
+			Path:    c.Request.URL.Path,
+			Watch:   policy.HasWatch(c.Request.URL.Query()),
+		}
+		if who.Type == identity.ServiceType {
+			c.Set("serviceProject", request.Project)
+			c.Set("servicePermission", string(rule.ServicePermission))
+			c.Set("serviceAuthorization", "denied")
+		}
+		result, err := a.policy.Authorize(c.Request.Context(), who, request, rule)
+		if err != nil {
+			c.AbortWithStatusJSON(policyErrorStatus(err), gin.H{"error": err.Error()})
+			return
+		}
+		if who.Type == identity.ServiceType {
+			c.Set("serviceAuthorization", "allowed")
+		}
+		if result.UpdateObject != nil {
+			c.Set(updateObjectKey, result.UpdateObject)
+		}
 		c.Next()
 	}
 }
 
-func prepareServiceAudit(c *gin.Context, route policy.Route) {
-	project, permission := policy.ServiceOperation(route)
-	if project == "" {
-		project = route.Project
-		if route.Resource == "projects" {
-			project = route.Name
-		}
-	}
-	c.Set("serviceProject", project)
-	c.Set("servicePermission", string(permission))
-	c.Set("serviceAuthorization", "denied")
-}
-
-func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route) bool {
-	if err := a.policy.Authorize(c.Request.Context(), who, route); err != nil {
-		if who.Type == identity.ServiceType {
-			c.Set("serviceAuthorization", "denied")
-		}
-		c.AbortWithStatusJSON(policyErrorStatus(err), gin.H{"error": err.Error()})
-		return false
-	}
-	if who.Type == identity.ServiceType {
-		c.Set("serviceAuthorization", "allowed")
-	}
-	return true
-}
-
-func policyErrorStatus(err error) int {
-	if classified, ok := err.(*policy.Error); ok {
-		return classified.Status
-	}
-	return http.StatusForbidden
+// updateObject returns the full object already read during update authorization.
+func updateObject(c *gin.Context) []byte {
+	value, _ := c.Get(updateObjectKey)
+	raw, _ := value.([]byte)
+	return raw
 }
