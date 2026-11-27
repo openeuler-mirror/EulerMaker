@@ -24,7 +24,7 @@
             <td>{{ roleLabel(user) }}</td>
             <td><span :class="['boolean-status', { enabled: user.spec?.enabled !== false }]">{{ t(user.spec?.enabled === false ? 'admin.disabled' : 'admin.active') }}</span></td>
             <td>{{ user.spec?.email || t("common.emptyValue") }}</td>
-            <td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(user)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" @click="openDelete(user)">{{ t("common.remove") }}</button></td>
+            <td class="admin-row-actions"><button class="text-button" type="button" :disabled="userRole(user) === 'ebs:admin'" @click="openEdit(user)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :disabled="userRole(user) === 'ebs:admin'" @click="openDelete(user)">{{ t("common.remove") }}</button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="6"><EmptyState :title="t('admin.noUsers')" :description="t('admin.noUsersHint')" /></td></tr>
         </tbody>
@@ -68,8 +68,9 @@ const search = ref("");
 const roleFilter = ref<string[]>([]);
 const statusFilter = ref<string[]>([]);
 const roleOptions = computed(() => [
-  { value: "ebs:user", label: t("admin.regularUser") },
+  { value: "ebs:admin", label: t("admin.adminUser") },
   { value: "ebs:ops", label: t("admin.opsUser") },
+  { value: "ebs:user", label: t("admin.regularUser") },
 ]);
 const statusOptions = computed(() => [
   { value: "true", label: t("admin.active") },
@@ -84,15 +85,25 @@ const confirmName = ref("");
 const saving = ref(false);
 const draft = reactive({ displayName: "", email: "", scope: "ebs:user", enabled: true });
 const filtered = computed(() => users.value.filter((user) => {
-  if (roleFilter.value.length && !roleFilter.value.some(role => user.spec?.scopes?.includes(role))) return false;
+  if (roleFilter.value.length && !roleFilter.value.includes(userRole(user))) return false;
   if (statusFilter.value.length && !statusFilter.value.includes(String(user.spec?.enabled !== false))) return false;
   return [user.metadata?.name, user.spec?.displayName, user.spec?.email]
     .some((value) => value?.toLowerCase().includes(search.value.toLowerCase()));
+}).sort((left, right) => {
+  const roles = roleOptions.value.map(option => option.value);
+  return roles.indexOf(userRole(left)) - roles.indexOf(userRole(right));
 }));
 
 onMounted(() => { void loadUsers(); });
 
-function roleLabel(user: ManagedUser): string { return t(user.spec?.scopes?.includes("ebs:ops") ? "admin.opsUser" : "admin.regularUser"); }
+function userRole(user: ManagedUser): string {
+  if (user.spec?.scopes?.includes("ebs:admin")) return "ebs:admin";
+  if (user.spec?.scopes?.includes("ebs:ops")) return "ebs:ops";
+  return "ebs:user";
+}
+function roleLabel(user: ManagedUser): string {
+  return roleOptions.value.find(option => option.value === userRole(user))!.label;
+}
 async function loadUsers(): Promise<void> {
   loading.value = true;
   loadError.value = "";
@@ -110,10 +121,12 @@ async function loadUsers(): Promise<void> {
 function reload(): void { page.value = 1; tokens.value = [""]; void loadUsers(); }
 function changePage(direction: number): void { page.value += direction; void loadUsers(); }
 async function openEdit(user: ManagedUser): Promise<void> {
+  if (userRole(user) === "ebs:admin") return;
   dialogError.value = "";
   success.value = "";
   try {
     const current = await request<ManagedUser>(`/apis/iam.ebs/v1/users/${encodeURIComponent(user.metadata?.name || "")}`);
+    if (userRole(current) === "ebs:admin") return;
     editing.value = current;
     draft.displayName = current.spec?.displayName || "";
     draft.email = current.spec?.email || "";
@@ -121,7 +134,13 @@ async function openEdit(user: ManagedUser): Promise<void> {
     draft.enabled = current.spec?.enabled !== false;
   } catch (error) { loadError.value = errorTranslationKey(error, "admin.loadUsersFailed"); }
 }
-function openDelete(user: ManagedUser): void { deleting.value = user; confirmName.value = ""; dialogError.value = ""; success.value = ""; }
+function openDelete(user: ManagedUser): void {
+  if (userRole(user) === "ebs:admin") return;
+  deleting.value = user;
+  confirmName.value = "";
+  dialogError.value = "";
+  success.value = "";
+}
 function closeDialog(): void { if (saving.value) return; editing.value = null; deleting.value = null; dialogError.value = ""; }
 async function saveUser(): Promise<void> {
   const user = editing.value;

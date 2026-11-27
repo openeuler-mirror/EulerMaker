@@ -484,7 +484,7 @@ export default {
   },
   admin: {
     usersTitle: "用户账号",
-    usersHint: "用户自行注册后可在此调整为运维用户；管理员账号不在此列表中。",
+    usersHint: "用户自行注册后可在此调整为运维用户；管理员账号仅可查看，不能编辑或移除。",
     machineAccounts: "机器账号",
     machineHint: "管理服务使用的机器账号及其令牌有效期。",
     searchUsers: "搜索当前页用户",
@@ -502,6 +502,7 @@ export default {
     active: "启用",
     disabled: "停用",
     regularUser: "普通用户",
+    adminUser: "管理员",
     opsUser: "运维用户",
     editUser: "编辑用户 {name}",
     deleteUser: "删除用户 {name}",

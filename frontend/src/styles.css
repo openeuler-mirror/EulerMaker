@@ -186,6 +186,7 @@ body.modal-open { overflow: hidden; }
 .action-error { min-height: auto; margin: 0 0 16px; justify-content: flex-start; }
 .admin-table td { vertical-align: middle; }
 .admin-row-actions { white-space: nowrap; }
+.admin-row-actions button:disabled { color: #9aa6b6; cursor: not-allowed; }
 .admin-row-actions button + button { margin-left: 12px; }
 .admin-cell-subtitle { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
 .danger-link { color: #bf3f4a; }
