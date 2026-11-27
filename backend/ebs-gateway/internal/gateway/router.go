@@ -118,11 +118,6 @@ func registerProjects(router *gin.Engine, api *Handler) {
 	router.GET("/apis/ebs/v1/projects/:project", read, api.forwardResource)
 	router.PUT("/apis/ebs/v1/projects/:project", guard, api.forwardResource)
 	router.PATCH("/apis/ebs/v1/projects/:project", guard, api.forwardResource)
-
-	statusGuard := api.projectGuard("status")
-	router.GET("/apis/ebs/v1/projects/:project/status", api.publicReadGuard("projects", "status"), api.forwardResource)
-	router.PUT("/apis/ebs/v1/projects/:project/status", statusGuard, api.forwardResource)
-	router.PATCH("/apis/ebs/v1/projects/:project/status", statusGuard, api.forwardResource)
 }
 
 func registerRunners(router *gin.Engine, api *Handler) {

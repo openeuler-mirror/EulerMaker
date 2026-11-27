@@ -63,6 +63,12 @@ func TestDocumentContract(t *testing.T) {
 	if _, exists := paths["/apis/ebs/v1/projects/{project}/jobs"].(map[string]any)["post"]; exists {
 		t.Fatal("Job creation is still exposed")
 	}
+	if _, exists := paths["/apis/ebs/v1/projects/{project}/status"]; exists {
+		t.Fatal("Project status subresource is still exposed")
+	}
+	if _, exists := schemas["ProjectStatusUpdate"]; exists {
+		t.Fatal("Project status update schema is still exposed")
+	}
 	jobPath := "/apis/ebs/v1/projects/{project}/jobs/{name}"
 	if _, exists := paths[jobPath].(map[string]any)["delete"]; exists {
 		t.Fatal("Job deletion is still exposed")

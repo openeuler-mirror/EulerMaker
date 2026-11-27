@@ -85,7 +85,7 @@ func operations() object {
 		}
 		base += r.name
 		for _, part := range []string{"list", "object", "status", "abort"} {
-			if part == "status" && (r.name == "configs" || r.name == "scripts" || r.name == "oldjobs") {
+			if part == "status" && (r.name == "projects" || r.name == "configs" || r.name == "scripts" || r.name == "oldjobs") {
 				continue
 			}
 			if part == "abort" && r.name != "builds" && r.name != "jobs" {
@@ -289,7 +289,7 @@ func permissions(resource, part, method string) ([]object, string) {
 	}
 	if resource == "scripts" {
 		if read {
-			return bearer, "Authenticated users and Runner/Service machine identities may read and list Scripts. Watch is not supported."
+			return bearer, "Authenticated User identities (including Ops/Admin) and Runner tokens may read and list Scripts. Service tokens are denied. Watch is not supported."
 		}
 		return bearer, "Ops/Admin only. Use UID and resourceVersion preconditions when deleting."
 	}
