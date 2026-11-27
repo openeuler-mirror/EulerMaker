@@ -791,7 +791,7 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 
 非 Watch 请求中，`PrepareQuery` 仅对显式配置 `ListLimit` 的 GET 列表处理分页。当前 Project、Build、Job、OldJob、Snapshot、BuildInfo、BuildGraph、RpmRepo 列表上限为 100；缺失、非法、重复或超出上限的 `limit` 设置为上限，合法值及其他查询参数保留。Runner、IAM、Config、Script 列表及对象读取不受该分页规则影响。Watch 保留原始查询参数，不套用普通列表上限。
 
-规则统一维护于 `internal/gateway/routes.go` 的 `routeRules()`，以 `middleware.RouteKey{Method, Path}` 为键，每行声明认证模式、允许身份集合，`Options` 单独保存 Watch 开关和列表分页上限。`NewRouter` 创建独立的 `RoutePolicies` 副本并注入中间件；构造时复制规则，后续修改源 map 不影响已有 Router，不使用可变的全局规则表。身份区分匿名、普通用户、Ops、Admin、Runner、Service；User 角色只在身份类型为 User 时生效。`Authenticate`、`AdmitIdentity` 和 `PrepareQuery` 读取同一张表，不各自维护路径分支。健康检查在业务链外注册，不加入规则表。
+身份区分匿名、普通用户、Ops、Admin、Runner、Service；User 角色只在身份类型为 User 时生效。`Authenticate`、`AdmitIdentity` 和 `PrepareQuery` 共用由路由注册生成的 `RoutePolicies`，不各自维护路径分支。构造时复制规则，后续修改源 map 不影响已有 Router；健康检查在业务链外注册，不加入规则表。
 
 | 认证模式 | 路由范围 | 行为 |
 |----------|----------|------|
@@ -805,7 +805,7 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 
 Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和 `/status` 读取只允许 Ops/Admin；普通对象读取、更新和状态更新允许 Ops/Admin 或 Runner。路由不再挂载重复的身份门卫。`prepareRunnerCreate` 校验注册正文；具名 Runner 读取、更新仍校验 Runner Token 的 Subject 与路径名称一致；更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；`prepareRunnerJobs` 保留路径归属、查询参数和 Watch 并发检查，名额持有到转发结束。通过这些检查后才进入 `upstream.Forward`。
 
-路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/gateway` 在 `router.go` 注册路径、组装中间件，同包的资源 Handler 协调匿名访问、Policy 授权、请求准备及最终响应或代理；`internal/middleware` 负责 Bearer JWT 校验、Service 账号实时核验、User 状态确认、路由身份准入、已认证请求限流和审计。Policy 的公共入口负责分派，Project、Runner 的授权及写入规则分别集中在各自的业务文件。全局路由链挂载审计与 panic 恢复。身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iamclient`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
+路由使用 Gin，在 `internal/gateway/router.go` 按认证、OAuth、透传及其他接口分别声明和注册。每条定义包含方法、路径、认证模式、允许身份、查询选项、额外中间件及 Handler；透传组统一设置 `upstream.Forward`，不再维护第二份路径规则表。注册时检查重复路由、空 Handler、空中间件及不一致的认证或查询配置；显式无需认证的路由自动补齐匿名准入，其余路由缺少身份规则时启动失败。规则表完成后发布 Router 独有的只读副本，再开始服务。资源 Handler 保留对象归属、Service 授权和更新字段校验；身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iamclient`、`mutation`、`upstream`、`limit`。
 
 `iamclient` 读取用户时直接返回公共 `iamv1.User`，仅请求名称、UID、启用状态和角色；机器账号授权查询仅请求名称、类型、工程范围和权限。调用方将缺失或为 false 的 `spec.enabled` 视为未启用。OAuth 认证和注册统一返回 `OAuthResult`，保留 `RegistrationRequired` 区分首次注册；机器认证返回仅含名称、类型和令牌有效期的 `MachineAuthResult`。OAuth Handler 直接使用该客户端，测试通过 HTTP transport 验证 IAM 请求契约。
 

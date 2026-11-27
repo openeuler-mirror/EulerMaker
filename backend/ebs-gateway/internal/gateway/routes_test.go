@@ -8,9 +8,23 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ebs-gateway/internal/auth"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/middleware"
+	"ebs-gateway/internal/oauth"
+	"ebs-gateway/internal/upstream"
 )
+
+func routeRules() map[middleware.RouteKey]middleware.RoutePolicy {
+	router := gin.New()
+	api := &Handler{upstream: &upstream.Client{}}
+	rules := make(map[middleware.RouteKey]middleware.RoutePolicy)
+	registerAuthRoutes(router, rules, &auth.Handler{})
+	registerOAuthRoutes(router, rules, &oauth.Handler{})
+	registerForwardRoutes(router, rules, api)
+	registerOtherRoutes(router, rules, api)
+	return rules
+}
 
 func TestAdmitIdentity(t *testing.T) {
 	identities := []struct {

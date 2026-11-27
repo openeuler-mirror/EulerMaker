@@ -143,7 +143,7 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 			router := gin.New()
 			router.Use(middleware.PrepareQuery(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())),
 				middleware.LimitIdentity(api.limits))
-			registerRunners(router, api)
+			registerForwardRoutes(router, make(map[middleware.RouteKey]middleware.RoutePolicy), api)
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/runners/runner-1/jobs?"+tc.query, nil)
 			request.Header.Set("Authorization", "Bearer "+token)

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -11,6 +12,16 @@ import (
 	"ebs-gateway/internal/openapi"
 )
 
+type routeDefinition struct {
+	Method         string
+	Path           string
+	Authentication middleware.AuthenticationMode
+	Identities     middleware.RouteIdentities
+	Options        middleware.RouteOptions
+	Middlewares    []gin.HandlerFunc
+	Handler        gin.HandlerFunc
+}
+
 func NewRouter(api *Handler, authHandler *auth.Handler, oauthHandler *oauth.Handler) *gin.Engine {
 	router := gin.New()
 	router.RedirectTrailingSlash = false
@@ -19,7 +30,7 @@ func NewRouter(api *Handler, authHandler *auth.Handler, oauthHandler *oauth.Hand
 	_ = router.SetTrustedProxies(nil)
 	// Register probes before the business middleware chain to avoid auditing or throttling them.
 	registerHealthz(router)
-	access := middleware.NewRoutePolicies(routeRules())
+	access := middleware.NewRoutePolicies(nil)
 	router.Use(
 		middleware.Audit(api.now),
 		gin.Recovery(),
@@ -28,155 +39,564 @@ func NewRouter(api *Handler, authHandler *auth.Handler, oauthHandler *oauth.Hand
 		middleware.LimitIdentity(api.limits),
 		middleware.AdmitIdentity(access),
 	)
-
-	registerAuth(router, authHandler)
-	registerOAuth(router, oauthHandler)
-	registerIAM(router, api)
-
-	registerConfigProjections(router, api)
-	registerConfigs(router, api)
-	registerScripts(router, api)
-	registerProjects(router, api)
-	registerRunners(router, api)
-	registerProjectScopedResources(router, api)
-
-	registerOpenAPI(router)
-
+	rules := make(map[middleware.RouteKey]middleware.RoutePolicy)
+	registerAuthRoutes(router, rules, authHandler)
+	registerOAuthRoutes(router, rules, oauthHandler)
+	registerForwardRoutes(router, rules, api)
+	registerOtherRoutes(router, rules, api)
+	// Publish the completed, immutable policy table before serving requests.
+	*access = *middleware.NewRoutePolicies(rules)
 	router.NoRoute(func(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 	})
 	return router
 }
 
-func registerOAuth(router *gin.Engine, h *oauth.Handler) {
-	router.GET("/auth/providers", h.Providers)
-	router.GET("/auth/oauth/:provider/login", h.Login)
-	router.POST("/auth/oauth/:provider/callback", h.Callback)
-	router.POST("/auth/oauth/register", h.Register)
-}
-
-func registerAuth(router *gin.Engine, api *auth.Handler) {
-	router.POST("/auth/register", api.RegisterUser)
-	router.POST("/auth/login", api.Login)
-	router.POST("/auth/check", api.CheckToken)
-	router.PUT("/auth/users/:name/password", api.ChangePassword)
-	router.POST("/auth/machine-token", api.MachineToken)
-
-	router.POST("/auth/machineaccounts", api.RegisterMachine)
-}
-
-func registerIAM(router *gin.Engine, api *Handler) {
-	iam := router.Group("/apis/iam.ebs/v1")
-
-	iam.GET("/users", api.upstream.Forward)
-	iam.GET("/users/:name", api.upstream.Forward)
-	iam.PUT("/users/:name", api.prepareUserUpdate, api.upstream.Forward)
-	iam.PATCH("/users/:name", api.prepareUserUpdate, api.upstream.Forward)
-	iam.DELETE("/users/:name", api.protectAdminUser, api.upstream.Forward)
-
-	iam.GET("/machineaccounts", api.upstream.Forward)
-	iam.GET("/machineaccounts/:name", api.upstream.Forward)
-	iam.PUT("/machineaccounts/:name", api.upstream.Forward)
-	iam.PATCH("/machineaccounts/:name", api.upstream.Forward)
-	iam.DELETE("/machineaccounts/:name", api.upstream.Forward)
-}
-
-func registerConfigProjections(router *gin.Engine, api *Handler) {
-	projections := router.Group("/apis/ebs/v1")
-
-	projections.GET("/build-targets", api.buildTargets)
-	projections.GET("/service-endpoints", api.serviceEndpoints)
-}
-
-func registerConfigs(router *gin.Engine, api *Handler) {
-	configs := router.Group("/apis/ebs/v1/configs")
-
-	configs.GET("", api.upstream.Forward)
-	configs.POST("", api.upstream.Forward)
-
-	configs.GET("/:name", api.upstream.Forward)
-	configs.PUT("/:name", api.upstream.Forward)
-	configs.PATCH("/:name", api.upstream.Forward)
-	configs.DELETE("/:name", rejectBuiltInConfigDeletion, api.upstream.Forward)
-}
-
-func registerScripts(router *gin.Engine, api *Handler) {
-	scripts := router.Group("/apis/ebs/v1/scripts")
-	scripts.GET("", api.upstream.Forward)
-	scripts.POST("", api.upstream.Forward)
-	scripts.GET("/:name", api.upstream.Forward)
-	scripts.PUT("/:name", api.upstream.Forward)
-	scripts.PATCH("/:name", api.upstream.Forward)
-	scripts.DELETE("/:name", api.upstream.Forward)
-}
-
-func registerProjects(router *gin.Engine, api *Handler) {
-	guard := api.projectGuard("")
-	router.GET("/apis/ebs/v1/projects", api.upstream.Forward)
-	router.POST("/apis/ebs/v1/projects", guard, api.prepareProjectCreate, api.upstream.Forward)
-
-	router.GET("/apis/ebs/v1/projects/:project", api.upstream.Forward)
-	router.PUT("/apis/ebs/v1/projects/:project", guard, api.prepareProjectUpdate, api.upstream.Forward)
-	router.PATCH("/apis/ebs/v1/projects/:project", guard, api.prepareProjectUpdate, api.upstream.Forward)
-}
-
-func registerRunners(router *gin.Engine, api *Handler) {
-	runners := router.Group("/apis/ebs/v1/runners")
-
-	runners.GET("", api.upstream.Forward)
-	runners.POST("", api.prepareRunnerCreate, api.upstream.Forward)
-
-	runners.GET("/:runner", api.runnerReadGuard, api.upstream.Forward)
-	runners.PUT("/:runner", api.runnerUpdateGuard, api.upstream.Forward)
-	runners.PATCH("/:runner", api.runnerUpdateGuard, api.upstream.Forward)
-	runners.DELETE("/:runner", api.upstream.Forward)
-
-	runners.GET("/:runner/status", api.upstream.Forward)
-	runners.PUT("/:runner/status", api.runnerStatusUpdateGuard, api.upstream.Forward)
-	runners.PATCH("/:runner/status", api.runnerStatusUpdateGuard, api.upstream.Forward)
-
-	runners.GET("/:runner/jobs", api.prepareRunnerJobs, api.upstream.Forward)
-}
-
-func registerProjectScopedResources(router *gin.Engine, api *Handler) {
-	project := router.Group("/apis/ebs/v1/projects/:project")
-	guard := api.projectScopedGuard("builds", "")
-	project.GET("/builds", api.upstream.Forward)
-	project.POST("/builds", guard, api.upstream.Forward)
-
-	project.GET("/builds/:name", api.upstream.Forward)
-	project.DELETE("/builds/:name", guard, api.upstream.Forward)
-
-	project.GET("/builds/:name/status", api.upstream.Forward)
-
-	guard = api.projectScopedGuard("builds", "abort")
-	project.POST("/builds/:name/abort", guard, api.upstream.Forward)
-
-	project.GET("/jobs", api.jobWatchGuard, api.upstream.Forward)
-
-	project.GET("/jobs/:name", api.runnerJobReadGuard, api.upstream.Forward)
-
-	guard = api.projectScopedGuard("jobs", "status")
-	project.GET("/jobs/:name/status", api.upstream.Forward)
-	project.PATCH("/jobs/:name/status", guard, api.prepareJobStatusUpdate, api.upstream.Forward)
-
-	guard = api.projectScopedGuard("jobs", "abort")
-	project.POST("/jobs/:name/abort", guard, api.upstream.Forward)
-
-	project.GET("/oldjobs", api.upstream.Forward)
-	project.GET("/oldjobs/:name", api.upstream.Forward)
-
-	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos"} {
-		project.GET("/"+resource, api.upstream.Forward)
-		project.GET("/"+resource+"/:name", api.upstream.Forward)
-		project.GET("/"+resource+"/:name/status", api.upstream.Forward)
-	}
-}
-
 func registerHealthz(router *gin.Engine) {
 	router.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok\n") })
 }
 
-func registerOpenAPI(router *gin.Engine) {
-	router.GET("/openapi.json", openapi.Serve)
+func registerAuthRoutes(router *gin.Engine, rules map[middleware.RouteKey]middleware.RoutePolicy, authHandler *auth.Handler) {
+	routes := []routeDefinition{
+		{
+			Method:         http.MethodPost,
+			Path:           "/auth/check",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAuthenticated,
+			Handler:        authHandler.CheckToken,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/auth/register",
+			Authentication: middleware.AuthenticationNone,
+			Handler:        authHandler.RegisterUser,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/auth/login",
+			Authentication: middleware.AuthenticationNone,
+			Handler:        authHandler.Login,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/auth/machine-token",
+			Authentication: middleware.AuthenticationNone,
+			Handler:        authHandler.MachineToken,
+		},
+		{
+			Method:         http.MethodPut,
+			Path:           "/auth/users/:name/password",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers,
+			Handler:        authHandler.ChangePassword,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/auth/machineaccounts",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+			Handler:        authHandler.RegisterMachine,
+		},
+	}
+	registerRoutes(router, rules, routes)
+}
+
+func registerOAuthRoutes(router *gin.Engine, rules map[middleware.RouteKey]middleware.RoutePolicy, oauthHandler *oauth.Handler) {
+	routes := []routeDefinition{
+		{
+			Method:         http.MethodGet,
+			Path:           "/auth/providers",
+			Authentication: middleware.AuthenticationNone,
+			Handler:        oauthHandler.Providers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/auth/oauth/:provider/login",
+			Authentication: middleware.AuthenticationNone,
+			Handler:        oauthHandler.Login,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/auth/oauth/:provider/callback",
+			Authentication: middleware.AuthenticationNone,
+			Handler:        oauthHandler.Callback,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/auth/oauth/register",
+			Authentication: middleware.AuthenticationNone,
+			Handler:        oauthHandler.Register,
+		},
+	}
+	registerRoutes(router, rules, routes)
+}
+
+func registerForwardRoutes(router *gin.Engine, rules map[middleware.RouteKey]middleware.RoutePolicy, api *Handler) {
+	routes := []routeDefinition{
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/iam.ebs/v1/users",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/iam.ebs/v1/users/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+		},
+		{
+			Method:         http.MethodPut,
+			Path:           "/apis/iam.ebs/v1/users/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+			Middlewares:    []gin.HandlerFunc{api.prepareUserUpdate},
+		},
+		{
+			Method:         http.MethodPatch,
+			Path:           "/apis/iam.ebs/v1/users/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+			Middlewares:    []gin.HandlerFunc{api.prepareUserUpdate},
+		},
+		{
+			Method:         http.MethodDelete,
+			Path:           "/apis/iam.ebs/v1/users/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+			Middlewares:    []gin.HandlerFunc{api.protectAdminUser},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/iam.ebs/v1/machineaccounts",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/iam.ebs/v1/machineaccounts/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+		},
+		{
+			Method:         http.MethodPut,
+			Path:           "/apis/iam.ebs/v1/machineaccounts/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+		},
+		{
+			Method:         http.MethodPatch,
+			Path:           "/apis/iam.ebs/v1/machineaccounts/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+		},
+		{
+			Method:         http.MethodDelete,
+			Path:           "/apis/iam.ebs/v1/machineaccounts/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowAdmin,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/configs",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/apis/ebs/v1/configs",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/configs/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodPut,
+			Path:           "/apis/ebs/v1/configs/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodPatch,
+			Path:           "/apis/ebs/v1/configs/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodDelete,
+			Path:           "/apis/ebs/v1/configs/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+			Middlewares:    []gin.HandlerFunc{rejectBuiltInConfigDeletion},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/scripts",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers | middleware.AllowRunner,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/apis/ebs/v1/scripts",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/scripts/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers | middleware.AllowRunner,
+		},
+		{
+			Method:         http.MethodPut,
+			Path:           "/apis/ebs/v1/scripts/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodPatch,
+			Path:           "/apis/ebs/v1/scripts/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodDelete,
+			Path:           "/apis/ebs/v1/scripts/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects",
+			Options:        middleware.RouteOptions{ListLimit: 100},
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/apis/ebs/v1/projects",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers,
+			Middlewares:    []gin.HandlerFunc{api.projectGuard(""), api.prepareProjectCreate},
+		},
+		{
+			Method:         http.MethodPut,
+			Path:           "/apis/ebs/v1/projects/:project",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers | middleware.AllowService,
+			Middlewares:    []gin.HandlerFunc{api.projectGuard(""), api.prepareProjectUpdate},
+		},
+		{
+			Method:         http.MethodPatch,
+			Path:           "/apis/ebs/v1/projects/:project",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers | middleware.AllowService,
+			Middlewares:    []gin.HandlerFunc{api.projectGuard(""), api.prepareProjectUpdate},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/runners",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/apis/ebs/v1/runners",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowRunner,
+			Middlewares:    []gin.HandlerFunc{api.prepareRunnerCreate},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/runners/:runner",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowRunner | middleware.AllowPrivileged,
+			Middlewares:    []gin.HandlerFunc{api.runnerReadGuard},
+		},
+		{
+			Method:         http.MethodPut,
+			Path:           "/apis/ebs/v1/runners/:runner",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowRunner | middleware.AllowPrivileged,
+			Middlewares:    []gin.HandlerFunc{api.runnerUpdateGuard},
+		},
+		{
+			Method:         http.MethodPatch,
+			Path:           "/apis/ebs/v1/runners/:runner",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowRunner | middleware.AllowPrivileged,
+			Middlewares:    []gin.HandlerFunc{api.runnerUpdateGuard},
+		},
+		{
+			Method:         http.MethodDelete,
+			Path:           "/apis/ebs/v1/runners/:runner",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/runners/:runner/status",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowPrivileged,
+		},
+		{
+			Method:         http.MethodPut,
+			Path:           "/apis/ebs/v1/runners/:runner/status",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowRunner | middleware.AllowPrivileged,
+			Middlewares:    []gin.HandlerFunc{api.runnerStatusUpdateGuard},
+		},
+		{
+			Method:         http.MethodPatch,
+			Path:           "/apis/ebs/v1/runners/:runner/status",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowRunner | middleware.AllowPrivileged,
+			Middlewares:    []gin.HandlerFunc{api.runnerStatusUpdateGuard},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/runners/:runner/jobs",
+			Options:        middleware.RouteOptions{Watch: true},
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowRunner,
+			Middlewares:    []gin.HandlerFunc{api.prepareRunnerJobs},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/builds",
+			Options:        middleware.RouteOptions{ListLimit: 100},
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/builds/:name",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/builds/:name/status",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/apis/ebs/v1/projects/:project/builds",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers | middleware.AllowService,
+			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("builds", "")},
+		},
+		{
+			Method:         http.MethodDelete,
+			Path:           "/apis/ebs/v1/projects/:project/builds/:name",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers,
+			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("builds", "")},
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/apis/ebs/v1/projects/:project/builds/:name/abort",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers | middleware.AllowService,
+			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("builds", "abort")},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/jobs",
+			Options:        middleware.RouteOptions{ListLimit: 100, Watch: true},
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+			Middlewares:    []gin.HandlerFunc{api.jobWatchGuard},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/jobs/:name",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers | middleware.AllowRunner,
+			Middlewares:    []gin.HandlerFunc{api.runnerJobReadGuard},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/jobs/:name/status",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodPatch,
+			Path:           "/apis/ebs/v1/projects/:project/jobs/:name/status",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowRunner,
+			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("jobs", "status"), api.prepareJobStatusUpdate},
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/apis/ebs/v1/projects/:project/jobs/:name/abort",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers,
+			Middlewares:    []gin.HandlerFunc{api.projectScopedGuard("jobs", "abort")},
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/oldjobs",
+			Options:        middleware.RouteOptions{ListLimit: 100},
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/oldjobs/:name",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/snapshots",
+			Options:        middleware.RouteOptions{ListLimit: 100},
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/snapshots/:name",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/snapshots/:name/status",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/buildinfos",
+			Options:        middleware.RouteOptions{ListLimit: 100},
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/buildinfos/:name",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/buildinfos/:name/status",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/buildgraphs",
+			Options:        middleware.RouteOptions{ListLimit: 100},
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/buildgraphs/:name",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/buildgraphs/:name/status",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/rpmrepos",
+			Options:        middleware.RouteOptions{ListLimit: 100},
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/rpmrepos/:name",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/projects/:project/rpmrepos/:name/status",
+			Authentication: middleware.AuthenticationOptional,
+			Identities:     middleware.AllowAnonymous | middleware.AllowUsers,
+		},
+	}
+	for i := range routes {
+		routes[i].Handler = api.upstream.Forward
+	}
+	registerRoutes(router, rules, routes)
+}
+
+func registerOtherRoutes(router *gin.Engine, rules map[middleware.RouteKey]middleware.RoutePolicy, api *Handler) {
+	routes := []routeDefinition{
+		{
+			Method:         http.MethodGet,
+			Path:           "/openapi.json",
+			Authentication: middleware.AuthenticationNone,
+			Handler:        openapi.Serve,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/build-targets",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowUsers,
+			Handler:        api.buildTargets,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/apis/ebs/v1/service-endpoints",
+			Authentication: middleware.AuthenticationRequired,
+			Identities:     middleware.AllowRunner,
+			Handler:        api.serviceEndpoints,
+		},
+	}
+	registerRoutes(router, rules, routes)
+}
+
+func registerRoutes(router *gin.Engine, rules map[middleware.RouteKey]middleware.RoutePolicy, definitions []routeDefinition) {
+	for _, route := range definitions {
+		key := middleware.RouteKey{Method: route.Method, Path: route.Path}
+		if _, exists := rules[key]; exists {
+			panic(fmt.Sprintf("duplicate Gateway route: %s %s", route.Method, route.Path))
+		}
+		if route.Handler == nil {
+			panic(fmt.Sprintf("Gateway route requires a handler: %s %s", route.Method, route.Path))
+		}
+		access := middleware.RoutePolicy{
+			Authentication: route.Authentication,
+			Identities:     route.Identities,
+			Options:        route.Options,
+		}
+		if access.Authentication == middleware.AuthenticationNone && access.Identities == 0 {
+			access.Identities = middleware.AllowAnonymous
+		}
+		if err := middleware.ValidateRoute(key, access); err != nil {
+			panic(fmt.Sprintf("invalid Gateway route %s %s: %v", route.Method, route.Path, err))
+		}
+		for _, handler := range route.Middlewares {
+			if handler == nil {
+				panic(fmt.Sprintf("nil Gateway middleware: %s %s", route.Method, route.Path))
+			}
+		}
+		rules[key] = access
+		handlers := make([]gin.HandlerFunc, 0, len(route.Middlewares)+1)
+		handlers = append(handlers, route.Middlewares...)
+		handlers = append(handlers, route.Handler)
+		router.Handle(route.Method, route.Path, handlers...)
+	}
 }

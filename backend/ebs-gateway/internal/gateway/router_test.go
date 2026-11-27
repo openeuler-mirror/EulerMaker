@@ -295,6 +295,117 @@ func TestServiceTokenChecksCurrentAccount(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutesMiddlewareOrder(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		var calls []string
+		definitions := []routeDefinition{{
+			Method:         http.MethodGet,
+			Path:           "/test/:name",
+			Authentication: middleware.AuthenticationNone,
+			Middlewares: []gin.HandlerFunc{
+				func(c *gin.Context) {
+					calls = append(calls, "first:"+c.Param("name"))
+					c.Next()
+					calls = append(calls, "after")
+				},
+				func(c *gin.Context) {
+					calls = append(calls, "second")
+					if reject {
+						c.AbortWithStatus(http.StatusForbidden)
+						return
+					}
+					c.Next()
+				},
+			},
+			Handler: func(c *gin.Context) {
+				calls = append(calls, "handler")
+				c.Status(http.StatusNoContent)
+			},
+		}}
+		router := gin.New()
+		registerRoutes(router, make(map[middleware.RouteKey]middleware.RoutePolicy), definitions)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/test/item", nil))
+		want := []string{"first:item", "second", "handler", "after"}
+		status := http.StatusNoContent
+		if reject {
+			want = []string{"first:item", "second", "after"}
+			status = http.StatusForbidden
+		}
+		if response.Code != status || !reflect.DeepEqual(calls, want) {
+			t.Fatalf("reject=%v status=%d calls=%v, want %d %v", reject, response.Code, calls, status, want)
+		}
+	}
+}
+
+func TestRouteRegistrationRejectsDuplicateAcrossGroups(t *testing.T) {
+	router := gin.New()
+	rules := make(map[middleware.RouteKey]middleware.RoutePolicy)
+	routes := []routeDefinition{{
+		Method:         http.MethodGet,
+		Path:           "/test",
+		Authentication: middleware.AuthenticationNone,
+		Handler:        func(c *gin.Context) { c.Status(http.StatusNoContent) },
+	}}
+	registerRoutes(router, rules, routes)
+	defer func() {
+		value := recover()
+		if value == nil || !strings.Contains(fmt.Sprint(value), "duplicate Gateway route: GET /test") {
+			t.Fatalf("unexpected panic: %v", value)
+		}
+	}()
+	registerRoutes(router, rules, routes)
+}
+
+func TestRouteRegistrationValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*routeDefinition)
+		want   string
+	}{
+		{"valid", func(r *routeDefinition) {}, ""},
+		{"anonymous default", func(r *routeDefinition) { r.Authentication = middleware.AuthenticationNone; r.Identities = 0 }, ""},
+		{"missing access", func(r *routeDefinition) { r.Identities = 0 }, "identities"},
+		{"unknown auth", func(r *routeDefinition) { r.Authentication = 99 }, "authentication mode"},
+		{"required anonymous", func(r *routeDefinition) { r.Identities |= middleware.AllowAnonymous }, "required authentication"},
+		{"optional without anonymous", func(r *routeDefinition) { r.Authentication = middleware.AuthenticationOptional }, "optional authentication"},
+		{"no auth with users", func(r *routeDefinition) { r.Authentication = middleware.AuthenticationNone }, "unauthenticated routes"},
+		{"unknown identity", func(r *routeDefinition) { r.Identities = 128 }, "identities"},
+		{"negative limit", func(r *routeDefinition) { r.Options.ListLimit = -1 }, "list limit"},
+		{"write pagination", func(r *routeDefinition) { r.Method = http.MethodPost; r.Options.ListLimit = 100 }, "list limit"},
+		{"write watch", func(r *routeDefinition) { r.Method = http.MethodPost; r.Options.Watch = true }, "Watch requires"},
+		{"unauthenticated watch", func(r *routeDefinition) {
+			r.Options.Watch = true
+			r.Authentication = middleware.AuthenticationNone
+			r.Identities = middleware.AllowAnonymous
+		}, "Watch requires"},
+		{"missing handler", func(r *routeDefinition) { r.Handler = nil }, "handler"},
+		{"nil middleware", func(r *routeDefinition) { r.Middlewares = []gin.HandlerFunc{nil} }, "nil Gateway middleware"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			route := routeDefinition{
+				Method:     http.MethodGet,
+				Path:       "/test",
+				Identities: middleware.AllowUsers,
+				Handler:    func(c *gin.Context) { c.Status(http.StatusNoContent) },
+			}
+			tc.change(&route)
+			defer func() {
+				value := recover()
+				if tc.want == "" {
+					if value != nil {
+						t.Fatalf("unexpected panic: %v", value)
+					}
+				} else if value == nil || !strings.Contains(fmt.Sprint(value), tc.want) ||
+					!strings.Contains(fmt.Sprint(value), route.Method+" "+route.Path) {
+					t.Fatalf("panic=%v, want route and %q", value, tc.want)
+				}
+			}()
+			registerRoutes(gin.New(), make(map[middleware.RouteKey]middleware.RoutePolicy), []routeDefinition{route})
+		})
+	}
+}
+
 func TestServiceTokenRejectsOperationsOutsideAllowlist(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
@@ -692,8 +803,7 @@ func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
 	})
 	router.Use(middleware.PrepareQuery(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())),
 		middleware.LimitIdentity(api.limits), middleware.AdmitIdentity(middleware.NewRoutePolicies(routeRules())))
-	registerConfigs(router, api.Handler)
-	registerScripts(router, api.Handler)
+	registerForwardRoutes(router, make(map[middleware.RouteKey]middleware.RoutePolicy), api.Handler)
 	for _, tc := range []struct {
 		query, audit string
 		status       int
