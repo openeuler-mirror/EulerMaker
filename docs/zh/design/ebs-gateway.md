@@ -779,6 +779,8 @@ Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回任何�
 
 ## 五、路由设计
 
+`internal/auth` 独立负责密码注册、登录、机器凭据换 Token、Token 检查、密码修改和机器账号注册，持有对应的认证专用限流器；`internal/oauth` 负责第三方登录。启动处分别创建两类 Handler，并传入 Gateway Router。`internal/gateway` 的业务 Handler 不再持有认证接口的 IAM 客户端、Token 签发器和专用限流器；Bearer 认证仍由 `internal/middleware` 负责。密码登录开关由启动参数中 OAuth 配置文件路径是否为空决定，不依赖 OAuth Handler。
+
 Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch 路由检查 → IP 限流 → 请求认证 → 身份/匿名限流 → 身份准入 → 业务授权 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；`AuthenticateRequest` 统一完成 Token 校验和当前账号身份解析，路由及业务 Guard 不重复认证或通用限流。Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。业务链保留审计在外、Recovery 在内的顺序，后续处理 panic 被恢复后，审计仍记录最终响应状态。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
 
 健康检查在业务 `router.Use` 之前直接注册 Handler，返回固定文本，不挂载 `gin.Recovery()`，不产生审计日志，不进入 Watch 检查、认证或限流。Gin 在注册路由时确定中间件链，因此无需在认证白名单和限流器中另行豁免 `/healthz`。

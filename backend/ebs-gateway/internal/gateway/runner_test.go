@@ -128,7 +128,7 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			api, err = NewHandler(Dependencies{Upstream: client, IAM: iamclient.New(client), Tokens: tokens, Limits: limit.New(100, 100, time.Now), BodyLimit: 1 << 20})
+			api, err = NewHandler(Dependencies{Upstream: client, Auth: middleware.NewAuth(tokens, iamclient.New(client), time.Now), Limits: limit.New(100, 100, time.Now), BodyLimit: 1 << 20})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -18,6 +18,7 @@ import (
 	"k8s.io/klog/v2"
 
 	ebsv1 "ebs-api/ebs/v1"
+	"ebs-gateway/internal/auth"
 	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
@@ -57,6 +58,7 @@ func TestLoginIPLimitAcrossUsernames(t *testing.T) {
 
 type testAPI struct {
 	*Handler
+	authHandler  *auth.Handler
 	oauthHandler *oauth.Handler
 	tokens       *identity.Tokens
 	now          func() time.Time
@@ -121,7 +123,7 @@ func TestAuthenticationMode(t *testing.T) {
 	}
 }
 
-func (a *testAPI) Router() *gin.Engine { return NewRouter(a.Handler, a.oauthHandler) }
+func (a *testAPI) Router() *gin.Engine { return NewRouter(a.Handler, a.authHandler, a.oauthHandler) }
 
 func TestPublicOpenAPIRoutes(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -243,13 +245,17 @@ func newTestAPIWithConfig(t *testing.T, transport http.RoundTripper, burst int, 
 	now := func() time.Time { return time.Unix(1790000000, 0) }
 	accounts := iamclient.New(client)
 	api, err := NewHandler(Dependencies{
-		Upstream: client, IAM: accounts, Tokens: tokens, Now: now,
-		Limits: limit.New(100, burst, now), BodyLimit: 1 << 20, LocalAuthEnabled: cfg.PublicBaseURL == "",
+		Upstream: client, Auth: middleware.NewAuth(tokens, accounts, now), Now: now,
+		Limits: limit.New(100, burst, now), BodyLimit: 1 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &testAPI{Handler: api, oauthHandler: oauth.New(cfg, accounts, tokens, now), tokens: tokens, now: now}
+	authHandler, err := auth.New(auth.Dependencies{IAM: accounts, Tokens: tokens, Now: now, BodyLimit: 1 << 20, LocalAuthEnabled: cfg.PublicBaseURL == ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testAPI{Handler: api, authHandler: authHandler, oauthHandler: oauth.New(cfg, accounts, tokens, now), tokens: tokens, now: now}
 }
 
 func TestMachineTokenAccountType(t *testing.T) {

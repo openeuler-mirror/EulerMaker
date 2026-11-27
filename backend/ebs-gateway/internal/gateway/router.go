@@ -5,12 +5,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ebs-gateway/internal/auth"
 	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/oauth"
 	"ebs-gateway/internal/openapi"
 )
 
-func NewRouter(api *Handler, oauthHandler *oauth.Handler) *gin.Engine {
+func NewRouter(api *Handler, authHandler *auth.Handler, oauthHandler *oauth.Handler) *gin.Engine {
 	router := gin.New()
 	router.RedirectTrailingSlash = false
 	router.RedirectFixedPath = false
@@ -27,7 +28,7 @@ func NewRouter(api *Handler, oauthHandler *oauth.Handler) *gin.Engine {
 		middleware.AdmitIdentity,
 	)
 
-	registerAuth(router, api)
+	registerAuth(router, authHandler)
 	registerOAuth(router, oauthHandler)
 	registerIAM(router, api)
 
@@ -53,14 +54,14 @@ func registerOAuth(router *gin.Engine, h *oauth.Handler) {
 	router.POST("/auth/oauth/register", h.Register)
 }
 
-func registerAuth(router *gin.Engine, api *Handler) {
-	router.POST("/auth/register", api.registerUser)
-	router.POST("/auth/login", api.login)
-	router.POST("/auth/check", api.checkToken)
-	router.PUT("/auth/users/:name/password", api.changePassword)
-	router.POST("/auth/machine-token", api.machineToken)
+func registerAuth(router *gin.Engine, api *auth.Handler) {
+	router.POST("/auth/register", api.RegisterUser)
+	router.POST("/auth/login", api.Login)
+	router.POST("/auth/check", api.CheckToken)
+	router.PUT("/auth/users/:name/password", api.ChangePassword)
+	router.POST("/auth/machine-token", api.MachineToken)
 
-	router.POST("/auth/machineaccounts", api.registerMachine)
+	router.POST("/auth/machineaccounts", api.RegisterMachine)
 }
 
 func registerIAM(router *gin.Engine, api *Handler) {
