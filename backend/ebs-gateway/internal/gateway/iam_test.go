@@ -79,6 +79,43 @@ func TestUserUpdateChain(t *testing.T) {
 	}
 }
 
+func TestMachineAccountDirectForwarding(t *testing.T) {
+	for _, tc := range []struct {
+		method, path string
+	}{
+		{http.MethodGet, "/apis/iam.ebs/v1/machineaccounts?limit=20"},
+		{http.MethodGet, "/apis/iam.ebs/v1/machineaccounts/automation"},
+		{http.MethodDelete, "/apis/iam.ebs/v1/machineaccounts/automation"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			calls := 0
+			api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				body := `{"ok":true}`
+				if request.URL.Path == "/apis/iam.ebs/v1/users/admin" {
+					body = `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`
+				} else {
+					calls++
+					if request.Method != tc.method || request.URL.RequestURI() != tc.path {
+						t.Fatalf("unexpected request: %s %s", request.Method, request.URL)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			token, err := api.tokens.Issue("admin", identity.UserType, identity.AdminScope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(tc.method, tc.path, nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			response := httptest.NewRecorder()
+			api.Router().ServeHTTP(response, request)
+			if response.Code != http.StatusOK || response.Body.String() != `{"ok":true}` || calls != 1 {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, calls, response.Body)
+			}
+		})
+	}
+}
+
 func TestUserDeleteProtection(t *testing.T) {
 	const ordinary = `{"spec":{"scopes":["ebs:user"]}}`
 	for _, tc := range []struct {

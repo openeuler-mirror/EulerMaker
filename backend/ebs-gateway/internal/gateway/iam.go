@@ -50,17 +50,3 @@ func (a *Handler) protectAdminUser(c *gin.Context) {
 	}
 	c.Next()
 }
-
-func (a *Handler) machineAccounts(c *gin.Context) {
-	a.forwardIAM(c, "machineaccounts")
-}
-
-func (a *Handler) forwardIAM(c *gin.Context, resource string) {
-	if method := c.Request.Method; method == http.MethodPut || method == http.MethodPatch {
-		route := policy.Route{Resource: resource, Name: c.Param("name"), Method: method}
-		if !a.prepareUpdate(c, middleware.Principal(c), route) {
-			return
-		}
-	}
-	a.upstream.Forward(c)
-}

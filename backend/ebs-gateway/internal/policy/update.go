@@ -2,7 +2,6 @@ package policy
 
 import (
 	"context"
-	"maps"
 	"net/http"
 	"reflect"
 
@@ -32,8 +31,6 @@ func (a *Authorizer) ValidateUpdate(ctx context.Context, who identity.Principal,
 		return validateRunnerUpdate(who, old, candidate)
 	case "users":
 		return validateAdminUser(old, candidate)
-	case "machineaccounts":
-		return validateMachineAccountUpdate(who, old, candidate)
 	default:
 		return nil
 	}
@@ -69,9 +66,6 @@ func validateUpdateIdentity(route Route, old, candidate mutation.Object) error {
 	if !reflect.DeepEqual(oldMeta["name"], newMeta["name"]) || !reflect.DeepEqual(oldMeta["namespace"], newMeta["namespace"]) {
 		return deny("resource identity cannot change")
 	}
-	if route.Resource == "machineaccounts" && (!reflect.DeepEqual(oldMeta["uid"], newMeta["uid"]) || !reflect.DeepEqual(oldMeta["resourceVersion"], newMeta["resourceVersion"])) {
-		return &Error{Status: http.StatusConflict, Message: "machine account changed; reload before updating grants"}
-	}
 	for _, name := range protectedMetadata {
 		if !reflect.DeepEqual(oldMeta[name], newMeta[name]) {
 			return deny("server metadata cannot change")
@@ -90,28 +84,6 @@ func validateOrdinaryMetadata(route Route, old, candidate mutation.Object) error
 	newMeta := objectMap(candidate["metadata"])
 	if !equalMetadataExceptUserFields(oldMeta, newMeta, route.Resource == "runners") {
 		return deny("protected metadata changed")
-	}
-	return nil
-}
-
-func validateMachineAccountUpdate(who identity.Principal, old, candidate mutation.Object) error {
-	if who.Type != identity.UserType || who.Scope != identity.AdminScope {
-		return deny("machine account updates require Admin")
-	}
-	oldSpec, newSpec := maps.Clone(objectMap(old["spec"])), maps.Clone(objectMap(candidate["spec"]))
-	if (oldSpec["type"] != "service" && oldSpec["type"] != "runner") || newSpec["type"] != oldSpec["type"] {
-		return deny("machine account type is immutable")
-	}
-	allowed := []string{"tokenTTLSeconds"}
-	if oldSpec["type"] == "service" {
-		allowed = append(allowed, "projects", "permissions")
-	}
-	for _, key := range allowed {
-		delete(oldSpec, key)
-		delete(newSpec, key)
-	}
-	if !reflect.DeepEqual(oldSpec, newSpec) || !reflect.DeepEqual(old["metadata"], candidate["metadata"]) || !reflect.DeepEqual(old["status"], candidate["status"]) {
-		return deny("only token lifetime and service account grants can be updated")
 	}
 	return nil
 }

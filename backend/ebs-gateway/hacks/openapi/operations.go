@@ -46,6 +46,9 @@ func operations() object {
 					"Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
 					bearer, ref("ebs-api/iam/v1."+kind), "200")
 				setResourceRequest(op, method, ref("ebs-api/iam/v1."+r.kind), false)
+				if r.name == "machineaccounts" && (method == "put" || method == "patch") {
+					op["description"] = "Admin only. Gateway forwards the original method, body, content type and query to apiserver without reading the account or rewriting PATCH. Apiserver validates immutable account type and metadata, token lifetime (300–86400 seconds), and service-only projects/permissions; credentials are preserved. Include the current UID and resourceVersion in PUT/merge patch, or JSON Patch tests, to protect against replacement and concurrent updates. Upstream errors are returned unchanged, including 409 for version conflicts and 422 for validation failures. Unknown fields follow apiserver fieldValidation behavior; use fieldValidation=Strict to reject them. Token lifetime changes affect newly issued tokens only; changed grants apply to subsequent requests."
+				}
 				if method == "put" && r.name == "users" {
 					op["requestBody"] = body(ref("UserUpdate"), true)
 				}

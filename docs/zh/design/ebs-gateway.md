@@ -392,7 +392,7 @@ Build 中止复用既有 `/abort` 路由及请求/响应契约，不通过主资
 
 除上述三项操作、`/auth/check` 和 Script 列表及读取外，资源操作默认拒绝，包括 Project 创建/删除、Build 删除/普通更新、所有 `/status` 写入，以及 Runner、Job、Config、Script 和 IAM 管理。授予 `projects:update` 不会获得 MachineAccount 或其他资源更新能力。
 
-授权随 Admin 调用 `POST /auth/machineaccounts` 创建账号写入；前端创建和编辑 service 账号时支持配置工程名称及三个操作权限。Admin 可通过 `PUT/PATCH /apis/iam.ebs/v1/machineaccounts/{name}` 修改 runner 和 service 账号的 `spec.tokenTTLSeconds`（300～86400 秒），service 账号还允许修改 `spec.projects`、`spec.permissions`，不能改变账号类型、元数据或凭据。普通用户、Ops、Runner Token 和 Service Token 均不具备该更新能力。更新使用既有 PATCH 转 PUT 和并发版本保护，UID/resourceVersion 不匹配返回 409；不自动重试覆盖。有效期变更仅影响之后签发的 Token，已签发 Token 的到期时间不变。授权变更对后续请求生效，既有 Token 不需重签，已受理操作不撤销。按现有名称身份契约，同名账号重建后未过期旧 Token 可以继续使用，并按新账号授权判断。更换 secret 不撤销已签发 Token；若必须隔离旧 Token，使用新的账号名称。上线顺序为 apiserver mapping/字段支持、准备显式授权账号、Gateway 启用范围校验；缺少授权的旧账号不再全工程放行。
+授权随 Admin 调用 `POST /auth/machineaccounts` 创建账号写入；前端创建和编辑 service 账号时支持配置工程名称及三个操作权限。Admin 可通过 `PUT/PATCH /apis/iam.ebs/v1/machineaccounts/{name}` 修改 runner 和 service 账号的 `spec.tokenTTLSeconds`（300～86400 秒），service 账号还允许修改 `spec.projects`、`spec.permissions`，不能改变账号类型、元数据或凭据。普通用户、Ops、Runner Token 和 Service Token 均不具备该更新能力。Gateway 保留原始方法、正文、Content-Type 和查询参数直接转发，不预读账号、不将 PATCH 转为 PUT。Apiserver 校验不可变字段、有效期和授权内容，并处理版本冲突；上游错误原样返回，不自动重试覆盖。PUT/merge patch 应携带当前 UID/resourceVersion，JSON Patch 使用 test 操作保护对象身份和版本。有效期变更仅影响之后签发的 Token，已签发 Token 的到期时间不变。授权变更对后续请求生效，既有 Token 不需重签，已受理操作不撤销。按现有名称身份契约，同名账号重建后未过期旧 Token 可以继续使用，并按新账号授权判断。更换 secret 不撤销已签发 Token；若必须隔离旧 Token，使用新的账号名称。上线顺序为 apiserver mapping/字段支持、准备显式授权账号、Gateway 启用范围校验；缺少授权的旧账号不再全工程放行。
 
 审计记录账号名称、目标工程、路由要求的权限、授权允许/拒绝结果、最终 HTTP 状态、请求路径、方法及请求 ID，不记录凭据、完整 JWT 或请求正文；授权通过不代表后续业务更新成功。测试覆盖三个权限的单独及组合授权、跨工程拒绝、空授权、普通字段保护、中止不越权到 Job 或 `/status`、匿名 GET 与携带 service 的 GET 区别，以及账号删除/同名重建、IAM 异常和多副本读取同一授权配置。
 
@@ -658,6 +658,8 @@ Runner 范围 Job list/watch 仅允许 Runner Token 对自身路径执行 GET，
 Config 请求在通过认证、Ops/Admin 权限、限流和 Watch 检查后直接代理，保留原始方法、正文和 Content-Type；DELETE 还须通过内置配置删除保护。Gateway 不预读 Config、不将 PATCH 转为 PUT，也不对 Config 请求执行正文大小检查；解码、PATCH 应用、元数据及内容校验、版本冲突检查、DeleteOptions 解析和正文大小限制均由 apiserver 负责，响应原样返回。
 
 Script 同样直接代理，由 apiserver 执行正文大小限制、解码、PATCH 应用、版本冲突和资源校验。所有已认证的 User、Runner、Service 身份可读取列表和单个脚本；写请求须具备 Ops/Admin 权限。Gateway 统一执行已认证限流并拒绝 Watch，列表查询参数原样透传。
+
+MachineAccount 在通过 Admin 权限校验后直接代理列表、读取、删除及 PUT/PATCH 请求。Gateway 不预读账号，不改写更新正文；解码、PATCH 应用、字段校验和并发保护均由 apiserver 负责，具体约束见 4.3.1。
 
 以下完整对象比较及请求格式、大小限制适用于其他资源的更新请求。gateway 不能只检查请求体中显式出现的字段，必须先构造本次请求将产生的完整候选对象，再对旧对象和候选对象执行授权比较；只有比较通过的候选对象可以写入 apiserver。
 
@@ -1064,7 +1066,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | Header | 不向上游转发外部 Bearer Token，也不注入最终用户身份 |
 | ProjectAuthz | 普通用户和 Ops 按 owner/member 关系操作 Project 与子资源；公开读取不按 owner/member 过滤；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入 |
 | ServiceAuthz | 工程范围与 projects:update/builds:create/builds:abort 独立授权、空授权及跨工程拒绝、匿名读不继承、owner及元数据保护、门禁标签保护、JSON Patch版本冲突、Build中止复用原协议、账号删除及同名重建后按当前授权处理、IAM异常拒绝、不查询同名User |
-| Admin | 普通 user、runner 和 service 均不能管理 MachineAccount，仅 `ebs:admin` 可以创建、查询、删除对象及更新有效期和 service 授权；覆盖 PUT/两类 PATCH、有效期范围、既有 Token 到期时间不变、字段保护、UID/版本冲突及凭据不变 |
+| Admin | 普通 user、ops、runner 和 service 均不能管理 MachineAccount；Gateway 覆盖 Admin 准入、原始方法/正文/Content-Type/查询参数透传、无预读和上游错误透传；apiserver 覆盖有效期范围、字段保护、版本冲突及凭据不变 |
 | AdminUser | Admin 可 get/list 所有 User，仅能 update/patch/delete 非管理员 User；禁止 create、把用户提升为 `ebs:admin`、修改/删除管理员 User 和重置他人密码 |
 | Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许集群级 Config 写操作及 Runner 管理（不含创建和 Runner 范围 Job list/watch，包含普通对象更新、`/status`，不开放 Runner 对象 Watch） |
 | ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |

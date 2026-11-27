@@ -72,11 +72,11 @@ func registerIAM(router *gin.Engine, api *Handler) {
 	iam.PATCH("/users/:name", api.prepareUserUpdate, api.upstream.Forward)
 	iam.DELETE("/users/:name", api.protectAdminUser, api.upstream.Forward)
 
-	iam.GET("/machineaccounts", api.machineAccounts)
-	iam.GET("/machineaccounts/:name", api.machineAccounts)
-	iam.PUT("/machineaccounts/:name", api.machineAccounts)
-	iam.PATCH("/machineaccounts/:name", api.machineAccounts)
-	iam.DELETE("/machineaccounts/:name", api.machineAccounts)
+	iam.GET("/machineaccounts", api.upstream.Forward)
+	iam.GET("/machineaccounts/:name", api.upstream.Forward)
+	iam.PUT("/machineaccounts/:name", api.upstream.Forward)
+	iam.PATCH("/machineaccounts/:name", api.upstream.Forward)
+	iam.DELETE("/machineaccounts/:name", api.upstream.Forward)
 }
 
 func registerConfigProjections(router *gin.Engine, api *Handler) {
