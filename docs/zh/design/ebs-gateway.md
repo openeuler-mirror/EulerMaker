@@ -671,7 +671,7 @@ Script 同样直接代理，由 apiserver 执行正文大小限制、解码、PA
 
 MachineAccount 在通过 Admin 权限校验后直接代理列表、读取、删除及 PUT/PATCH 请求。Gateway 不预读账号，不改写更新正文；解码、PATCH 应用、字段校验和并发保护均由 apiserver 负责，具体约束见 4.3.1。
 
-以下完整对象比较及请求格式、大小限制适用于其他资源的更新请求。gateway 不能只检查请求体中显式出现的字段，必须先构造本次请求将产生的完整候选对象，再对旧对象和候选对象执行授权比较；只有比较通过的候选对象可以写入 apiserver。
+以下完整对象比较及 Gateway 请求格式、大小限制仅适用于 Project、Runner 普通对象、User 的 PUT/PATCH，以及 Job `/status` PATCH；不适用于上述直通代理请求或 Runner `/status`。gateway 不能只检查请求体中显式出现的字段，必须先构造本次请求将产生的完整候选对象，再对旧对象和候选对象执行授权比较；只有比较通过的候选对象可以写入 apiserver。
 
 处理流程：
 
@@ -679,7 +679,7 @@ MachineAccount 在通过 Admin 权限校验后直接代理列表、读取、删�
 2. gateway 使用内部读取凭据从相同资源路径读取当前对象，记为 `oldObject`。上游返回 404 时向客户端返回 404，读取失败时不执行写入。需要依据对象内容授权的 Runner Job 请求在读取后继续核对 `status.runner`。
 3. `PUT` 只接受 `application/json`，请求体必须是单个完整 JSON 对象，以请求体作为 `candidateObject`。Runner 请求中的 `metadata.resourceVersion` 原样交给 apiserver 校验，gateway 不自行判断冲突。
 4. `PATCH` 只接受 `application/merge-patch+json` 和 `application/json-patch+json`。gateway 将 patch 应用到 `oldObject` 的规范 JSON 表示，得到 `candidateObject`。JSON 语法错误、patch 操作失败或结果不是对象时返回 400。
-5. PATCH 基于 `oldObject` 生成候选对象，因此未修改的 `metadata.resourceVersion` 自然保留；如果 patch 显式修改或删除该字段，gateway 不覆盖结果，由 apiserver 执行乐观并发校验。
+5. PATCH 基于 `oldObject` 生成候选对象，未修改的 `metadata.resourceVersion` 自然保留。Project、User 和 Job 状态更新不得改变该字段；Runner 普通对象更新保留请求中的版本值，由 apiserver 执行乐观并发校验。
 6. gateway 对完整的 `oldObject` 和 `candidateObject` 执行身份字段、subresource、角色权限和受保护字段比较。任何一项不通过均返回 403，不向上游发送写请求。
 7. 比较通过后，gateway 不转发原始 PATCH，而是将 `candidateObject` 以 `PUT application/json` 转发到原对象或原 `/status` 路径。上游必须使用候选对象中的 `resourceVersion` 执行原子更新；对象在步骤 2 后发生变化时返回 409，gateway 不自动重放写请求。
 
@@ -807,23 +807,31 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 
 未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。已注册路由没有配置准入规则，或调用方身份不在允许集合时，`Authorize` 返回 403，Service 拒绝记录审计结果；不能因 GET 或管理员身份而绕过规则。无需 Bearer 认证的接口按匿名身份准入，不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由 Handler 处理。
 
-全局 `Authorize` 统一调用 Policy 执行身份准入、Service 授权及声明的对象归属校验。资源路由通过显式 `policy.Rule` 声明对象归属、Watch 归属和 Service permission，`Authorize` 仅适配 HTTP 参数、错误、审计和请求级旧对象，业务判断由 Policy 完成。Runner 路径名称由 `RunnerSelf` 规则校验，Job 分配关系由 `AssignedJob` 规则校验：普通读取只查询名称、命名空间和 `status.runner`，状态更新读取完整对象并供后续更新校验复用；Project owner/member、Service 的工程范围和 permission、更新字段权限保持不变。Project 用户更新授权读取完整旧对象，后续 PUT/PATCH 复用该对象，不重复 GET；其他 Project 归属检查只投影读取名称和标签。公开读取携带无效 Token 不降级匿名；公开 Job Watch 仍检查工程成员权限，Runner 通过自身任务列表 Watch。
+全局 `Authorize` 将调用方、Project、Runner、路径及 Watch 信息交给 `policy.Authorizer.Authorize`，只负责 HTTP 错误响应、Service 审计和请求内旧对象的传递。Policy 不依赖 Gin：先校验允许身份；Service 使用认证阶段读取的最新工程范围和 `ServicePermission`，不重复查询账号；其他身份按 `ObjectAccess` 或 `WatchAccess` 检查对象归属。用户工程归属检查不赋予 Ops/Admin 跨工程特权。
 
-Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和 `/status` 读取只允许 Ops/Admin；普通对象读取、更新和状态更新允许 Ops/Admin 或 Runner。路由不再挂载重复的身份门卫。`prepareRunnerCreate` 校验注册正文；具名 Runner 读取、更新及任务列表通过统一 `RunnerSelf` 规则校验 Token Subject 与路径名称一致；普通对象更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；`/status` 原样转发，由 apiserver 保留旧 spec 和受保护 metadata，并校验状态及 resourceVersion。`prepareRunnerJobs` 仅保留查询参数和 Watch 并发检查，名额持有到转发结束。通过这些检查后才进入 `upstream.Forward`。
+路由在 `internal/gateway/router.go` 按认证、OAuth、透传及其他接口分组注册。每条定义直接声明 `Authentication`、`Authorization policy.Rule`、查询选项、额外中间件及 Handler；注册时组装 `RouteAccess` 和 `RoutePolicy`，不维护第二份路径规则表。显式 `AuthenticationNone` 且授权规则完全为空时自动补齐匿名准入；其他路由必须声明允许身份。注册时拒绝重复路由、空 Handler、空中间件及规则冲突，并检查对象归属所需路径参数；允许 Service 的业务路由必须声明有效的 `ServicePermission` 和工程路径参数。
 
-路由使用 Gin，在 `internal/gateway/router.go` 按认证、OAuth、透传及其他接口分别声明和注册。每条定义包含方法、路径、认证模式、允许身份、查询选项、额外中间件及 Handler；透传组统一设置 `upstream.Forward`，不再维护第二份路径规则表。注册时检查重复路由、空 Handler、空中间件及不一致的认证或查询配置；显式无需认证的路由自动补齐匿名准入，其余路由缺少身份规则时启动失败。规则表完成后发布 Router 独有的只读副本，再开始服务。资源 Handler 保留对象归属、Service 授权和更新字段校验；身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iamclient`、`mutation`、`upstream`、`limit`。
+完成全局检查后，透传路由统一使用 `upstream.Forward`，仅在需要处理正文或附加约束时挂载以下中间件：
 
-`iamclient` 读取用户时直接返回公共 `iamv1.User`，仅请求名称、UID、启用状态和角色；机器账号授权查询仅请求名称、类型、工程范围和权限。调用方将缺失或为 false 的 `spec.enabled` 视为未启用。OAuth 认证和注册统一返回 `OAuthResult`，保留 `RegistrationRequired` 区分首次注册；机器认证返回仅含名称、类型和令牌有效期的 `MachineAuthResult`。OAuth Handler 直接使用该客户端，测试通过 HTTP transport 验证 IAM 请求契约。
+| 请求 | 路由内处理 | 与全局授权、apiserver 的边界 |
+|------|------------|-----------------------------|
+| Project 创建 | `prepareProjectCreate` | 注入 owner，校验创建字段 |
+| Project PUT/PATCH | `prepareProjectUpdate` | 用户授权通过 `ProjectOwnerUpdate` 读取完整对象，更新校验复用；Service 更新在授权后读取对象 |
+| Runner 创建 | `prepareRunnerCreate` | 仅 Runner 自行注册，检查身份与注册字段 |
+| Runner 普通 PUT/PATCH | `prepareRunnerUpdate` | 路径归属由 `RunnerSelf` 校验，正文仍需字段权限检查 |
+| Runner 任务列表及 Watch | `prepareRunnerJobs` | 路径归属由全局授权检查；此处校验查询参数并持有 Watch 名额至转发结束 |
+| Job `/status` PATCH | `prepareJobStatusUpdate` | `AssignedJob` 已读取完整 Job 并确认分配关系，此处复用对象、合并 PATCH、校验字段后以 PUT 转发 |
+| User PUT/PATCH | `prepareUserUpdate` | 仅 Admin；读取旧对象并校验，禁止修改管理员或将普通用户提升为管理员 |
+| User DELETE | `protectAdminUser` | 仅投影读取 `spec.scopes`，拒绝删除管理员；User GET/list 直接转发且允许读取管理员 |
+| Config DELETE | `rejectBuiltInConfigDeletion` | Ops/Admin 准入后拒绝删除内置配置，其他校验由 apiserver 处理 |
 
-普通公开 GET 完成全局认证、身份准入和查询检查后直接代理到 apiserver；工程 Job 列表的 Watch 仍须校验 owner/member，Runner 读取指定 Job 须通过分配关系校验。Service 只在规则允许的业务写入口继续检查工程范围与操作权限。其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
+Build 创建、中止、删除、Job 中止、Runner 删除，以及 Config、Script、MachineAccount 的普通读写，在全局授权及适用的上述检查后直接代理，不预读或重写正文。Runner `/status` PUT/PATCH 同样直接代理，由 apiserver 保留旧 spec 和受保护 metadata、校验状态及版本冲突。完整对象更新、正文限制和错误返回边界见 4.9.1。
 
-对外注册范围包括：Project 的集合和对象；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
+普通公开 GET 不读取 Project 成员关系，直接代理完整响应；工程 Job Watch 必须为 owner/member。具名 Job GET 对匿名和用户直接转发，Runner 通过 `AssignedJob` 仅读取名称、命名空间及 `status.runner` 校验分配关系，再代理原始 GET；保留调用方字段投影和其他查询参数。Project、OldJob 不开放 `/status`，其他资源的实际开放路径以 5.1 为准。
 
-另注册固定路径 `GET /apis/ebs/v1/service-endpoints`，仅供 Runner 身份读取地址投影，不作为 apiserver 资源代理。
+`/auth/check` 在全局业务鉴权前注册，共享审计、恢复、查询检查、认证及限流，再执行 `AdmitIdentity(AllowAuthenticated)`；Service 无需业务 permission 即可检查 Token，但不能因此获得业务资源访问权限。配置投影 `build-targets` 仅允许 User，`service-endpoints` 仅允许 Runner，均由专用 Handler 返回而非直接代理。
 
-User 路由均要求 Admin 身份，并直接声明各自的处理链：集合和具名 GET 直接使用 `upstream.Forward`，不过滤或拒绝读取管理员账号；DELETE 使用 `protectAdminUser → upstream.Forward`，仅投影读取 `spec.scopes` 判断管理员保护；PUT/PATCH 使用 `prepareUserUpdate → upstream.Forward`。更新读取旧对象、合并候选对象并校验字段权限，禁止修改管理员和将普通用户提升为管理员，PATCH 校验通过后以完整 PUT 转发。删除保护或更新校验失败立即终止，不继续转发。
-
-`/auth/check` 在全局业务鉴权前注册，只执行认证、身份限流和 `AdmitIdentity(AllowAuthenticated)`；Service 无需业务 permission 即可检查 Token。其他允许 Service 的路由必须声明有效的 `ServicePermission`。注册时同时校验对象归属规则所需的路径参数及 Watch 配置，避免缺少参数或权限声明。
+`iamclient` 读取用户时直接返回公共 `iamv1.User`，使用 4.8 节所述字段投影。调用方将缺失或为 false 的 `spec.enabled` 视为未启用。OAuth 认证和注册统一返回 `OAuthResult`，保留 `RegistrationRequired` 区分首次注册；机器认证返回仅含名称、类型和令牌有效期的 `MachineAuthResult`。OAuth Handler 直接使用该客户端，测试通过 HTTP transport 验证 IAM 请求契约。
 
 ### 5.1 路由与权限速览
 
@@ -838,7 +846,7 @@ Service Token 的资源权限仅按 4.3.1，不继承下表中的公开读取或
 | `/auth/register`、`/auth/login` | 无 | 匿名注册普通用户、密码登录 |
 | `/auth/machine-token`、`/auth/check` | 无 | 前者凭 MachineAccount Basic 凭据换取 Runner/Service Token；后者凭 Bearer Token 校验身份 |
 | `/auth/users/{name}/password`、`/auth/machineaccounts` | 无 | 登录用户仅修改本人密码；仅 Admin 可创建 MachineAccount |
-| `/apis/ebs/v1/projects[/{name}]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 可修改 Project；不开放 Project 删除和 `/status`；member 不可写 Project |
+| `/apis/ebs/v1/projects[/{name}]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 用户可修改，Service 按工程范围及 `projects:update` 权限更新；不开放 Project 删除和 `/status`；member 不可写 Project |
 | `/apis/ebs/v1/projects/{project}/{资源}[/{name}][/status]`；资源为 `snapshots`、`buildinfos`、`buildgraphs`、`rpmrepos` | 匿名及已认证用户仅可 GET | 无；只注册 GET |
 | `/apis/ebs/v1/projects/{project}/builds[/{name}][/status]`、`/apis/ebs/v1/projects/{project}/builds/{name}/abort` | 匿名及已认证用户可读取；watch 不开放 | 按上表权限创建或中止；仅 Project owner 可删除；Gateway 不允许任何身份 PUT/PATCH Build 及其 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs[/{name}][/status]` | 匿名及已认证用户可读取；Runner 仅可读取已分配的具名 Job；watch 需认证并授权 | 不开放 Job 创建、删除和本体更新；Runner 仅可 PATCH 已分配 Job 的 `/status` |

@@ -132,6 +132,7 @@ Gateway 负责身份与操作权限校验，Script 访问不按 Project 成员�
 | 匿名调用方 | 不允许访问 |
 | BuildInfo Controller 内部服务身份 | 按名称读取全局脚本，并将其元数据写入 Job |
 | Runner 机器身份 | 读取、列表全局脚本，不能写脚本 |
+| Service 机器身份 | 禁止读取和写入脚本 |
 | Scheduler | 无新增权限 |
 
 全局脚本向已认证 User（含 Ops/Admin）和 Runner 开放读取，不得存放 Project 私有数据或凭据。Service Token 不允许访问，返回 403；匿名请求及无效 Token 返回 401，读写统一使用已认证限流。读取脚本不授权执行任意 Job，Job 执行仍受已有绑定检查约束。
