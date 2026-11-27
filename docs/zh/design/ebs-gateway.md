@@ -809,7 +809,7 @@ Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和
 
 `iamclient` 读取用户时直接返回公共 `iamv1.User`，仅请求名称、UID、启用状态和角色；机器账号授权查询仅请求名称、类型、工程范围和权限。调用方将缺失或为 false 的 `spec.enabled` 视为未启用。OAuth 认证和注册统一返回 `OAuthResult`，保留 `RegistrationRequired` 区分首次注册；机器认证返回仅含名称、类型和令牌有效期的 `MachineAuthResult`。OAuth Handler 直接使用该客户端，测试通过 HTTP transport 验证 IAM 请求契约。
 
-认证后的用户公开读取仍使用公开读取 Handler；Runner 读取指定 Job 须通过分配关系校验，Service 只在规则允许的业务写入口继续检查工程范围与操作权限。其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
+普通公开 GET 完成全局认证、身份准入和查询检查后直接代理到 apiserver；工程 Job 列表的 Watch 仍须校验 owner/member，Runner 读取指定 Job 须通过分配关系校验。Service 只在规则允许的业务写入口继续检查工程范围与操作权限。其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
 
 对外注册范围包括：Project 的集合和对象；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
 

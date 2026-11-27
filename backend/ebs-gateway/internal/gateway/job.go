@@ -14,16 +14,11 @@ import (
 
 // runnerJobReadGuard verifies assignment before a Runner reads a named Job.
 func (a *Handler) runnerJobReadGuard(c *gin.Context) {
-	access := requireResourceCheck(c, runnerJobReadCheck)
-	if access == nil {
-		return
-	}
 	who := middleware.Principal(c)
 	if who.Type == identity.RunnerType && !a.runnerOwnsJob(c, who.Subject) {
 		c.Abort()
 		return
 	}
-	access.pending = noPendingCheck
 	c.Next()
 }
 
@@ -72,4 +67,16 @@ func (a *Handler) prepareJobStatusUpdate(c *gin.Context) {
 		return
 	}
 	c.Next()
+}
+
+func (a *Handler) jobWatchGuard(c *gin.Context) {
+	if !policy.HasWatch(c.Request.URL.Query()) {
+		c.Next()
+		return
+	}
+	a.authorizeAuthenticatedRoute(c, policy.Route{
+		Resource: "jobs",
+		Project:  c.Param("project"),
+		Method:   c.Request.Method,
+	})
 }
