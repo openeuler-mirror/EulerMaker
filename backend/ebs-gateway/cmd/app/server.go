@@ -145,7 +145,7 @@ func run(opts options) error {
 		IPLimits:         limit.New(opts.ipRate, opts.ipBurst, time.Now),
 		BodyLimit:        opts.maxBody,
 		IAM:              accounts,
-		LocalAuthEnabled: oauthConfig.LocalAuthenticationEnabled(),
+		LocalAuthEnabled: opts.oauthConfigFile == "",
 	})
 	if err != nil {
 		return fmt.Errorf("initialize Gateway handlers: %w", err)
@@ -161,15 +161,7 @@ func run(opts options) error {
 		return fmt.Errorf("listen on --port=%d: %w", opts.port, err)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	backgroundDone := make(chan struct{})
-	go func() {
-		defer close(backgroundDone)
-		oauthHandler.Run(ctx)
-	}()
-	defer func() {
-		cancel()
-		<-backgroundDone
-	}()
+	defer cancel()
 	klog.InfoS("Gateway listening", "address", listener.Addr().String())
 	if err := serve(ctx, server, listener, 15*time.Second); err != nil {
 		return err

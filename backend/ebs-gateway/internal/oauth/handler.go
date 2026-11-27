@@ -42,24 +42,8 @@ func New(config Config, accounts *iamclient.Client, tokens *identity.Tokens, now
 	}
 }
 
-// Run warms discovery and retries temporary provider failures without blocking other routes.
-func (h *Handler) Run(ctx context.Context) {
-	if h.config.LocalAuthenticationEnabled() {
-		return
-	}
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		attempt, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_, _, _ = h.provider.ensure(attempt)
-		cancel()
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
+// LocalAuthenticationEnabled reports whether local login and registration are enabled.
+func (h *Handler) LocalAuthenticationEnabled() bool { return h.config.PublicBaseURL == "" }
 
 type apiError struct {
 	status int
@@ -86,7 +70,7 @@ func respondError(c *gin.Context, err error) {
 func (h *Handler) Providers(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	providers := []gin.H{}
-	localAuth := h.config.LocalAuthenticationEnabled()
+	localAuth := h.LocalAuthenticationEnabled()
 	if !localAuth {
 		providers = append(providers, gin.H{"id": h.config.Provider.ID, "loginURL": "/auth/oauth/" + h.config.Provider.ID + "/login"})
 	}
@@ -96,7 +80,7 @@ func (h *Handler) Providers(c *gin.Context) {
 func (h *Handler) begin(c *gin.Context, login bool) bool {
 	c.Header("Cache-Control", "no-store")
 	c.Header("Referrer-Policy", "no-referrer")
-	if h.config.LocalAuthenticationEnabled() || (c.Param("provider") != "" && c.Param("provider") != h.config.Provider.ID) {
+	if h.LocalAuthenticationEnabled() || (c.Param("provider") != "" && c.Param("provider") != h.config.Provider.ID) {
 		respondError(c, failure(404, "ProviderUnavailable"))
 		return false
 	}
