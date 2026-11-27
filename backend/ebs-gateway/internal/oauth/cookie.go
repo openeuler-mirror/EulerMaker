@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 )
 
 const contextTTL = 10 * time.Minute
@@ -25,18 +25,18 @@ type profile struct {
 }
 
 type browserContext struct {
-	Purpose           string                `json:"purpose"`
-	Provider          string                `json:"provider"`
-	ConfigFingerprint string                `json:"configFingerprint"`
-	IssuedAt          int64                 `json:"issuedAt"`
-	ExpiresAt         int64                 `json:"expiresAt"`
-	ReturnTo          string                `json:"returnTo"`
-	StateHash         string                `json:"stateHash,omitempty"`
-	Verifier          string                `json:"verifier,omitempty"`
-	NonceHash         string                `json:"nonceHash,omitempty"`
-	RegistrationID    string                `json:"registrationID,omitempty"`
-	Identity          *iam.ExternalIdentity `json:"identity,omitempty"`
-	Profile           profile               `json:"profile"`
+	Purpose           string                      `json:"purpose"`
+	Provider          string                      `json:"provider"`
+	ConfigFingerprint string                      `json:"configFingerprint"`
+	IssuedAt          int64                       `json:"issuedAt"`
+	ExpiresAt         int64                       `json:"expiresAt"`
+	ReturnTo          string                      `json:"returnTo"`
+	StateHash         string                      `json:"stateHash,omitempty"`
+	Verifier          string                      `json:"verifier,omitempty"`
+	NonceHash         string                      `json:"nonceHash,omitempty"`
+	RegistrationID    string                      `json:"registrationID,omitempty"`
+	Identity          *iamclient.ExternalIdentity `json:"identity,omitempty"`
+	Profile           profile                     `json:"profile"`
 }
 
 func randomValue() string {

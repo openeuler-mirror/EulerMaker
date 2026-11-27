@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	ebsv1 "ebs-api/ebs/v1"
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/mutation"
 )
@@ -189,7 +189,7 @@ func (a *Authorizer) validateProjectLabels(ctx context.Context, who identity.Pri
 }
 
 func (a *Authorizer) validateMember(ctx context.Context, name string) error {
-	client := iam.New(a.upstream)
+	client := iamclient.New(a.upstream)
 	user, status, err := client.GetUser(ctx, name)
 	if err != nil || status != http.StatusOK || user.Name != name || !user.Enabled || len(user.Scopes) != 1 ||
 		(user.Scopes[0] != identity.UserScope && user.Scopes[0] != identity.OpsScope) {

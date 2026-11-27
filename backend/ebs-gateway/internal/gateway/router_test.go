@@ -18,7 +18,7 @@ import (
 	"k8s.io/klog/v2"
 
 	ebsv1 "ebs-api/ebs/v1"
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/middleware"
@@ -199,9 +199,9 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 		"/apis/ebs/v1/scripts/{name}":                          "get put patch delete",
 		"/apis/ebs/v1/runners/{runner}/jobs":                   "get",
 		"/apis/ebs/v1/service-endpoints":                       "get",
-		"/apis/iam.ebs/v1/users":                               "get",
-		"/apis/iam.ebs/v1/machineaccounts":                     "get",
-		"/apis/iam.ebs/v1/machineaccounts/{name}":              "get delete put patch",
+		"/apis/iam.ebs/v1/users":                         "get",
+		"/apis/iam.ebs/v1/machineaccounts":               "get",
+		"/apis/iam.ebs/v1/machineaccounts/{name}":        "get delete put patch",
 	} {
 		if len(document.Paths[path]) != len(strings.Fields(methods)) {
 			t.Fatalf("methods for %s: %v", path, document.Paths[path])
@@ -241,7 +241,7 @@ func newTestAPIWithConfig(t *testing.T, transport http.RoundTripper, burst int, 
 		t.Fatal(err)
 	}
 	now := func() time.Time { return time.Unix(1790000000, 0) }
-	accounts := iam.New(client)
+	accounts := iamclient.New(client)
 	api, err := NewHandler(Dependencies{
 		Upstream: client, IAM: accounts, Tokens: tokens, Now: now,
 		Limits: limit.New(100, burst, now), BodyLimit: 1 << 20, LocalAuthEnabled: cfg.LocalAuthenticationEnabled(),

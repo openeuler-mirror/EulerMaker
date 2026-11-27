@@ -13,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	iamv1 "ebs-api/iam/v1"
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/upstream"
 )
@@ -55,7 +55,7 @@ func TestAuthMiddleware(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			auth := NewAuth(tokens, iam.New(client), func() time.Time { return now })
+			auth := NewAuth(tokens, iamclient.New(client), func() time.Time { return now })
 			token, err := tokens.Issue("account", test.typ, test.scope, time.Hour, now)
 			if err != nil {
 				t.Fatal(err)
@@ -231,7 +231,7 @@ func TestRejectedAccountAuditIdentity(t *testing.T) {
 			c, _ := gin.CreateTestContext(response)
 			c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 			c.Request.Header.Set("Authorization", "Bearer "+token)
-			auth := NewAuth(tokens, iam.New(client), func() time.Time { return now })
+			auth := NewAuth(tokens, iamclient.New(client), func() time.Time { return now })
 			if auth.verifyAccess(c) || !c.IsAborted() || response.Code != tc.wantStatus || Principal(c).Subject != tc.auditSubject {
 				t.Fatalf("aborted=%v status=%d audit subject=%q", c.IsAborted(), response.Code, Principal(c).Subject)
 			}

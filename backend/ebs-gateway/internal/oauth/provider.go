@@ -17,7 +17,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/mutation"
 )
 
@@ -205,8 +205,8 @@ type claims struct {
 	NotBefore         int64  `json:"nbf"`
 }
 
-func (p *provider) exchange(ctx context.Context, code string, state browserContext, responseIssuer string) (iam.ExternalIdentity, profile, error) {
-	var identity iam.ExternalIdentity
+func (p *provider) exchange(ctx context.Context, code string, state browserContext, responseIssuer string) (iamclient.ExternalIdentity, profile, error) {
+	var identity iamclient.ExternalIdentity
 	var info claims
 	e, verifier, err := p.ensure(ctx)
 	if err != nil {
@@ -264,7 +264,7 @@ func (p *provider) exchange(ctx context.Context, code string, state browserConte
 		}
 		info = user
 	}
-	identity = iam.ExternalIdentity{Issuer: e.Issuer, Subject: info.Subject}
+	identity = iamclient.ExternalIdentity{Issuer: e.Issuer, Subject: info.Subject}
 	if !validIdentity(identity) {
 		return identity, profile{}, failure(401, "OAuthAuthenticationFailed")
 	}
@@ -275,7 +275,7 @@ func (p *provider) exchange(ctx context.Context, code string, state browserConte
 	return identity, result, nil
 }
 
-func validIdentity(identity iam.ExternalIdentity) bool {
+func validIdentity(identity iamclient.ExternalIdentity) bool {
 	valid := func(value string, max int) bool {
 		return value != "" && len(value) <= max && utf8.ValidString(value) && !strings.ContainsFunc(value, unicode.IsControl)
 	}

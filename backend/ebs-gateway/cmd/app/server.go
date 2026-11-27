@@ -22,7 +22,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"ebs-gateway/internal/gateway"
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/oauth"
@@ -135,7 +135,7 @@ func run(opts options) error {
 	if err != nil {
 		return fmt.Errorf("load --oauth-config-file: %w", err)
 	}
-	accounts := iam.New(client)
+	accounts := iamclient.New(client)
 	oauthHandler := oauth.New(oauthConfig, accounts, tokens, time.Now)
 	api, err := gateway.NewHandler(gateway.Dependencies{
 		Upstream:         client,
