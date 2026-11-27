@@ -30,7 +30,7 @@ Policy 的公共入口负责分派，Project、Runner 的授权及写入规则�
 测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
 认证接口及专用限流测试放在 [auth/handler_test.go](internal/auth/handler_test.go)，其余 Handler 测试与业务文件对应；全局请求链、路由规则和 OpenAPI 路由契约测试统一放在 [router_test.go](internal/gateway/router_test.go)。
 
-Gateway 不开放 Job 本体 PUT/PATCH。用户中止任务使用 `POST /projects/{project}/jobs/{name}/abort`（前缀 `/apis/ebs/v1`），Runner 通过 Job `/status` 更新执行状态，并继续校验分配归属和允许写入的字段。内部组件直连 apiserver 的接口不变。
+Gateway 不开放 Job 创建、删除和本体 PUT/PATCH。用户中止任务使用 `POST /projects/{project}/jobs/{name}/abort`（前缀 `/apis/ebs/v1`），Runner 通过 `PATCH /projects/{project}/jobs/{name}/status` 更新执行状态（不开放 PUT），并继续校验分配归属和允许写入的字段。内部组件直连 apiserver 的接口不变。
 
 ## 本地运行
 

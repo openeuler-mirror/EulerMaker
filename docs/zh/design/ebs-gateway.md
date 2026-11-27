@@ -584,7 +584,7 @@ apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 40
 | Project 子资源：历史 Job（oldjobs） | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
 | Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取、创建和中止；仅为 Project owner 时可删除；禁止 PUT/PATCH |
 | 集群级 Config | 禁止 | 同 Owner | `get/list/create/update/patch/delete`，内置对象禁止删除 | 禁止 | 同 Ops |
-| Project 子资源：Job（不含 `/abort`） | 主资源 `get/list/create/delete`，禁止 `/status` 写入 | 主资源 `get/list/create`，禁止 `delete` 和 `/status` 写入 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 主资源 `get/list/create/delete`，禁止 `/status` 写入 |
+| Project 子资源：Job（不含 `/abort`） | 主资源 `get/list`，禁止 `/status` 写入 | 同 Owner | 同 Owner | 仅已分配 Job 的 `get` 和 `/status` 的 `patch` | 同 Owner |
 | Job `/abort` | 本工程 POST | 本工程 POST | 仅 owner/member 工程 POST | 禁止 | 仅 owner/member 工程 POST |
 | Runner 范围 Job list/watch | 禁止 | 禁止 | 禁止 | 自身路径 `get/list/watch`，由 apiserver 按 `status.runner` 强制过滤 | 禁止 |
 | Runner | 禁止 | 禁止 | `get/list/update/patch/delete`，禁止创建，包括 `/status` 读写；禁止 Watch | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 同 Ops |
@@ -638,7 +638,7 @@ Runner 范围 Job list/watch 仅允许 Runner Token 对自身路径执行 GET，
 
 - 仅注册 `POST /abort`，并对该请求执行本节专用鉴权。
 - 读取路径所指的服务端 Project，以可信 owner/member 标签判定；归属查询失败不放行。不得使用请求体、客户端标签或 Job payload 判断归属。
-- 用户只能通过 `/abort` 中止 Job；普通用户、ops 和 admin 均不获得 Job `/status` 写权限。Gateway 不注册 Job 本体 PUT/PATCH 路由，任何身份都不能通过该入口修改 Job。Runner 继续通过 `/status` 更新已分配任务；内部组件直连 apiserver 的接口不变。
+- 用户只能通过 `/abort` 中止 Job；普通用户、ops 和 admin 均不获得 Job `/status` 写权限。Gateway 不注册 Job 创建、删除、本体 PUT/PATCH 和 `/status` PUT 路由。Runner 继续通过 `PATCH /status` 更新已分配任务；内部组件直连 apiserver 的接口不变。
 - 转发原始 apiserver 成功对象和 Status 错误，不把中止转成删除，不自动修改请求 UID。审计记录操作者、工程、Job、请求 UID、响应码与最终返回 phase；原因属于不可信文本，结构化记录并限制长度，不记录 token/payload。
 - 测试覆盖各用户角色的 owner/member 放行与非成员拒绝、Runner/机器身份、匿名、错误方法、Project 查询失败及 404/409/422 透传。
 
@@ -829,7 +829,7 @@ Service Token 的资源权限仅按 4.3.1，不继承下表中的公开读取或
 | `/apis/ebs/v1/projects[/{name}][/status]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 可修改 Project（包含 `/status`）；不开放 Project 删除；member 不可写 Project |
 | `/apis/ebs/v1/projects/{project}/{资源}[/{name}][/status]`；资源为 `snapshots`、`buildinfos`、`buildgraphs`、`rpmrepos` | 匿名及已认证用户仅可 GET | 无；只注册 GET |
 | `/apis/ebs/v1/projects/{project}/builds[/{name}][/status]`、`/apis/ebs/v1/projects/{project}/builds/{name}/abort` | 匿名及已认证用户可读取；watch 不开放 | 按上表权限创建或中止；仅 Project owner 可删除；Gateway 不允许任何身份 PUT/PATCH Build 及其 `/status` |
-| `/apis/ebs/v1/projects/{project}/jobs[/{name}][/status]` | 匿名及已认证用户可读取；Runner 仅可读取已分配的具名 Job；watch 需认证并授权 | owner/member 或 Admin 可创建；owner 或 Admin 可删除；不开放 Job 本体 PUT/PATCH；Runner 仅可更新已分配 Job 的 `/status` |
+| `/apis/ebs/v1/projects/{project}/jobs[/{name}][/status]` | 匿名及已认证用户可读取；Runner 仅可读取已分配的具名 Job；watch 需认证并授权 | 不开放 Job 创建、删除和本体更新；Runner 仅可 PATCH 已分配 Job 的 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs/{name}/abort` | 无 | 仅本 Project 的 owner/member 用户可 POST |
 | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]` | 匿名及已认证用户仅可 GET；Runner 不开放 | 无；只注册 GET |
 | `/apis/ebs/v1/runners[/{name}][/status]` | Ops/Admin 可读；Runner 仅可读自身普通对象 | 仅 Runner Token 可创建自身对象；Ops/Admin 可管理已有 Runner，但不得创建；Runner 可受限修改自身对象和 `/status`，不得删除 |
