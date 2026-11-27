@@ -78,7 +78,7 @@ func TestDocumentContract(t *testing.T) {
 			t.Fatalf("Job ordinary %s is still exposed", method)
 		}
 		if _, exists := paths[jobPath+"/status"].(map[string]any)[method]; exists != (method == "patch") {
-			t.Fatalf("Job status %s exposed=%v", method, exists)
+			t.Fatalf("Job status %s exposed=%v, want %v", method, exists, method == "patch")
 		}
 	}
 	if _, exists := paths[jobPath+"/abort"].(map[string]any)["post"]; !exists {

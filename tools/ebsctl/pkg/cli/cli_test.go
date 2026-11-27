@@ -89,8 +89,8 @@ func TestAuthenticatedCommandsKeepAuthenticationFailures(t *testing.T) {
 		{"watch stream", []string{"get", "jobs", "--watch-only"}},
 		{"wait initial get", []string{"wait", "job", "job-a", "--for=delete"}},
 		{"mine list", []string{"get", "projects", "--mine"}},
-		{"delete", []string{"delete", "job", "job-a", "--yes"}},
-		{"delete initial list", []string{"delete", "jobs", "--all", "--yes"}},
+		{"delete", []string{"delete", "build", "build-a", "--yes"}},
+		{"delete initial list", []string{"delete", "builds", "--all", "--yes"}},
 		{"patch", []string{"patch", "job", "job-a", "--patch", `{}`}},
 		{"create", []string{"create", "-f", "-"}},
 		{"replace", []string{"replace", "-f", "-"}},
@@ -115,7 +115,7 @@ func TestAuthenticatedCommandsKeepAuthenticationFailures(t *testing.T) {
 			}
 			out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
 			args := append([]string{"--config", filepath.Join(directory, "missing.yaml"), "--gateway", server.URL, "-p", "project-a"}, test.args...)
-			manifest := "apiVersion: ebs/v1\nkind: Job\nmetadata:\n  name: job-a\n  resourceVersion: '1'\n"
+			manifest := "apiVersion: ebs/v1\nkind: Build\nmetadata:\n  name: build-a\n  resourceVersion: '1'\n"
 			code := Execute(context.Background(), Streams{In: strings.NewReader(manifest), Out: out, ErrOut: errOut}, args)
 			wantCalls, wantCode := int32(1), 3
 			if test.name == "mine list" {
@@ -154,6 +154,28 @@ func TestProjectFlagAliases(t *testing.T) {
 	}
 }
 
+func TestCreateJobRejectedLocally(t *testing.T) {
+	t.Setenv("EBS_TOKEN", "token-a")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unsupported creation reached Gateway: %s %s", r.Method, r.URL)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	manifest := "apiVersion: ebs/v1\nkind: Job\nmetadata:\n  name: job-a\n"
+	for _, validate := range []string{"true", "false"} {
+		errOut := &bytes.Buffer{}
+		directory := t.TempDir()
+		if err := os.Chmod(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		args := []string{"--config", filepath.Join(directory, "missing.yaml"), "--gateway", server.URL, "-p", "project-a", "create", "-f", "-", "--validate=" + validate}
+		code := Execute(context.Background(), Streams{In: strings.NewReader(manifest), Out: io.Discard, ErrOut: errOut}, args)
+		if code != 1 || !strings.Contains(errOut.String(), "Job does not support create") {
+			t.Fatalf("validate=%s code=%d stderr=%s", validate, code, errOut)
+		}
+	}
+}
+
 func TestLoginThenCreateAndGet(t *testing.T) {
 	var created map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,14 +187,14 @@ func TestLoginThenCreateAndGet(t *testing.T) {
 				t.Fatalf("unexpected login: %#v", login)
 			}
 			_, _ = io.WriteString(w, `{"token":"token-a","tokenType":"Bearer","expiresIn":3600}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/project-a/jobs":
+		case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/project-a/builds":
 			if r.Header.Get("Authorization") != "Bearer token-a" {
 				t.Fatalf("missing token")
 			}
 			_ = json.NewDecoder(r.Body).Decode(&created)
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(created)
-		case r.Method == http.MethodGet && r.URL.Path == "/apis/ebs/v1/projects/project-a/jobs/job-a":
+		case r.Method == http.MethodGet && r.URL.Path == "/apis/ebs/v1/projects/project-a/builds/build-a":
 			_ = json.NewEncoder(w).Encode(created)
 		default:
 			http.NotFound(w, r)
@@ -189,14 +211,14 @@ func TestLoginThenCreateAndGet(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("login code=%d stderr=%s", code, loginErr.String())
 	}
-	manifest := filepath.Join(directory, "job.yaml")
-	data := []byte("apiVersion: ebs/v1\nkind: Job\nmetadata:\n  name: job-a\nspec:\n  priority: 10\n")
+	manifest := filepath.Join(directory, "build.yaml")
+	data := []byte("apiVersion: ebs/v1\nkind: Build\nmetadata:\n  name: build-a\nspec:\n  priority: 10\n")
 	if err := os.WriteFile(manifest, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	createOut, createErr := &bytes.Buffer{}, &bytes.Buffer{}
 	code = Execute(context.Background(), Streams{In: strings.NewReader(""), Out: createOut, ErrOut: createErr}, []string{"--config", configPath, "-n", "project-a", "create", "-f", manifest, "-o", "name"})
-	if code != 0 || strings.TrimSpace(createOut.String()) != "job/job-a" {
+	if code != 0 || strings.TrimSpace(createOut.String()) != "build/build-a" {
 		t.Fatalf("create code=%d stdout=%q stderr=%q", code, createOut.String(), createErr.String())
 	}
 	metadata := created["metadata"].(map[string]any)
@@ -204,8 +226,8 @@ func TestLoginThenCreateAndGet(t *testing.T) {
 		t.Fatalf("namespace not injected: %#v", created)
 	}
 	getOut, getErr := &bytes.Buffer{}, &bytes.Buffer{}
-	code = Execute(context.Background(), Streams{In: strings.NewReader(""), Out: getOut, ErrOut: getErr}, []string{"--config", configPath, "-p", "project-a", "get", "job", "job-a", "-o", "json"})
-	if code != 0 || !strings.Contains(getOut.String(), `"job-a"`) {
+	code = Execute(context.Background(), Streams{In: strings.NewReader(""), Out: getOut, ErrOut: getErr}, []string{"--config", configPath, "-p", "project-a", "get", "build", "build-a", "-o", "json"})
+	if code != 0 || !strings.Contains(getOut.String(), `"build-a"`) {
 		t.Fatalf("get code=%d stdout=%q stderr=%q", code, getOut.String(), getErr.String())
 	}
 }
@@ -275,12 +297,14 @@ func TestGetProjectsMineRejectsUnsupportedUsage(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsUnsupportedCommands(t *testing.T) {
+func TestRejectsUnsupportedResourceCommands(t *testing.T) {
 	streams := Streams{In: strings.NewReader(""), Out: io.Discard, ErrOut: io.Discard}
 	for _, args := range [][]string{
 		{"get", "configs", "--watch"},
 		{"delete", "cfg", "build-target", "--yes"},
 		{"delete", "cfg", "--all", "--yes"},
+		{"delete", "job", "job-a", "--yes"},
+		{"delete", "jobs", "--all", "--yes"},
 	} {
 		if code := Execute(context.Background(), streams, args); code != 2 {
 			t.Fatalf("args=%v exit code=%d", args, code)

@@ -193,7 +193,9 @@ func (a *App) manifestCommand(name, method string) *cobra.Command {
 			}
 			failures := 0
 			for _, manifest := range manifests {
-				if method == http.MethodPut && !resource.HasResourceVersion(manifest) {
+				if method == http.MethodPost && manifest.Definition.NoCreate {
+					err = UsageError("%s does not support create", manifest.Definition.Kind)
+				} else if method == http.MethodPut && !resource.HasResourceVersion(manifest) {
 					err = UsageError("%s/%s: replace requires metadata.resourceVersion", manifest.Definition.Singular, manifest.Name)
 				} else {
 					path, pathErr := manifest.Definition.CollectionPath(manifest.Project)

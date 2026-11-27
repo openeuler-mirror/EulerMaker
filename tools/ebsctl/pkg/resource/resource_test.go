@@ -13,6 +13,9 @@ func TestResolveAliasesAndPaths(t *testing.T) {
 		}
 	}
 	job, _ := Resolve("job")
+	if !job.NoCreate || !job.NoDelete {
+		t.Fatal("Job creation and deletion must not be offered through Gateway")
+	}
 	path, err := job.ObjectPath("project-a", "job-a")
 	if err != nil || path != "/apis/ebs/v1/projects/project-a/jobs/job-a" {
 		t.Fatalf("unexpected path %q: %v", path, err)

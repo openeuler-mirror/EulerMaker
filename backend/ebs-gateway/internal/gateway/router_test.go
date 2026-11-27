@@ -379,6 +379,10 @@ func TestRouteRegistrationValidation(t *testing.T) {
 		{"unknown identity", func(r *routeDefinition) { r.Authorization.Identities = 128 }, "identities"},
 		{"unknown ownership", func(r *routeDefinition) { r.Authorization.ObjectAccess = "unknown" }, "object access"},
 		{"missing service permission", func(r *routeDefinition) { r.Authorization.Identities = policy.AllowService }, "ServicePermission"},
+		{"invalid service permission", func(r *routeDefinition) {
+			r.Authorization.Identities = policy.AllowService
+			r.Authorization.ServicePermission = "unknown"
+		}, "ServicePermission"},
 		{"unused service permission", func(r *routeDefinition) { r.Authorization.ServicePermission = "builds:create" }, "allowed Service"},
 		{"missing project parameter", func(r *routeDefinition) { r.Authorization.ObjectAccess = policy.ProjectOwner }, ":project"},
 		{"missing runner parameter", func(r *routeDefinition) { r.Authorization.ObjectAccess = policy.RunnerSelf }, ":runner"},
