@@ -55,6 +55,8 @@ docker build -f backend/ebs-gateway/Dockerfile -t ebs-gateway:dev .
 
 ## 路由与安全约束
 
+OAuth 按登录和回调请求初始化 Provider，不启动后台预热任务；初始化失败后，后续请求在 30 秒重试间隔结束后可再次尝试，成功后复用缓存。配置修改通过重启加载。
+
 OAuth 默认关闭，使用 `--oauth-config-file=/path/to/oauth.yaml` 启用，配置示例和注册恢复规则见 [OAuth 设计](../../docs/zh/design/ebs-gateway.md#108-配置与部署)。支持 OIDC discovery 或固定端点；普通 OAuth 的 `userinfo-sub` adapter 要求固定用户接口返回稳定且不复用的 `sub`，不能直接套用仅返回用户名的平台。
 
 指定 `--oauth-config-file` 即启用 OAuth，自动关闭本地密码登录和注册（`/auth/login`、`/auth/register` 返回 403），不提供独立开关；不指定配置文件时使用本地登录和注册。无效配置导致启动失败，提供方暂不可用不会自动回退密码登录。首次 OAuth 登录未关联账号时统一进入补全注册流程，既有 JWT 和 Runner 认证不受影响。

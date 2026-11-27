@@ -26,6 +26,24 @@ import (
 	"ebs-gateway/internal/upstream"
 )
 
+func TestLocalAuthenticationEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config Config
+		want   bool
+	}{
+		{"local", Config{}, true},
+		{"OAuth", testConfig("https://id.example.com"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := New(tc.config, nil, nil, nil)
+			if got := h.LocalAuthenticationEnabled(); got != tc.want {
+				t.Fatalf("LocalAuthenticationEnabled()=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 type fakeAccounts struct {
 	account       iamclient.OAuthResult
 	user          iamv1.User
@@ -169,6 +187,46 @@ func newFixture(t *testing.T) *oauthFixture {
 	f.h = New(config, iamclient.New(client), tokens, func() time.Time { return f.now })
 	f.h.provider = newProvider(config, f.h.now, f.server.Client().Transport)
 	return f
+}
+
+func TestLoginInitializesProviderOnDemand(t *testing.T) {
+	f := newFixture(t)
+	base := f.h.provider.client.Transport
+	calls, available := 0, false
+	f.h.provider.client.Transport = transportFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if !available {
+			return nil, fmt.Errorf("provider offline")
+		}
+		return base.RoundTrip(r)
+	})
+	if f.h.provider.ready {
+		t.Fatal("provider initialized before a login request")
+	}
+	if response := serve(f.h, http.MethodGet, "/auth/providers", ""); response.Code != http.StatusOK || calls != 0 {
+		t.Fatalf("provider listing triggered initialization: status=%d calls=%d", response.Code, calls)
+	}
+	for _, tc := range []struct {
+		name      string
+		advance   time.Duration
+		available bool
+		status    int
+		calls     int
+	}{
+		{"initial failure", 0, false, http.StatusServiceUnavailable, 1},
+		{"retry cooldown", 0, true, http.StatusServiceUnavailable, 1},
+		{"recovery", 30 * time.Second, true, http.StatusFound, 2},
+		{"cached configuration", time.Minute, true, http.StatusFound, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.now = f.now.Add(tc.advance)
+			available = tc.available
+			response := serve(f.h, http.MethodGet, "/auth/oauth/community/login", "")
+			if response.Code != tc.status || calls != tc.calls {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, calls, response.Body)
+			}
+		})
+	}
 }
 
 func serve(h *Handler, method, path, body string, cookies ...*http.Cookie) *httptest.ResponseRecorder {

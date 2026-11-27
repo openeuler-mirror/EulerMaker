@@ -244,7 +244,7 @@ func newTestAPIWithConfig(t *testing.T, transport http.RoundTripper, burst int, 
 	accounts := iamclient.New(client)
 	api, err := NewHandler(Dependencies{
 		Upstream: client, IAM: accounts, Tokens: tokens, Now: now,
-		Limits: limit.New(100, burst, now), BodyLimit: 1 << 20, LocalAuthEnabled: cfg.LocalAuthenticationEnabled(),
+		Limits: limit.New(100, burst, now), BodyLimit: 1 << 20, LocalAuthEnabled: cfg.PublicBaseURL == "",
 		IPLimits: limit.New(1000, 2000, now),
 	})
 	if err != nil {
