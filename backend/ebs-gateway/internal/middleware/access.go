@@ -9,28 +9,31 @@ import (
 )
 
 // AdmitIdentity enforces route-level identity access after authentication.
-func AdmitIdentity(c *gin.Context) {
-	path := c.FullPath()
-	if path == "" {
-		c.Next() // Preserve the router's handling of unregistered paths.
-		return
-	}
-	who := Principal(c)
-	rule, exists := routePolicies[routeKey{Method: c.Request.Method, Path: path}]
-	if !exists || rule.Identities&principalIdentity(who) == 0 {
-		if who.Type == identity.ServiceType {
-			c.Set("serviceProject", c.Param("project"))
-			c.Set("serviceAuthorization", "denied")
+func AdmitIdentity(routes *RoutePolicies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		path := c.FullPath()
+		if path == "" {
+			c.Next() // Preserve the router's handling of unregistered paths.
+			return
 		}
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "identity is not allowed for this route"})
-		return
+		who := Principal(c)
+		rule, exists := routes.rules[RouteKey{Method: c.Request.Method, Path: path}]
+		if !exists || rule.Identities&principalIdentity(who) == 0 {
+			if who.Type == identity.ServiceType {
+				c.Set("serviceProject", c.Param("project"))
+				c.Set("serviceAuthorization", "denied")
+			}
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "identity is not allowed for this route"})
+			return
+		}
+		c.Next()
 	}
-	c.Next()
+
 }
 
-func principalIdentity(who identity.Principal) routeIdentities {
+func principalIdentity(who identity.Principal) RouteIdentities {
 	if who.Type == "" && who.Subject == "" {
-		return allowAnonymous
+		return AllowAnonymous
 	}
 	if who.Subject == "" {
 		return 0
@@ -39,16 +42,16 @@ func principalIdentity(who identity.Principal) routeIdentities {
 	case identity.UserType:
 		switch who.Scope {
 		case identity.UserScope:
-			return allowUser
+			return AllowUser
 		case identity.OpsScope:
-			return allowOps
+			return AllowOps
 		case identity.AdminScope:
-			return allowAdmin
+			return AllowAdmin
 		}
 	case identity.RunnerType:
-		return allowRunner
+		return AllowRunner
 	case identity.ServiceType:
-		return allowService
+		return AllowService
 	}
 	return 0
 }

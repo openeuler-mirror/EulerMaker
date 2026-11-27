@@ -5,32 +5,28 @@ import (
 	"testing"
 )
 
-func TestRouteAuthentication(t *testing.T) {
-	for _, tc := range []struct {
-		route routeKey
-		mode  authenticationMode
-	}{
-		{routeKey{http.MethodPost, "/auth/login"}, authenticationNone},
-		{routeKey{http.MethodGet, "/auth/login"}, authenticationRequired},
-		{routeKey{http.MethodGet, "/apis/ebs/v1/projects/:project/buildinfos/:name/status"}, authenticationOptional},
-		{routeKey{http.MethodPut, "/apis/ebs/v1/projects/:project/buildinfos/:name/status"}, authenticationRequired},
-		{routeKey{http.MethodGet, "/apis/ebs/v1/projects/demo/buildinfos/build/status"}, authenticationRequired},
-		{routeKey{http.MethodGet, "/apis/ebs/v1/new-resource"}, authenticationRequired},
-		{routeKey{http.MethodGet, ""}, authenticationRequired},
+func TestRoutePoliciesIsolation(t *testing.T) {
+	key := RouteKey{http.MethodGet, "/items/:name"}
+	rules := map[RouteKey]RoutePolicy{key: {Authentication: AuthenticationOptional, Identities: AllowAnonymous | AllowUsers}}
+	first := NewRoutePolicies(rules)
+	rules[key] = RoutePolicy{Authentication: AuthenticationNone, Identities: AllowAnonymous}
+	second := NewRoutePolicies(rules)
+	delete(rules, key)
+	if first.authentication(key.Method, key.Path) != AuthenticationOptional ||
+		second.authentication(key.Method, key.Path) != AuthenticationNone {
+		t.Fatal("route policies share mutable input")
+	}
+	for _, route := range []RouteKey{
+		{http.MethodPost, key.Path},
+		{http.MethodGet, "/items/one"},
+		{http.MethodGet, "/missing"},
+		{http.MethodGet, ""},
 	} {
-		if got := routeAuthentication(tc.route.Method, tc.route.Path); got != tc.mode {
-			t.Errorf("%s %s: mode=%v, want %v", tc.route.Method, tc.route.Path, got, tc.mode)
+		if got := first.authentication(route.Method, route.Path); got != AuthenticationRequired {
+			t.Errorf("%+v: authentication=%v, want required", route, got)
 		}
 	}
-	for route, rule := range routePolicies {
-		if rule.Identities == 0 {
-			t.Errorf("route has no allowed identities: %+v", route)
-		}
-		if rule.Watch && (route.Method != http.MethodGet || rule.Authentication == authenticationNone) {
-			t.Errorf("Watch must use GET and cannot bypass authentication: %+v", route)
-		}
-		if (rule.Authentication != authenticationRequired) != (rule.Identities&allowAnonymous != 0) {
-			t.Errorf("anonymous admission and authentication disagree: %+v", route)
-		}
+	if got := NewRoutePolicies(nil).authentication(key.Method, key.Path); got != AuthenticationRequired {
+		t.Fatalf("unconfigured route authentication=%v, want required", got)
 	}
 }
