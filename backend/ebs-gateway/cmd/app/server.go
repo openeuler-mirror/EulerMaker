@@ -172,6 +172,7 @@ func run(opts options) error {
 
 func newUpstreamTransport(opts options) (*http.Transport, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 30 * time.Second
 	transport.TLSClientConfig = &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: opts.insecureTLS, //nolint:gosec -- explicitly enabled for development

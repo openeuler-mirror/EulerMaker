@@ -136,7 +136,6 @@ func preparePublicRead(c *gin.Context, route policy.Route) {
 			c.Request.URL.RawQuery = query.Encode()
 		}
 	}
-	c.Set("public", true)
 }
 
 func (a *Handler) authorizeResource(c *gin.Context, who identity.Principal, route policy.Route) bool {

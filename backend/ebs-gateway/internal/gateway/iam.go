@@ -46,7 +46,7 @@ func (a *Handler) forwardIAM(c *gin.Context, resource string) {
 			return
 		}
 	}
-	a.upstream.Forward(c, false)
+	a.upstream.Forward(c)
 }
 
 func (a *Handler) readOrdinaryUser(c *gin.Context) ([]byte, bool) {

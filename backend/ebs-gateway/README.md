@@ -85,6 +85,8 @@ Gateway 端已提供 `/auth/providers` 和 `/auth/oauth/*`，前端已接入回�
 - Gateway 不向上游注入用户或 Runner 身份头；转发时仍移除外部 Bearer Token。PUT/PATCH 先读取服务端对象、生成完整候选对象并校验受保护字段，然后以 PUT 转发。
 - Build 的 PUT/PATCH 不开放；Job `/abort` 仅 Project owner/member 用户可调用；Runner 只可管理自身对象和已分配 Job。
 
+上游 Transport 的响应头超时为 30 秒，从请求正文发送完成后开始计时；透传请求等待响应头超时返回 502。收到响应头后的 Watch 流不受该超时限制，仍持续转发，并随客户端取消关闭上游请求。内部 `Do` 调用另有包含正文读取的 30 秒总超时。
+
 验证代码：
 
 ```bash

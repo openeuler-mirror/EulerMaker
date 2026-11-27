@@ -277,3 +277,14 @@ func TestServeReturnsListenerError(t *testing.T) {
 		t.Fatalf("expected listener error, got %v", err)
 	}
 }
+
+func TestUpstreamResponseHeaderTimeout(t *testing.T) {
+	transport, err := newUpstreamTransport(options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.CloseIdleConnections()
+	if transport.ResponseHeaderTimeout != 30*time.Second {
+		t.Fatalf("response header timeout=%s", transport.ResponseHeaderTimeout)
+	}
+}
