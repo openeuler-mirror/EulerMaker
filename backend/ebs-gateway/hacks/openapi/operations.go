@@ -43,7 +43,7 @@ func operations() object {
 			}
 			for _, method := range methods {
 				op := operation(method+r.kind+map[bool]string{false: "List", true: ""}[named], "IAM", method+" "+kind,
-					"Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
+					"Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
 					bearer, ref("ebs-api/iam/v1."+kind), "200")
 				setResourceRequest(op, method, ref("ebs-api/iam/v1."+r.kind), false)
 				if method == "put" && r.name == "users" {
