@@ -19,22 +19,16 @@ import (
 	"ebs-gateway/internal/mutation"
 )
 
-type accountClient interface {
-	AuthenticateOAuth(context.Context, iamclient.ExternalIdentity) (iamclient.OAuthAccount, error)
-	RegisterOAuth(context.Context, iamclient.ExternalIdentity, string, string, string) (iamclient.OAuthAccount, error)
-	GetUser(context.Context, string) (iamclient.User, int, error)
-}
-
 type Handler struct {
 	config   Config
-	accounts accountClient
+	accounts *iamclient.Client
 	tokens   *identity.Tokens
 	now      func() time.Time
 	provider *provider
 	limits   rateLimits
 }
 
-func New(config Config, accounts accountClient, tokens *identity.Tokens, now func() time.Time) *Handler {
+func New(config Config, accounts *iamclient.Client, tokens *identity.Tokens, now func() time.Time) *Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -268,7 +262,7 @@ func (h *Handler) Callback(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	account, err := h.accounts.AuthenticateOAuth(ctx, external)
+	account, err := h.accounts.AuthenticateUserOAuth(ctx, external)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -350,9 +344,9 @@ func (h *Handler) Register(c *gin.Context) {
 	}
 	ctx, cancel := requestContext(c, state)
 	defer cancel()
-	var created iamclient.OAuthAccount
+	var created iamclient.OAuthResult
 	if input["action"] == "create" {
-		created, err = h.accounts.RegisterOAuth(ctx, *state.Identity, input["username"], input["displayName"], input["email"])
+		created, err = h.accounts.RegisterUserOAuth(ctx, *state.Identity, input["username"], input["displayName"], input["email"])
 		if err != nil {
 			respondError(c, err)
 			return
@@ -362,7 +356,7 @@ func (h *Handler) Register(c *gin.Context) {
 			return
 		}
 	}
-	account, err := h.accounts.AuthenticateOAuth(ctx, *state.Identity)
+	account, err := h.accounts.AuthenticateUserOAuth(ctx, *state.Identity)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -386,17 +380,17 @@ func (h *Handler) Register(c *gin.Context) {
 	h.loginAccount(c, ctx, state, account)
 }
 
-func (h *Handler) loginAccount(c *gin.Context, ctx context.Context, state browserContext, account iamclient.OAuthAccount) {
+func (h *Handler) loginAccount(c *gin.Context, ctx context.Context, state browserContext, account iamclient.OAuthResult) {
 	user, status, err := h.accounts.GetUser(ctx, account.Username)
 	if err != nil || status >= 500 {
 		respondError(c, failure(503, "OAuthUnavailable"))
 		return
 	}
-	if status != 200 || account.UID == "" || user.UID != account.UID || user.Name != account.Username || !user.Enabled || len(user.Scopes) != 1 {
+	if status != 200 || account.UID == "" || string(user.UID) != account.UID || user.Name != account.Username || user.Spec.Enabled == nil || !*user.Spec.Enabled || len(user.Spec.Scopes) != 1 {
 		respondError(c, failure(401, "AuthenticationFailed"))
 		return
 	}
-	scope := user.Scopes[0]
+	scope := identity.Scope(user.Spec.Scopes[0])
 	if scope != identity.UserScope && scope != identity.OpsScope && scope != identity.AdminScope {
 		respondError(c, failure(401, "AuthenticationFailed"))
 		return

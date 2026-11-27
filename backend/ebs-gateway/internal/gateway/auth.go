@@ -127,11 +127,11 @@ func (a *Handler) login(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "user service unavailable"})
 		return
 	}
-	if status != http.StatusOK || user.Name != input.Username || !user.Enabled || len(user.Scopes) != 1 {
+	if status != http.StatusOK || user.Name != input.Username || user.Spec.Enabled == nil || !*user.Spec.Enabled || len(user.Spec.Scopes) != 1 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	scope := user.Scopes[0]
+	scope := identity.Scope(user.Spec.Scopes[0])
 	if scope != identity.UserScope && scope != identity.OpsScope && scope != identity.AdminScope {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	iamv1 "ebs-api/iam/v1"
+
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/upstream"
 )
@@ -27,6 +29,9 @@ func TestClientUsesInternalIAMContract(t *testing.T) {
 		var body string
 		switch request.URL.Path {
 		case "/apis/iam.ebs/v1/users/alice":
+			if request.URL.Query().Get("includeFields") != "metadata.name,metadata.uid,spec.enabled,spec.scopes" {
+				t.Fatalf("unexpected user projection: %s", request.URL)
+			}
 			body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
 		case "/internal/iam/v1/users/authenticate":
 			var input struct {
@@ -56,16 +61,16 @@ func TestClientUsesInternalIAMContract(t *testing.T) {
 	}
 	client := New(upstreamClient)
 	user, status, err := client.GetUser(context.Background(), "alice")
-	if err != nil || status != http.StatusOK || user.Name != "alice" || !user.Enabled || len(user.Scopes) != 1 || user.Scopes[0] != identity.UserScope {
+	if err != nil || status != http.StatusOK || user.Name != "alice" || user.Spec.Enabled == nil || !*user.Spec.Enabled || len(user.Spec.Scopes) != 1 || identity.Scope(user.Spec.Scopes[0]) != identity.UserScope {
 		t.Fatalf("GetUser() = %+v, %d, %v", user, status, err)
 	}
 	valid, status, err := client.AuthenticateUser(context.Background(), "alice", "password")
 	if err != nil || status != http.StatusOK || !valid {
 		t.Fatalf("AuthenticateUser() = %v, %d, %v", valid, status, err)
 	}
-	spec, valid, status, err := client.AuthenticateMachine(context.Background(), "worker", "secret")
-	if err != nil || status != http.StatusOK || !valid || spec.TokenTTLSeconds != 3600 || spec.Type != "runner" {
-		t.Fatalf("AuthenticateMachine() = %+v, %v, %d, %v", spec, valid, status, err)
+	result, valid, status, err := client.AuthenticateMachine(context.Background(), "worker", "secret")
+	if err != nil || status != http.StatusOK || !valid || result.Name != "worker" || result.TokenTTLSeconds != 3600 || result.Type != "runner" {
+		t.Fatalf("AuthenticateMachine() = %+v, %v, %d, %v", result, valid, status, err)
 	}
 	if got := strings.Join(paths, ", "); got != "GET /apis/iam.ebs/v1/users/alice, POST /internal/iam/v1/users/authenticate, POST /internal/iam/v1/machineaccounts/authenticate" {
 		t.Fatalf("unexpected IAM request sequence %q", got)
@@ -92,7 +97,7 @@ func TestGetUserEnabled(t *testing.T) {
 				t.Fatal(err)
 			}
 			user, status, err := New(client).GetUser(context.Background(), "alice")
-			if err != nil || status != http.StatusOK || user.Enabled != tc.enabled {
+			if err != nil || status != http.StatusOK || (user.Spec.Enabled != nil && *user.Spec.Enabled) != tc.enabled {
 				t.Fatalf("GetUser()=%+v, %d, %v", user, status, err)
 			}
 		})
@@ -122,11 +127,11 @@ func TestOAuthIAMContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var result OAuthAccount
+		var result OAuthResult
 		if registration {
-			result, err = New(client).RegisterOAuth(context.Background(), ExternalIdentity{"issuer", "subject"}, "alice", "Alice", "")
+			result, err = New(client).RegisterUserOAuth(context.Background(), ExternalIdentity{"issuer", "subject"}, "alice", "Alice", "")
 		} else {
-			result, err = New(client).AuthenticateOAuth(context.Background(), ExternalIdentity{"issuer", "subject"})
+			result, err = New(client).AuthenticateUserOAuth(context.Background(), ExternalIdentity{"issuer", "subject"})
 		}
 		if err != nil || result.UID != "uid" || result.Username != "alice" {
 			t.Fatalf("%+v %v", result, err)
@@ -153,7 +158,7 @@ func TestOAuthIAMResponseBoundaries(t *testing.T) {
 			up, _ := upstream.New("https://api.example", transportFunc(func(*http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
 			}))
-			result, err := New(up).AuthenticateOAuth(context.Background(), ExternalIdentity{"issuer", "subject"})
+			result, err := New(up).AuthenticateUserOAuth(context.Background(), ExternalIdentity{"issuer", "subject"})
 			if tc.code == "" {
 				if err != nil || !result.RegistrationRequired {
 					t.Fatalf("%+v %v", result, err)
@@ -165,5 +170,50 @@ func TestOAuthIAMResponseBoundaries(t *testing.T) {
 				t.Fatalf("error=%v", err)
 			}
 		})
+	}
+}
+
+func TestAuthenticateMachineResult(t *testing.T) {
+	for _, typ := range []iamv1.MachineAccountType{iamv1.MachineAccountRunner, iamv1.MachineAccountService} {
+		t.Run(string(typ), func(t *testing.T) {
+			client, err := upstream.New("https://api.example", transportFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method != http.MethodPost || request.URL.Path != "/internal/iam/v1/machineaccounts/authenticate" {
+					t.Fatalf("unexpected authentication request: %s %s", request.Method, request.URL)
+				}
+				body := `{"authenticated":true,"name":"worker","type":"` + string(typ) + `","tokenTTLSeconds":7200,"projects":["demo"],"permissions":["builds:create"]}`
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, authenticated, status, err := New(client).AuthenticateMachine(context.Background(), "worker", "secret")
+			want := MachineAuthResult{Name: "worker", Type: typ, TokenTTLSeconds: 7200}
+			if err != nil || status != http.StatusOK || !authenticated || result != want {
+				t.Fatalf("AuthenticateMachine() = %+v, %v, %d, %v; want %+v", result, authenticated, status, err, want)
+			}
+		})
+	}
+}
+
+func TestGetMachineProjectsAuthorizationFields(t *testing.T) {
+	client, err := upstream.New("https://api.example", transportFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" ||
+			request.URL.Query().Get("includeFields") != "metadata.name,spec.type,spec.projects,spec.permissions" {
+			t.Fatalf("unexpected machine lookup: %s %s", request.Method, request.URL)
+		}
+		body := `{"metadata":{"name":"service"},"spec":{"type":"service","projects":["demo"],"permissions":["builds:create"]}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, status, err := New(client).GetMachine(context.Background(), "service")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GetMachine status=%d err=%v", status, err)
+	}
+	if account.Name != "service" || account.Spec.Type != "service" ||
+		len(account.Spec.Projects) != 1 || account.Spec.Projects[0] != "demo" ||
+		len(account.Spec.Permissions) != 1 || account.Spec.Permissions[0] != "builds:create" {
+		t.Fatalf("incomplete machine authorization: %+v", account)
 	}
 }
