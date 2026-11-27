@@ -10,51 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
-
 	"ebs-gateway/internal/identity"
-	"ebs-gateway/internal/upstream"
 )
-
-func TestRunnerJobLookupErrorClassification(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		status int
-		body   string
-		want   int
-	}{
-		{"assigned", 200, `{"status":{"runner":"runner-1"}}`, 200},
-		{"unassigned", 200, `{"status":{"runner":"runner-2"}}`, 403},
-		{"deleted", 404, "", 404},
-		{"unavailable", 503, "private server details", 503},
-		{"throttled", 429, "", 503},
-		{"connection error", 0, "", 503},
-		{"invalid JSON", 200, "{", 502},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client, err := upstream.New("https://api.example", roundTripFunc(func(*http.Request) (*http.Response, error) {
-				if tc.status == 0 {
-					return nil, errors.New("private connection details")
-				}
-				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
-			}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			a := &Handler{upstream: client, bodyLimit: 1 << 20}
-			recorder := httptest.NewRecorder()
-			ctx, _ := gin.CreateTestContext(recorder)
-			ctx.Request = httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/projects/team/jobs/job-1", nil)
-			allowed := a.runnerOwnsJob(ctx, "runner-1")
-			if allowed != (tc.want == 200) || recorder.Code != tc.want {
-				t.Fatalf("allowed=%v status=%d, want %d", allowed, recorder.Code, tc.want)
-			}
-			if strings.Contains(recorder.Body.String(), "private") {
-				t.Fatal("upstream details exposed")
-			}
-		})
-	}
-}
 
 func TestJobStatusPatchForwarding(t *testing.T) {
 	const path = "/apis/ebs/v1/projects/team/jobs/job-1/status"
@@ -102,6 +59,40 @@ func TestJobStatusPatchForwarding(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || reads != 1 || writes != 1 {
 		t.Fatalf("status=%d reads=%d writes=%d body=%s", response.Code, reads, writes, response.Body)
+	}
+}
+
+func TestRunnerJobReadProjectsAssignment(t *testing.T) {
+	const path = "/apis/ebs/v1/projects/team/jobs/job-1"
+	const query = "includeFields=status.phase&excludeFields=spec"
+	const body = `{"status":{"phase":"Running"}}`
+	reads := 0
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		reads++
+		if r.Method != http.MethodGet || r.URL.Path != path {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+		}
+		response := body
+		if reads == 1 {
+			if r.URL.Query().Get("includeFields") != "metadata.name,metadata.namespace,status.runner" || len(r.URL.Query()) != 1 {
+				t.Fatalf("unexpected assignment projection: %s", r.URL)
+			}
+			response = `{"metadata":{"name":"job-1","namespace":"team"},"status":{"runner":"runner-1"}}`
+		} else if r.URL.RawQuery != query {
+			t.Fatalf("caller projection changed: %s", r.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(response))}, nil
+	}))
+	token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, path+"?"+query, nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	api.Router().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || reads != 2 || response.Body.String() != body {
+		t.Fatalf("status=%d reads=%d body=%s", response.Code, reads, response.Body)
 	}
 }
 
@@ -154,6 +145,56 @@ func TestJobAbortForwarding(t *testing.T) {
 			api.Router().ServeHTTP(response, request)
 			if response.Code != tc.want || forwarded != (tc.want != http.StatusForbidden) {
 				t.Fatalf("status=%d forwarded=%v body=%s", response.Code, forwarded, response.Body)
+			}
+		})
+	}
+}
+
+func TestRunnerJobLookupErrorClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   int
+	}{
+		{"assigned", 200, `{"status":{"runner":"runner-1"}}`, 200},
+		{"unassigned", 200, `{"status":{"runner":"runner-2"}}`, 403},
+		{"deleted", 404, "", 404},
+		{"unavailable", 503, "private server details", 503},
+		{"throttled", 429, "", 503},
+		{"connection error", 0, "", 503},
+		{"invalid JSON", 200, "{", 502},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/projects/team/jobs/job-1" {
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				if tc.status == 0 {
+					return nil, errors.New("private connection details")
+				}
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			}))
+			token, err := api.tokens.Issue("runner-1", identity.RunnerType, "", time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/projects/team/jobs/job-1", nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			router := api.Router()
+			router.ServeHTTP(recorder, request)
+			wantCalls := 1
+			if tc.want == http.StatusOK {
+				wantCalls = 2
+			}
+			if recorder.Code != tc.want || calls != wantCalls {
+				t.Fatalf("status=%d calls=%d, want %d/%d", recorder.Code, calls, tc.want, wantCalls)
+			}
+			if strings.Contains(recorder.Body.String(), "private") {
+				t.Fatal("upstream details exposed")
 			}
 		})
 	}

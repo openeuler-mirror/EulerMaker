@@ -18,6 +18,7 @@ import (
 	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/middleware"
+	"ebs-gateway/internal/policy"
 	"ebs-gateway/internal/upstream"
 )
 
@@ -54,20 +55,17 @@ func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 func (a *testAPI) Router() *gin.Engine {
 	router := gin.New()
 	rules := middleware.NewRoutePolicies(map[middleware.RouteKey]middleware.RoutePolicy{
-		{Method: http.MethodPost, Path: "/auth/register"}:            {Authentication: middleware.AuthenticationNone, Identities: middleware.AllowAnonymous},
-		{Method: http.MethodPost, Path: "/auth/login"}:               {Authentication: middleware.AuthenticationNone, Identities: middleware.AllowAnonymous},
-		{Method: http.MethodPost, Path: "/auth/machine-token"}:       {Authentication: middleware.AuthenticationNone, Identities: middleware.AllowAnonymous},
-		{Method: http.MethodPost, Path: "/auth/check"}:               {Identities: middleware.AllowAuthenticated},
-		{Method: http.MethodPost, Path: "/auth/machineaccounts"}:     {Identities: middleware.AllowAdmin},
-		{Method: http.MethodPut, Path: "/auth/users/:name/password"}: {Identities: middleware.AllowUsers},
+		{Method: http.MethodPost, Path: "/auth/register"}:      {Access: middleware.RouteAccess{Authentication: middleware.AuthenticationNone}},
+		{Method: http.MethodPost, Path: "/auth/login"}:         {Access: middleware.RouteAccess{Authentication: middleware.AuthenticationNone}},
+		{Method: http.MethodPost, Path: "/auth/machine-token"}: {Access: middleware.RouteAccess{Authentication: middleware.AuthenticationNone}},
 	})
-	router.Use(middleware.Authenticate(a.auth, rules), middleware.AdmitIdentity(rules))
+	router.Use(middleware.Authenticate(rules, a.auth))
 	router.POST("/auth/register", a.RegisterUser)
 	router.POST("/auth/login", a.Login)
 	router.POST("/auth/machine-token", a.MachineToken)
-	router.POST("/auth/check", a.CheckToken)
-	router.POST("/auth/machineaccounts", a.RegisterMachine)
-	router.PUT("/auth/users/:name/password", a.ChangePassword)
+	router.POST("/auth/check", middleware.AdmitIdentity(policy.AllowAuthenticated), a.CheckToken)
+	router.POST("/auth/machineaccounts", middleware.AdmitIdentity(policy.AllowAdmin), a.RegisterMachine)
+	router.PUT("/auth/users/:name/password", middleware.AdmitIdentity(policy.AllowUsers), a.ChangePassword)
 	return router
 }
 

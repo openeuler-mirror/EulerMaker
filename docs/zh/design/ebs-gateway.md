@@ -783,7 +783,7 @@ Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回任何�
 
 `internal/auth` 独立负责密码注册、登录、机器凭据换 Token、Token 检查、密码修改和机器账号注册，持有对应的认证专用限流器；`internal/oauth` 负责第三方登录。启动处分别创建两类 Handler，并传入 Gateway Router。`internal/gateway` 的业务 Handler 不再持有认证接口的 IAM 客户端、Token 签发器和专用限流器；Bearer 认证仍由 `internal/middleware` 负责。密码登录开关由启动参数中 OAuth 配置文件路径是否为空决定，不依赖 OAuth Handler。
 
-Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch 路由检查 → 请求认证 → 身份/匿名限流 → 身份准入 → 业务授权 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；`Authenticate` 统一完成 Token 校验和当前账号身份解析，路由及业务 Guard 不重复认证或通用限流。Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。业务链保留审计在外、Recovery 在内的顺序，后续处理 panic 被恢复后，审计仍记录最终响应状态。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
+Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch 路由检查 → 请求认证 → 身份/匿名限流 → Authorize（身份准入、Service 授权、声明的对象归属）→ 资源专用校验 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；`Authenticate` 统一完成 Token 校验和当前账号身份解析，路由及业务 Guard 不重复认证或通用限流。Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。业务链保留审计在外、Recovery 在内的顺序，后续处理 panic 被恢复后，审计仍记录最终响应状态。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
 
 健康检查在业务 `router.Use` 之前直接注册 Handler，返回固定文本，不挂载 `gin.Recovery()`，不产生审计日志，不进入 Watch 检查、认证或限流。Gin 在注册路由时确定中间件链，因此无需在认证白名单和限流器中另行豁免 `/healthz`。
 
@@ -791,7 +791,7 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 
 非 Watch 请求中，`PrepareQuery` 仅对显式配置 `ListLimit` 的 GET 列表处理分页。当前 Project、Build、Job、OldJob、Snapshot、BuildInfo、BuildGraph、RpmRepo 列表上限为 100；缺失、非法、重复或超出上限的 `limit` 设置为上限，合法值及其他查询参数保留。Runner、IAM、Config、Script 列表及对象读取不受该分页规则影响。Watch 保留原始查询参数，不套用普通列表上限。
 
-身份区分匿名、普通用户、Ops、Admin、Runner、Service；User 角色只在身份类型为 User 时生效。`Authenticate`、`AdmitIdentity` 和 `PrepareQuery` 共用由路由注册生成的 `RoutePolicies`，不各自维护路径分支。构造时复制规则，后续修改源 map 不影响已有 Router；健康检查在业务链外注册，不加入规则表。
+身份区分匿名、普通用户、Ops、Admin、Runner、Service；User 角色只在身份类型为 User 时生效。`Authenticate`、`Authorize` 和 `PrepareQuery` 共用由路由注册生成的 `RoutePolicies`，不各自维护路径分支。构造时复制规则，后续修改源 map 不影响已有 Router；健康检查在业务链外注册，不加入规则表。
 
 | 认证模式 | 路由范围 | 行为 |
 |----------|----------|------|
@@ -799,9 +799,9 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 | 可选认证 | Project 的 GET 集合和对象；Project 范围 Build、Job、Snapshot、BuildInfo、BuildGraph、RpmRepo 的 GET 集合、对象和 `/status`；OldJob 的 GET 集合和对象 | 无 Authorization 时匿名；携带 Token 必须验证，失败不得降级匿名；允许的 Watch 请求升级为必须认证 |
 | 必须认证 | 其余路由，包括 Config、Script、Runner、IAM、配置投影、业务写操作、`/auth/check` 和密码修改 | 校验 Token 并解析身份后才进入限流和授权 |
 
-未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。已注册路由没有配置准入规则，或调用方身份不在允许集合时，`AdmitIdentity` 返回 403，Service 拒绝记录审计结果；不能因 GET 或管理员身份而绕过规则。无需 Bearer 认证的接口按匿名身份准入，不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由 Handler 处理。
+未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。已注册路由没有配置准入规则，或调用方身份不在允许集合时，`Authorize` 返回 403，Service 拒绝记录审计结果；不能因 GET 或管理员身份而绕过规则。无需 Bearer 认证的接口按匿名身份准入，不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由 Handler 处理。
 
-全局身份准入只决定能否进入业务处理。资源路由通过显式 `policy.Rule` 声明对象归属、Watch 归属和 Service permission，`authorizeResource` 适配 HTTP 参数、错误、审计和请求级旧对象，业务判断由 Policy 完成。Runner 仍须匹配路径名称及 Job 分配关系；Project owner/member、Service 的工程范围和 permission、更新字段权限保持不变。Project 用户更新授权读取完整旧对象，后续 PUT/PATCH 复用该对象，不重复 GET；其他 Project 归属检查只投影读取名称和标签。公开读取携带无效 Token 不降级匿名；公开 Job Watch 仍检查工程成员权限，Runner 通过自身任务列表 Watch。
+全局 `Authorize` 统一调用 Policy 执行身份准入、Service 授权及声明的对象归属校验。资源路由通过显式 `policy.Rule` 声明对象归属、Watch 归属和 Service permission，`Authorize` 仅适配 HTTP 参数、错误、审计和请求级旧对象，业务判断由 Policy 完成。Runner 路径名称仍由专用 Guard 校验，Job 分配关系由 `AssignedJob` 规则校验：普通读取只查询名称、命名空间和 `status.runner`，状态更新读取完整对象并供后续更新校验复用；Project owner/member、Service 的工程范围和 permission、更新字段权限保持不变。Project 用户更新授权读取完整旧对象，后续 PUT/PATCH 复用该对象，不重复 GET；其他 Project 归属检查只投影读取名称和标签。公开读取携带无效 Token 不降级匿名；公开 Job Watch 仍检查工程成员权限，Runner 通过自身任务列表 Watch。
 
 Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和 `/status` 读取只允许 Ops/Admin；普通对象读取、更新和状态更新允许 Ops/Admin 或 Runner。路由不再挂载重复的身份门卫。`prepareRunnerCreate` 校验注册正文；具名 Runner 读取、更新仍校验 Runner Token 的 Subject 与路径名称一致；更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；`prepareRunnerJobs` 保留路径归属、查询参数和 Watch 并发检查，名额持有到转发结束。通过这些检查后才进入 `upstream.Forward`。
 
@@ -816,6 +816,8 @@ Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和
 另注册固定路径 `GET /apis/ebs/v1/service-endpoints`，仅供 Runner 身份读取地址投影，不作为 apiserver 资源代理。
 
 User 路由均要求 Admin 身份，并直接声明各自的处理链：集合和具名 GET 直接使用 `upstream.Forward`，不过滤或拒绝读取管理员账号；DELETE 使用 `protectAdminUser → upstream.Forward`，仅投影读取 `spec.scopes` 判断管理员保护；PUT/PATCH 使用 `prepareUserUpdate → upstream.Forward`。更新读取旧对象、合并候选对象并校验字段权限，禁止修改管理员和将普通用户提升为管理员，PATCH 校验通过后以完整 PUT 转发。删除保护或更新校验失败立即终止，不继续转发。
+
+`/auth/check` 在全局业务鉴权前注册，只执行认证、身份限流和 `AdmitIdentity(AllowAuthenticated)`；Service 无需业务 permission 即可检查 Token。其他允许 Service 的路由必须声明有效的 `ServicePermission`。注册时同时校验对象归属规则所需的路径参数及 Watch 配置，避免缺少参数或权限声明。
 
 ### 5.1 路由与权限速览
 

@@ -12,6 +12,7 @@ import (
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/oauth"
+	"ebs-gateway/internal/policy"
 	"ebs-gateway/internal/upstream"
 )
 
@@ -23,6 +24,7 @@ func routeRules() map[middleware.RouteKey]middleware.RoutePolicy {
 	registerOAuthRoutes(router, rules, &oauth.Handler{})
 	registerForwardRoutes(router, rules, api)
 	registerOtherRoutes(router, rules, api)
+	rules[middleware.RouteKey{Method: http.MethodPost, Path: "/auth/check"}] = middleware.RoutePolicy{Access: middleware.RouteAccess{Authentication: middleware.AuthenticationRequired, Authorization: policy.Rule{Identities: policy.AllowAuthenticated}}}
 	return rules
 }
 
@@ -87,12 +89,10 @@ func TestAdmitIdentity(t *testing.T) {
 			t.Run(tc.method+tc.path+"/"+subject.name, func(t *testing.T) {
 				router := gin.New()
 				called := false
-				decision := ""
 				router.Use(func(c *gin.Context) {
 					c.Set("principal", subject.who)
 					c.Next()
-					decision = c.GetString("serviceAuthorization")
-				}, middleware.AdmitIdentity(middleware.NewRoutePolicies(routeRules())))
+				}, middleware.AdmitIdentity(routeRules()[middleware.RouteKey{Method: tc.method, Path: tc.path}].Access.Authorization.Identities))
 				router.Handle(tc.method, tc.path, func(c *gin.Context) {
 					called = true
 					c.Status(http.StatusNoContent)
@@ -108,9 +108,6 @@ func TestAdmitIdentity(t *testing.T) {
 				if response.Code != want || called != allowed {
 					t.Fatalf("status=%d called=%v, want status=%d called=%v", response.Code, called, want, allowed)
 				}
-				if subject.who.Type == identity.ServiceType && !allowed && decision != "denied" {
-					t.Fatal("missing service denial audit")
-				}
 			})
 		}
 	}
@@ -118,13 +115,13 @@ func TestAdmitIdentity(t *testing.T) {
 
 func TestRoutePolicyConsistency(t *testing.T) {
 	for route, rule := range routeRules() {
-		if rule.Identities == 0 {
+		if rule.Access.Authorization.Identities == 0 {
 			t.Errorf("route has no allowed identities: %+v", route)
 		}
-		if rule.Options.Watch && (route.Method != http.MethodGet || rule.Authentication == middleware.AuthenticationNone) {
+		if rule.Options.Watch && (route.Method != http.MethodGet || rule.Access.Authentication == middleware.AuthenticationNone) {
 			t.Errorf("Watch must use GET and cannot bypass authentication: %+v", route)
 		}
-		if (rule.Authentication != middleware.AuthenticationRequired) != (rule.Identities&middleware.AllowAnonymous != 0) {
+		if (rule.Access.Authentication != middleware.AuthenticationRequired) != (rule.Access.Authorization.Identities&policy.AllowAnonymous != 0) {
 			t.Errorf("anonymous admission and authentication disagree: %+v", route)
 		}
 	}

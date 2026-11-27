@@ -1,15 +1,16 @@
 package middleware
 
 import (
+	"ebs-gateway/internal/policy"
 	"net/http"
 	"testing"
 )
 
 func TestRoutePoliciesIsolation(t *testing.T) {
 	key := RouteKey{http.MethodGet, "/items/:name"}
-	rules := map[RouteKey]RoutePolicy{key: {Authentication: AuthenticationOptional, Identities: AllowAnonymous | AllowUsers}}
+	rules := map[RouteKey]RoutePolicy{key: {Access: RouteAccess{Authentication: AuthenticationOptional, Authorization: policy.Rule{Identities: policy.AllowAnonymous | policy.AllowUsers}}}}
 	first := NewRoutePolicies(rules)
-	rules[key] = RoutePolicy{Authentication: AuthenticationNone, Identities: AllowAnonymous}
+	rules[key] = RoutePolicy{Access: RouteAccess{Authentication: AuthenticationNone, Authorization: policy.Rule{Identities: policy.AllowAnonymous}}}
 	second := NewRoutePolicies(rules)
 	delete(rules, key)
 	if first.authentication(key.Method, key.Path) != AuthenticationOptional ||

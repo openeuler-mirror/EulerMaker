@@ -69,7 +69,7 @@ func (a *Handler) prepareCreate(c *gin.Context, who identity.Principal, route po
 }
 
 func (a *Handler) prepareUpdate(c *gin.Context, who identity.Principal, route policy.Route) bool {
-	old := updateObject(c)
+	old := middleware.UpdateObject(c)
 	if old == nil {
 		response, err := a.upstream.Do(c.Request.Context(), http.MethodGet, c.Request.URL.Path, nil, nil)
 		if err != nil {

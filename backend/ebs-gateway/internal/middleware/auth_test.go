@@ -19,6 +19,9 @@ import (
 )
 
 func TestAuthMiddleware(t *testing.T) {
+	routes := NewRoutePolicies(map[RouteKey]RoutePolicy{
+		{http.MethodGet, "/apis/ebs/v1/projects"}: {Access: RouteAccess{Authentication: AuthenticationOptional}},
+	})
 	gin.SetMode(gin.TestMode)
 	now := time.Now()
 	tokens, err := identity.NewTokens(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32))))
@@ -61,7 +64,7 @@ func TestAuthMiddleware(t *testing.T) {
 				t.Fatal(err)
 			}
 			router := gin.New()
-			router.Use(Authenticate(auth, testAuthenticationPolicies()))
+			router.Use(Authenticate(routes, auth))
 			called := false
 			router.GET(test.route, func(c *gin.Context) {
 				called = true
@@ -96,7 +99,19 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 }
 
-func TestAuthenticateRequestRoutes(t *testing.T) {
+func TestAuthenticateRoutes(t *testing.T) {
+	routes := NewRoutePolicies(map[RouteKey]RoutePolicy{
+		{http.MethodGet, "/openapi.json"}:                       {Access: RouteAccess{Authentication: AuthenticationNone}},
+		{http.MethodGet, "/auth/providers"}:                     {Access: RouteAccess{Authentication: AuthenticationNone}},
+		{http.MethodGet, "/auth/oauth/:provider/login"}:         {Access: RouteAccess{Authentication: AuthenticationNone}},
+		{http.MethodPost, "/auth/oauth/:provider/callback"}:     {Access: RouteAccess{Authentication: AuthenticationNone}},
+		{http.MethodPost, "/auth/oauth/register"}:               {Access: RouteAccess{Authentication: AuthenticationNone}},
+		{http.MethodPost, "/auth/register"}:                     {Access: RouteAccess{Authentication: AuthenticationNone}},
+		{http.MethodPost, "/auth/login"}:                        {Access: RouteAccess{Authentication: AuthenticationNone}},
+		{http.MethodPost, "/auth/machine-token"}:                {Access: RouteAccess{Authentication: AuthenticationNone}},
+		{http.MethodGet, "/apis/ebs/v1/projects"}:               {Access: RouteAccess{Authentication: AuthenticationOptional}},
+		{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs"}: {Access: RouteAccess{Authentication: AuthenticationOptional}},
+	})
 	gin.SetMode(gin.TestMode)
 	now := time.Now()
 	tokens, err := identity.NewTokens(base64.StdEncoding.EncodeToString(make([]byte, 32)))
@@ -145,7 +160,7 @@ func TestAuthenticateRequestRoutes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			router := gin.New()
-			router.Use(Authenticate(auth, testAuthenticationPolicies()))
+			router.Use(Authenticate(routes, auth))
 			identified := false
 			endpoint := func(c *gin.Context) {
 				identified = Principal(c).Type != ""
@@ -170,6 +185,7 @@ func TestAuthenticateRequestRoutes(t *testing.T) {
 }
 
 func TestAuthenticateStopsInvalidToken(t *testing.T) {
+	routes := NewRoutePolicies(nil)
 	gin.SetMode(gin.TestMode)
 	tokens, err := identity.NewTokens(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32))))
 	if err != nil {
@@ -179,7 +195,7 @@ func TestAuthenticateStopsInvalidToken(t *testing.T) {
 	for _, header := range []string{"", "Basic secret", "Bearer invalid"} {
 		t.Run(header, func(t *testing.T) {
 			router := gin.New()
-			router.Use(Authenticate(auth, testAuthenticationPolicies()))
+			router.Use(Authenticate(routes, auth))
 			called := false
 			router.GET("/", func(c *gin.Context) {
 				called = true
@@ -244,19 +260,4 @@ func TestPrincipalWithoutAuthentication(t *testing.T) {
 	if got := Principal(c); got != (identity.Principal{}) {
 		t.Fatalf("anonymous principal = %+v", got)
 	}
-}
-
-func testAuthenticationPolicies() *RoutePolicies {
-	return NewRoutePolicies(map[RouteKey]RoutePolicy{
-		{http.MethodGet, "/openapi.json"}:                       {Authentication: AuthenticationNone},
-		{http.MethodGet, "/auth/providers"}:                     {Authentication: AuthenticationNone},
-		{http.MethodGet, "/auth/oauth/:provider/login"}:         {Authentication: AuthenticationNone},
-		{http.MethodPost, "/auth/oauth/:provider/callback"}:     {Authentication: AuthenticationNone},
-		{http.MethodPost, "/auth/oauth/register"}:               {Authentication: AuthenticationNone},
-		{http.MethodPost, "/auth/register"}:                     {Authentication: AuthenticationNone},
-		{http.MethodPost, "/auth/login"}:                        {Authentication: AuthenticationNone},
-		{http.MethodPost, "/auth/machine-token"}:                {Authentication: AuthenticationNone},
-		{http.MethodGet, "/apis/ebs/v1/projects"}:               {Authentication: AuthenticationOptional},
-		{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs"}: {Authentication: AuthenticationOptional},
-	})
 }
