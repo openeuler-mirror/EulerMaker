@@ -720,6 +720,8 @@ func TestWatchRouteAllowlist(t *testing.T) {
 		body := `{}`
 		if r.URL.Path == "/apis/iam.ebs/v1/users/admin" {
 			body = `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`
+		} else if r.URL.Path == "/apis/ebs/v1/projects/team" {
+			body = `{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"admin"}}}`
 		} else {
 			forwarded++
 		}
@@ -1746,6 +1748,185 @@ func TestAdminOwnerProjectPurposePatch(t *testing.T) {
 			api.Router().ServeHTTP(response, request)
 			if response.Code != test.want || (writes == 1) != (test.want == http.StatusOK) {
 				t.Fatalf("status=%d writes=%d body=%s", response.Code, writes, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestBuildCreateChain(t *testing.T) {
+	const path = "/apis/ebs/v1/projects/team/builds"
+	const body = `{"metadata":{"name":"build-1"},"spec":{"arch":"aarch64"}}`
+	for _, tc := range []struct {
+		name, subject string
+		scope         identity.Scope
+		want          int
+	}{
+		{"owner", "alice", identity.UserScope, 201},
+		{"member", "bob", identity.UserScope, 201},
+		{"ops member", "bob", identity.OpsScope, 201},
+		{"admin owner", "alice", identity.AdminScope, 201},
+		{"admin member", "bob", identity.AdminScope, 201},
+		{"admin outsider", "admin", identity.AdminScope, 403},
+		{"outsider", "outsider", identity.UserScope, 403},
+		{"ops outsider", "ops", identity.OpsScope, 403},
+		{"upstream invalid object", "alice", identity.UserScope, 422},
+		{"upstream body limit", "alice", identity.UserScope, 413},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			forwarded := false
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				response, status := "{}", http.StatusOK
+				switch r.URL.Path {
+				case "/apis/iam.ebs/v1/users/" + tc.subject:
+					response = `{"metadata":{"name":"` + tc.subject + `"},"spec":{"enabled":true,"scopes":["` + string(tc.scope) + `"]}}`
+				case "/apis/ebs/v1/projects/team":
+					response = `{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.bob":"true"}}}`
+				case path:
+					forwarded = true
+					raw, err := io.ReadAll(r.Body)
+					if err != nil || string(raw) != body || r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+						t.Fatalf("request changed: method=%s body=%s err=%v", r.Method, raw, err)
+					}
+					status = tc.want
+				default:
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
+			}))
+			token, err := api.tokens.Issue(tc.subject, identity.UserType, tc.scope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			api.Router().ServeHTTP(response, request)
+			if response.Code != tc.want || forwarded != (tc.want != http.StatusForbidden) {
+				t.Fatalf("status=%d forwarded=%v body=%s", response.Code, forwarded, response.Body)
+			}
+		})
+	}
+}
+
+func TestJobListRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name, subject, query, limit string
+		want                        int
+	}{
+		{"anonymous list", "", "", "100", 200},
+		{"public user list", "outsider", "limit=200", "100", 200},
+		{"watch owner", "alice", "watch=true&limit=500", "500", 200},
+		{"watch member", "bob", "watch=true", "", 200},
+		{"watch admin outsider", "admin", "watch=true", "", 403},
+		{"watch admin member", "admin-member", "watch=true", "", 200},
+		{"watch outsider", "outsider", "watch=true", "", 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scope := identity.UserScope
+			if strings.HasPrefix(tc.subject, "admin") {
+				scope = identity.AdminScope
+			}
+			forwarded := false
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				body := `{"items":[]}`
+				switch r.URL.Path {
+				case "/apis/iam.ebs/v1/users/" + tc.subject:
+					body = `{"metadata":{"name":"` + tc.subject + `"},"spec":{"enabled":true,"scopes":["` + string(scope) + `"]}}`
+				case "/apis/ebs/v1/projects/team":
+					if tc.query == "" || !strings.Contains(tc.query, "watch=true") {
+						t.Fatal("unexpected Project authorization lookup")
+					}
+					body = `{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.bob":"true","ebs.io/member-user.admin-member":"true"}}}`
+				case "/apis/ebs/v1/projects/team/jobs":
+					forwarded = true
+					if r.URL.Query().Get("limit") != tc.limit {
+						t.Fatalf("unexpected query: %s", r.URL.RawQuery)
+					}
+				default:
+					t.Fatalf("unexpected request: %s", r.URL)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			router := api.Router()
+			request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/projects/team/jobs?"+tc.query, nil)
+			if tc.subject != "" {
+				token, err := api.tokens.Issue(tc.subject, identity.UserType, scope, time.Hour, api.now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Header.Set("Authorization", "Bearer "+token)
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != tc.want || forwarded != (tc.want == http.StatusOK) {
+				t.Fatalf("status=%d forwarded=%v body=%s", response.Code, forwarded, response.Body)
+			}
+		})
+	}
+}
+
+func TestBuildActionChains(t *testing.T) {
+	body := `{"preconditions":{"uid":"build-uid","resourceVersion":"7"}}`
+	for _, tc := range []struct {
+		name, method, subject string
+		scope                 identity.Scope
+		want                  int
+	}{
+		{"abort owner", http.MethodPost, "alice", identity.UserScope, 200},
+		{"abort member", http.MethodPost, "bob", identity.UserScope, 200},
+		{"abort ops owner", http.MethodPost, "alice", identity.OpsScope, 200},
+		{"abort admin owner", http.MethodPost, "alice", identity.AdminScope, 200},
+		{"abort admin member", http.MethodPost, "bob", identity.AdminScope, 200},
+		{"abort admin outsider", http.MethodPost, "admin", identity.AdminScope, 403},
+		{"abort outsider", http.MethodPost, "outsider", identity.UserScope, 403},
+		{"abort ops outsider", http.MethodPost, "ops", identity.OpsScope, 403},
+		{"delete owner", http.MethodDelete, "alice", identity.UserScope, 200},
+		{"delete ops owner", http.MethodDelete, "alice", identity.OpsScope, 200},
+		{"delete admin owner", http.MethodDelete, "alice", identity.AdminScope, 200},
+		{"delete member", http.MethodDelete, "bob", identity.UserScope, 403},
+		{"delete admin outsider", http.MethodDelete, "admin", identity.AdminScope, 403},
+		{"delete version conflict", http.MethodDelete, "alice", identity.UserScope, 409},
+		{"delete phase rejected", http.MethodDelete, "alice", identity.UserScope, 422},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/apis/ebs/v1/projects/team/builds/build-1"
+			if tc.method == http.MethodPost {
+				path += "/abort"
+			}
+			forwarded := false
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				response := `{}`
+				status := http.StatusOK
+				switch r.URL.Path {
+				case "/apis/iam.ebs/v1/users/" + tc.subject:
+					response = `{"metadata":{"name":"` + tc.subject + `"},"spec":{"enabled":true,"scopes":["` + string(tc.scope) + `"]}}`
+				case "/apis/ebs/v1/projects/team":
+					response = `{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.bob":"true"}}}`
+				case path:
+					forwarded = true
+					raw, err := io.ReadAll(r.Body)
+					if err != nil || string(raw) != body || r.Method != tc.method || r.Header.Get("Content-Type") != "application/json" {
+						t.Fatalf("request changed: method=%s body=%s err=%v", r.Method, raw, err)
+					}
+					status = tc.want
+				default:
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
+			}))
+			router := api.Router()
+			token, err := api.tokens.Issue(tc.subject, identity.UserType, tc.scope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(tc.method, path, strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != tc.want || forwarded != (tc.want != http.StatusForbidden) {
+				t.Fatalf("status=%d forwarded=%v body=%s", response.Code, forwarded, response.Body)
 			}
 		})
 	}

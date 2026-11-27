@@ -88,6 +88,7 @@ Gateway 端已提供 `/auth/providers` 和 `/auth/oauth/*`，前端已接入回�
 - Service Token 每次请求读取机器账号的 `spec.projects` 和 `spec.permissions`，支持 `projects:update`、`builds:create`、`builds:abort` 三项独立权限；任一列表为空时拒绝资源操作。Admin 通过 `/auth/machineaccounts` 注册时传入授权字段，前端授权表单尚未接入。公开读取使用匿名请求，不携带 Service Token。
 - Snapshot、BuildInfo、RpmRepo 的集合、对象及对象 `/status` 仅注册 GET。
 - Gateway 不向上游注入用户或 Runner 身份头；转发时仍移除外部 Bearer Token。Config、Script 和 MachineAccount 的 PUT/PATCH 保留原始方法和正文，由 apiserver 校验；其他更新先读取服务端对象、生成完整候选对象并校验受保护字段，然后以 PUT 转发。
+- Build 创建、中止及工程 Job Watch 要求用户是工程 owner/member，Ops/Admin 不享有跨工程特权；普通公开读取不校验成员关系。Service Token 的 Build 创建和中止仍分别校验工程范围及 `builds:create`、`builds:abort` 权限。
 - Build 的 PUT/PATCH 不开放；Job `/abort` 仅 Project owner/member 用户可调用；Runner 只可管理自身对象和已分配 Job。
 
 上游 Transport 的响应头超时为 30 秒，从请求正文发送完成后开始计时；透传请求等待响应头超时返回 502。收到响应头后的 Watch 流不受该超时限制，仍持续转发，并随客户端取消关闭上游请求。内部 `Do` 调用另有包含正文读取的 30 秒总超时。

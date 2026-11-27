@@ -582,7 +582,7 @@ apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 40
 | Project | `get/list/create/update/patch`，用途标签另需 Ops/Admin；禁止删除 | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户；owner 可管理用途标签 | 禁止 | `get/list/create`；仅 owner 可 PUT/PATCH 用途标签，禁止其他更新及删除 |
 | Project 子资源：Snapshot、BuildInfo、BuildGraph、RpmRepo | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
 | Project 子资源：历史 Job（oldjobs） | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
-| Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取、创建和中止；仅为 Project owner 时可删除；禁止 PUT/PATCH |
+| Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取；仅 owner/member 可创建和中止，仅 owner 可删除；禁止 PUT/PATCH |
 | 集群级 Config | 禁止 | 同 Owner | `get/list/create/update/patch/delete`，内置对象禁止删除 | 禁止 | 同 Ops |
 | Project 子资源：Job（不含 `/abort`） | 主资源 `get/list`，禁止 `/status` 写入 | 同 Owner | 同 Owner | 仅已分配 Job 的 `get` 和 `/status` 的 `patch` | 同 Owner |
 | Job `/abort` | 本工程 POST | 本工程 POST | 仅 owner/member 工程 POST | 禁止 | 仅 owner/member 工程 POST |
@@ -622,7 +622,7 @@ Project 归属查询通过 `includeFields=metadata.name,metadata.labels` 只读�
 Project 或 Runner Job 查询确认对象不存在时返回 404；连接失败、上游限流或其他非成功响应返回 503；响应解析失败或 Project 身份不匹配返回 502。
 只有已确认的 owner/member 或 Runner 归属不匹配才返回 403，查询失败时不放行，也不误报无权限。
 
-公开 `GET` 不查询 Project owner/member。普通用户修改 Project 或其他 Project 子资源时，gateway 先读取 Project 并校验 owner/member 权限；需要区分 owner 与 member 的写操作继续按矩阵限制。
+普通公开 `GET` 不查询 Project owner/member。Build 创建、中止和工程 Job Watch 对所有用户角色统一校验 Project owner/member，Ops/Admin 不例外；Service Token 的 Build 操作仍按工程范围及操作权限校验。需要区分 owner 与 member 的写操作继续按矩阵限制。
 
 Runner 范围 Job list/watch 仅允许 Runner Token 对自身路径执行 GET，普通用户、Ops/Admin 和 Service Token 均拒绝；拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver 从可信路径生成。
 
@@ -853,7 +853,7 @@ GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
 GET /apis/ebs/v1/projects/{project}/jobs?watch=true
 ```
 
-全局 `ValidateWatchRoute` 按 HTTP 方法和 `c.FullPath()` 精确匹配上述两类 GET 路由模板，不按原始 URL 前缀放行。非 Watch 请求直接继续；其他已匹配路由的 Watch 请求在认证、限流前返回 403，无论是否携带有效 Token。未匹配路由交给既有 `NoRoute`，匿名返回 401、认证成功后返回 404。允许列表只确认接口支持 Watch，不授予访问权限：两类列表仍执行认证、资源授权、查询参数和适用的并发检查，匿名请求返回 401。Runner token 通过自身 Runner 范围接口 Watch Job；用户通过已授权的 Job 列表建立 Watch。
+全局 `ValidateWatchRoute` 按 HTTP 方法和 `c.FullPath()` 精确匹配上述两类 GET 路由模板，不按原始 URL 前缀放行。非 Watch 请求直接继续；其他已匹配路由的 Watch 请求在认证、限流前返回 403，无论是否携带有效 Token。未匹配路由交给既有 `NoRoute`，匿名返回 401、认证成功后返回 404。允许列表只确认接口支持 Watch，不授予访问权限：两类列表仍执行认证、资源授权、查询参数和适用的并发检查，匿名请求返回 401。Runner token 通过自身 Runner 范围接口 Watch Job；用户通过工程 Job 列表建立 Watch 时必须为该工程的 owner/member，Ops/Admin 不享有跨工程访问特权。
 
 每个 Gateway 实例内，同一 Runner 同时最多建立一个 Runner 范围 Job watch。超过限制返回429并包含 `Retry-After`；连接正常结束、上游失败或客户端断开时必须释放计数。Runner watch建议使用不超过300秒的 `timeoutSeconds` 定期重连，使 token和权限能够重新校验。
 

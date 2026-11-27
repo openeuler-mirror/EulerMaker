@@ -5390,7 +5390,7 @@
         ]
       },
       "post": {
-        "description": "Project owner/member or Admin, or service token with this Project in MachineAccount.spec.projects and builds:create in spec.permissions. Grants are read on each request; missing grants return 403. Does not grant builds:abort. Build inputs remain subject to apiserver validation. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Project owner/member only for user tokens, including Ops/Admin without a cross-project override; or service token with this Project in MachineAccount.spec.projects and builds:create in spec.permissions. Grants are read on each request; missing grants return 403. Does not grant builds:abort. Build inputs remain subject to apiserver validation. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "postBuildsList",
         "parameters": [
           {
@@ -5685,7 +5685,7 @@
     },
     "/apis/ebs/v1/projects/{project}/builds/{name}/abort": {
       "post": {
-        "description": "Project owner/member or Admin, or service token with this Project in MachineAccount.spec.projects and builds:abort in spec.permissions. Grants are read on each request; missing grants return 403. Independent of builds:create; the Build need not have been created by this account. Apiserver handles the existing abort protocol.",
+        "description": "Project owner/member only for user tokens, including Ops/Admin without a cross-project override; or service token with this Project in MachineAccount.spec.projects and builds:abort in spec.permissions. Grants are read on each request; missing grants return 403. Independent of builds:create; the Build need not have been created by this account. Apiserver handles the existing abort protocol.",
         "operationId": "postBuildsAbort",
         "parameters": [
           {
@@ -5876,7 +5876,7 @@
     },
     "/apis/ebs/v1/projects/{project}/jobs": {
       "get": {
-        "description": "Anonymous and authenticated users may read. Public lists are limited to at most 100 items per page; continue until metadata.continue is empty. Watch requires authenticated project access, returns newline-delimited WatchEvent JSON instead of JobList and cannot use field projection; restart List after 410.",
+        "description": "Anonymous and authenticated users may read. Public lists are limited to at most 100 items per page; continue until metadata.continue is empty. Watch requires a Project owner/member user, including Ops/Admin without a cross-project override, returns newline-delimited WatchEvent JSON instead of JobList and cannot use field projection; restart List after 410.",
         "operationId": "getJobsList",
         "parameters": [
           {
