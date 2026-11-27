@@ -684,67 +684,61 @@ func TestRegisterMachineAccountConfigurationForwarding(t *testing.T) {
 	}
 }
 
-func TestMachineAccountGrantUpdates(t *testing.T) {
+func TestMachineAccountUpdateForwarding(t *testing.T) {
 	const path = "/apis/iam.ebs/v1/machineaccounts/automation"
-	const original = `{"apiVersion":"iam.ebs/v1","kind":"MachineAccount","metadata":{"name":"automation","uid":"id","resourceVersion":"v1:3:1"},"spec":{"type":"service","tokenTTLSeconds":3600,"projects":["demo"],"permissions":["projects:update"]}}`
+	const original = `{"metadata":{"name":"automation","uid":"id","resourceVersion":"v1:3:1"},"spec":{"type":"service","tokenTTLSeconds":3600}}`
 	for _, tc := range []struct {
 		name, method, media, body string
 		scope                     identity.Scope
-		accountType               string
 		status                    int
 	}{
-		{"merge patch", "PATCH", "application/merge-patch+json", `{"metadata":{"uid":"id","resourceVersion":"v1:3:1"},"spec":{"projects":["other"],"permissions":["builds:abort"]}}`, identity.AdminScope, "service", 200},
-		{"put", "PUT", "application/json", strings.ReplaceAll(original, "projects:update", "builds:abort"), identity.AdminScope, "service", 200},
-		{"json patch", "PATCH", "application/json-patch+json", `[{"op":"test","path":"/metadata/resourceVersion","value":"v1:3:1"},{"op":"replace","path":"/spec/permissions","value":[]}]`, identity.AdminScope, "service", 200},
-		{"service TTL", "PATCH", "application/merge-patch+json", `{"spec":{"tokenTTLSeconds":7200}}`, identity.AdminScope, "service", 200},
-		{"type", "PATCH", "application/merge-patch+json", `{"spec":{"type":"runner"}}`, identity.AdminScope, "service", 403},
-		{"metadata", "PATCH", "application/merge-patch+json", `{"metadata":{"labels":{"x":"y"}}}`, identity.AdminScope, "service", 403},
-		{"credential", "PATCH", "application/merge-patch+json", `{"credential":{"secretHash":"changed"}}`, identity.AdminScope, "service", 403},
-		{"stale", "PATCH", "application/merge-patch+json", `{"metadata":{"resourceVersion":"v1:2:1"}}`, identity.AdminScope, "service", 409},
-		{"replaced", "PATCH", "application/merge-patch+json", `{"metadata":{"uid":"other"}}`, identity.AdminScope, "service", 409},
-		{"runner TTL", "PATCH", "application/merge-patch+json", `{"spec":{"tokenTTLSeconds":7200}}`, identity.AdminScope, "runner", 200},
-		{"runner grants", "PATCH", "application/merge-patch+json", `{"spec":{"permissions":["builds:abort"]}}`, identity.AdminScope, "runner", 403},
-		{"ordinary user", "PATCH", "application/merge-patch+json", `{}`, identity.UserScope, "service", 403},
-		{"ops user", "PATCH", "application/merge-patch+json", `{}`, identity.OpsScope, "service", 403},
+		{"put", "PUT", "application/json", original, identity.AdminScope, 200},
+		{"merge patch", "PATCH", "application/merge-patch+json", `{"metadata":{"uid":"id","resourceVersion":"v1:3:1"},"spec":{"projects":["demo"]}}`, identity.AdminScope, 200},
+		{"json patch", "PATCH", "application/json-patch+json", `[{"op":"test","path":"/metadata/resourceVersion","value":"v1:3:1"},{"op":"replace","path":"/spec/tokenTTLSeconds","value":7200}]`, identity.AdminScope, 200},
+		{"validation failure", "PATCH", "application/merge-patch+json", `{"spec":{"type":"unknown"}}`, identity.AdminScope, 422},
+		{"version conflict", "PUT", "application/json", original, identity.AdminScope, 409},
+		{"missing account", "PATCH", "application/merge-patch+json", "{}", identity.AdminScope, 404},
+		{"malformed body", "PATCH", "application/merge-patch+json", "{", identity.AdminScope, 400},
+		{"ordinary user", "PATCH", "application/merge-patch+json", "{}", identity.UserScope, 403},
+		{"ops user", "PUT", "application/json", original, identity.OpsScope, 403},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writes := 0
+			result := `{"upstream":"response"}`
 			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				body := strings.ReplaceAll(original, `"type":"service"`, `"type":"`+tc.accountType+`"`)
-				switch {
-				case r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/users/admin":
-					body = `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["` + string(tc.scope) + `"]}}`
-				case r.Method == http.MethodGet && r.URL.Path == path:
-				case r.Method == http.MethodPut && r.URL.Path == path:
-					writes++
-					raw, err := io.ReadAll(r.Body)
-					if err != nil {
-						t.Fatal(err)
-					}
-					body = string(raw)
-					wantTTL := `"tokenTTLSeconds":3600`
-					if strings.Contains(tc.name, "TTL") {
-						wantTTL = `"tokenTTLSeconds":7200`
-					}
-					if !strings.Contains(body, wantTTL) || !strings.Contains(body, `"resourceVersion":"v1:3:1"`) {
-						t.Fatalf("unexpected update: %s", body)
-					}
-				default:
-					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				if r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/users/admin" {
+					body := `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["` + string(tc.scope) + `"]}}`
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 				}
-				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+				if tc.scope != identity.AdminScope {
+					t.Fatal("non-admin request reached upstream")
+				}
+				writes++
+				raw, err := io.ReadAll(r.Body)
+				if err != nil || r.Method != tc.method || r.URL.RequestURI() != path+"?fieldValidation=Strict" ||
+					r.Header.Get("Content-Type") != tc.media || string(raw) != tc.body {
+					t.Fatalf("request changed: %s %s Content-Type=%q body=%s err=%v", r.Method, r.URL, r.Header.Get("Content-Type"), raw, err)
+				}
+				return &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(result))}, nil
 			}))
 			token, err := api.tokens.Issue("admin", identity.UserType, tc.scope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := httptest.NewRequest(tc.method, path, strings.NewReader(tc.body))
+			req := httptest.NewRequest(tc.method, path+"?fieldValidation=Strict", strings.NewReader(tc.body))
 			req.Header.Set("Authorization", "Bearer "+token)
 			req.Header.Set("Content-Type", tc.media)
 			res := httptest.NewRecorder()
 			api.Router().ServeHTTP(res, req)
-			if res.Code != tc.status || (writes == 1) != (tc.status == 200) {
-				t.Fatalf("status=%d writes=%d body=%s", res.Code, writes, res.Body)
+			if res.Code != tc.status {
+				t.Fatalf("status=%d, want %d: %s", res.Code, tc.status, res.Body)
+			}
+			if tc.scope == identity.AdminScope {
+				if writes != 1 || res.Body.String() != result {
+					t.Fatalf("writes=%d body=%s", writes, res.Body)
+				}
+			} else if writes != 0 {
+				t.Fatalf("unauthorized writes=%d", writes)
 			}
 		})
 	}

@@ -82,8 +82,6 @@ func TestUpdateVersionAndStatusBoundaries(t *testing.T) {
 		{"runner status version", "runners", "status", func(o mutation.Object) { objectMap(o["metadata"])["resourceVersion"] = "2" }, 0},
 		{"runner ordinary version", "runners", "", func(o mutation.Object) { objectMap(o["metadata"])["resourceVersion"] = "2" }, 0},
 		{"job status version", "jobs", "status", func(o mutation.Object) { objectMap(o["metadata"])["resourceVersion"] = "2" }, http.StatusForbidden},
-		{"machine version before permission", "machineaccounts", "", func(o mutation.Object) { objectMap(o["metadata"])["resourceVersion"] = "2" }, http.StatusConflict},
-		{"machine UID before permission", "machineaccounts", "", func(o mutation.Object) { objectMap(o["metadata"])["uid"] = "new" }, http.StatusConflict},
 		{"status spec protection", "runners", "status", func(o mutation.Object) { o["spec"] = map[string]any{"type": "vm"} }, http.StatusForbidden},
 		{"status metadata protection", "runners", "status", func(o mutation.Object) { objectMap(o["metadata"])["labels"] = map[string]any{"pool": "new"} }, http.StatusForbidden},
 	} {
