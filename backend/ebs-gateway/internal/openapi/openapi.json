@@ -10043,7 +10043,7 @@
     },
     "/apis/iam.ebs/v1/machineaccounts": {
       "get": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "getMachineAccountList",
         "parameters": [
           {
@@ -10162,7 +10162,7 @@
     },
     "/apis/iam.ebs/v1/machineaccounts/{name}": {
       "delete": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
         "operationId": "deleteMachineAccount",
         "parameters": [
           {
@@ -10256,7 +10256,7 @@
         ]
       },
       "get": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "getMachineAccount",
         "parameters": [
           {
@@ -10349,7 +10349,7 @@
         ]
       },
       "patch": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "patchMachineAccount",
         "parameters": [
           {
@@ -10467,7 +10467,7 @@
         ]
       },
       "put": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "putMachineAccount",
         "parameters": [
           {
@@ -10556,7 +10556,7 @@
     },
     "/apis/iam.ebs/v1/users": {
       "get": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "getUserList",
         "parameters": [
           {
@@ -10659,7 +10659,7 @@
     },
     "/apis/iam.ebs/v1/users/{name}": {
       "delete": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
         "operationId": "deleteUser",
         "parameters": [
           {
@@ -10753,7 +10753,7 @@
         ]
       },
       "get": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "getUser",
         "parameters": [
           {
@@ -10830,7 +10830,7 @@
         ]
       },
       "patch": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
         "operationId": "patchUser",
         "parameters": [
           {
@@ -10948,7 +10948,7 @@
         ]
       },
       "put": {
-        "description": "Admin only. Admin User accounts are excluded from management. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "putUser",
         "parameters": [
           {

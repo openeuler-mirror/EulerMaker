@@ -66,11 +66,11 @@ func registerAuth(router *gin.Engine, api *Handler) {
 func registerIAM(router *gin.Engine, api *Handler) {
 	iam := router.Group("/apis/iam.ebs/v1")
 
-	iam.GET("/users", api.users)
-	iam.GET("/users/:name", api.users)
-	iam.PUT("/users/:name", api.users)
-	iam.PATCH("/users/:name", api.users)
-	iam.DELETE("/users/:name", api.users)
+	iam.GET("/users", api.upstream.Forward)
+	iam.GET("/users/:name", api.upstream.Forward)
+	iam.PUT("/users/:name", api.prepareUserUpdate, api.upstream.Forward)
+	iam.PATCH("/users/:name", api.prepareUserUpdate, api.upstream.Forward)
+	iam.DELETE("/users/:name", api.protectAdminUser, api.upstream.Forward)
 
 	iam.GET("/machineaccounts", api.machineAccounts)
 	iam.GET("/machineaccounts/:name", api.machineAccounts)

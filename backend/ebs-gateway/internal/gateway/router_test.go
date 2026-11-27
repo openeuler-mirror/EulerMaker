@@ -1735,7 +1735,7 @@ func TestRunnerServiceEndpointsRefresh(t *testing.T) {
 	}
 }
 
-func TestAdminUserGetUsesCheckedResponse(t *testing.T) {
+func TestAdminUserGetDirectForwarding(t *testing.T) {
 	calls := 0
 	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
@@ -1743,10 +1743,7 @@ func TestAdminUserGetUsesCheckedResponse(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`))}, nil
 		case "/apis/iam.ebs/v1/users/alice":
 			calls++
-			scope := "ebs:user"
-			if calls > 1 {
-				scope = "ebs:admin"
-			}
+			scope := "ebs:admin"
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["` + scope + `"]}}`))}, nil
 		default:
 			t.Fatalf("unexpected upstream path %s", request.URL.Path)
@@ -1761,12 +1758,12 @@ func TestAdminUserGetUsesCheckedResponse(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
 	api.Router().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || calls != 1 || strings.Contains(response.Body.String(), "ebs:admin") {
+	if response.Code != http.StatusOK || calls != 1 || !strings.Contains(response.Body.String(), "ebs:admin") {
 		t.Fatalf("status=%d calls=%d body=%q", response.Code, calls, response.Body.String())
 	}
 }
 
-func TestUserListOmitsAdminAccounts(t *testing.T) {
+func TestUserListIncludesAdminAccounts(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body string
 		switch request.URL.Path {
@@ -1787,7 +1784,7 @@ func TestUserListOmitsAdminAccounts(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
 	api.Router().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), `"name":"admin"`) || !strings.Contains(response.Body.String(), `"name":"alice"`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"name":"admin"`) || !strings.Contains(response.Body.String(), `"name":"alice"`) {
 		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}
 	for _, field := range []string{`"apiVersion":"iam.ebs/v1"`, `"kind":"UserList"`, `"continue":"next-page"`, `"resourceVersion":"42"`, `"displayName":"Alice"`} {
