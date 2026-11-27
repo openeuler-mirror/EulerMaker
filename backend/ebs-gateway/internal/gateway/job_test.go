@@ -104,3 +104,57 @@ func TestJobStatusPatchForwarding(t *testing.T) {
 		t.Fatalf("status=%d reads=%d writes=%d body=%s", response.Code, reads, writes, response.Body)
 	}
 }
+
+func TestJobAbortForwarding(t *testing.T) {
+	for _, tc := range []struct {
+		name, subject, body string
+		upstreamStatus      int
+		want                int
+	}{
+		{"owner", "alice", `{"uid":"id","reason":"stop"}`, 200, 200},
+		{"member", "carol", `{"uid":"id"}`, 200, 200},
+		{"upstream body rejection", "alice", strings.Repeat("x", 17<<10), 400, 400},
+		{"nonmember", "bob", `{"uid":"id"}`, 200, 403},
+		{"admin nonmember", "admin", `{"uid":"id"}`, 200, 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scope := identity.UserScope
+			if tc.subject == "admin" {
+				scope = identity.AdminScope
+			}
+			forwarded := false
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				status, body := http.StatusOK, "{}"
+				switch r.URL.Path {
+				case "/apis/iam.ebs/v1/users/" + tc.subject:
+					body = `{"metadata":{"name":"` + tc.subject + `"},"spec":{"enabled":true,"scopes":["` + string(scope) + `"]}}`
+				case "/apis/ebs/v1/projects/team":
+					body = `{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.carol":"true"}}}`
+				case "/apis/ebs/v1/projects/team/jobs/job-1/abort":
+					forwarded = true
+					raw, err := io.ReadAll(r.Body)
+					if err != nil || string(raw) != tc.body || r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+						t.Fatalf("request changed: method=%s body=%s err=%v", r.Method, raw, err)
+					}
+					status = tc.upstreamStatus
+				default:
+					t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL)
+				}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			api.bodyLimit = 8
+			token, err := api.tokens.Issue(tc.subject, identity.UserType, scope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/apis/ebs/v1/projects/team/jobs/job-1/abort", strings.NewReader(tc.body))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			api.Router().ServeHTTP(response, request)
+			if response.Code != tc.want || forwarded != (tc.want != http.StatusForbidden) {
+				t.Fatalf("status=%d forwarded=%v body=%s", response.Code, forwarded, response.Body)
+			}
+		})
+	}
+}

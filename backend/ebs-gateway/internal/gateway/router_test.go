@@ -353,7 +353,7 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 		{"stale version", "PATCH", "/apis/ebs/v1/projects/team", "application/json-patch+json", `[{"op":"test","path":"/metadata/resourceVersion","value":"v1:0:1"}]`, 409, false},
 		{"build create", "POST", "/apis/ebs/v1/projects/team/builds", "application/json", `{"metadata":{"name":"b","namespace":"team"},"spec":{"type":"single","arch":"aarch64","packages":["pkg"]}}`, 201, true},
 		{"build abort", "POST", "/apis/ebs/v1/projects/team/builds/b/abort", "application/json", `{}`, 200, true},
-		{"namespace mismatch", "POST", "/apis/ebs/v1/projects/team/builds", "application/json", `{"metadata":{"name":"b","namespace":"other"}}`, 400, false},
+		{"namespace mismatch", "POST", "/apis/ebs/v1/projects/team/builds", "application/json", `{"metadata":{"name":"b","namespace":"other"}}`, 400, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			forwarded := false
@@ -383,7 +383,7 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 					}
 				case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/team/builds":
 					forwarded = true
-					status, body = http.StatusCreated, test.body
+					status, body = test.status, test.body
 				case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/team/builds/b/abort":
 					forwarded = true
 					raw, err := io.ReadAll(r.Body)
@@ -1755,7 +1755,7 @@ func TestAdminOwnerProjectPurposePatch(t *testing.T) {
 
 func TestBuildCreateChain(t *testing.T) {
 	const path = "/apis/ebs/v1/projects/team/builds"
-	const body = `{"metadata":{"name":"build-1"},"spec":{"arch":"aarch64"}}`
+	const body = "{\n  \"metadata\": {\"name\": \"build-1\"}, \"spec\": {\"arch\": \"aarch64\"}\n}"
 	for _, tc := range []struct {
 		name, subject string
 		scope         identity.Scope
@@ -1793,6 +1793,7 @@ func TestBuildCreateChain(t *testing.T) {
 				}
 				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
 			}))
+			api.bodyLimit = 8
 			token, err := api.tokens.Issue(tc.subject, identity.UserType, tc.scope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
@@ -1915,6 +1916,7 @@ func TestBuildActionChains(t *testing.T) {
 				}
 				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(response))}, nil
 			}))
+			api.bodyLimit = 8
 			router := api.Router()
 			token, err := api.tokens.Issue(tc.subject, identity.UserType, tc.scope, time.Hour, api.now())
 			if err != nil {

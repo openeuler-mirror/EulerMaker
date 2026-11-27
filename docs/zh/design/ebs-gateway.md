@@ -377,7 +377,7 @@ MachineAccount.spec 增加 `projects` 和 `permissions`，注册和持久化约�
 
 三个权限相互独立：创建 Build 不自动获得中止权限，中止权限不要求具有创建权限。未配置构建类型、发布或优先级专属限制，`builds:create` 可以提交 apiserver 允许的构建输入，仍受现有默认值和业务校验约束。`builds:abort` 可作用于授权工程中的任意 Build，不要求由该账号创建；需要更小权限范围时使用独立工程和账号。
 
-Service 不映射到同名 User，不要求成为工程 owner/member，也不继承用户、Runner 或匿名读取权限。Project 更新沿用完整对象更新及 Merge Patch / JSON Patch 处理；owner、UID、resourceVersion 等受保护字段仍遵守现有校验，service 不能修改门禁用途标签。成员标签变更仍核验对应用户，apiserver 继续执行对象完整校验。Build 创建保留路径与 namespace 一致性检查，并由 apiserver 校验构建输入、处理默认值和并发构建限制。Gateway 的正文大小、限流、上游错误及并发更新保护保持不变。
+Service 不映射到同名 User，不要求成为工程 owner/member，也不继承用户、Runner 或匿名读取权限。Project 更新沿用完整对象更新及 Merge Patch / JSON Patch 处理；owner、UID、resourceVersion 等受保护字段仍遵守现有校验，service 不能修改门禁用途标签。成员标签变更仍核验对应用户，apiserver 继续执行对象完整校验。Build 创建在授权后原样代理，由 apiserver 校验路径与 namespace 一致性、构建输入，处理默认值和并发构建限制。Gateway 不预读或重写 Build 创建正文，保留限流和上游错误透传。
 
 Build 中止复用既有 `/abort` 路由及请求/响应契约，不通过主资源或 `/status` PUT/PATCH 中止，不直接调用 Job `/abort`。Gateway 在转发前执行 service 授权；apiserver 继续处理对象不存在、并发和终态等业务情况。接口返回仅表示服务端已处理中止请求，不代表所有派生 Job 已停止执行或完成清理。
 
@@ -565,7 +565,7 @@ Runner 范围的 Job list-watch 请求还需校验 token 中的 Runner 名与路
 
 gateway 在转发前进行用户级 Project 鉴权。
 
-Runner 创建接口仅允许有效的 Runner Token 自行注册，普通用户、Ops/Admin 和 Service Token 均不得创建 Runner。全局身份准入依据路由规则限制身份，路由使用 `prepareRunnerCreate → forward`；正文准备阶段必须解析完整 JSON 对象并执行以下检查：
+Runner 创建接口仅允许有效的 Runner Token 自行注册，普通用户、Ops/Admin 和 Service Token 均不得创建 Runner。全局身份准入依据路由规则限制身份，路由使用 `prepareRunnerCreate → upstream.Forward`；正文准备阶段必须解析完整 JSON 对象并执行以下检查：
 
 - JWT `sub` 和 `metadata.name` 完全一致；请求不能使用 `generateName`。
 - 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.instanceID`、`spec.type`、`spec.arch`、初始 `spec.taints`。污点仅在创建时允许声明，已有对象的污点由 Ops/Admin 管理，Runner 更新仍须保留原值。
@@ -654,6 +654,8 @@ Runner 范围 Job list/watch 仅允许 Runner Token 对自身路径执行 GET，
 ### 4.9 AccessLabels
 
 #### 4.9.1 PUT/PATCH 完整对象比较
+
+Project 创建、PUT/PATCH 和 Job 状态 PATCH 分别在路由中显式挂载 `prepareProjectCreate`、`prepareProjectUpdate`、`prepareJobStatusUpdate`，保留身份、旧对象读取和字段校验。Build 创建、中止、删除、Job 中止以及 Runner 删除通过相应授权后直接调用 `upstream.Forward`，不经过通用写请求正文处理；保留原始方法、正文、Content-Type 和查询参数，原样返回上游错误。apiserver 负责 Build 创建和删除的正文限制、对象校验及并发保护，Job 中止独立限制正文为 16 KiB；Build 中止当前不读取正文。Runner 删除的 DeleteOptions、5 MiB 正文上限和状态资格由 apiserver 处理。
 
 Config 请求在通过认证、Ops/Admin 权限、限流和 Watch 检查后直接代理，保留原始方法、正文和 Content-Type；DELETE 还须通过内置配置删除保护。Gateway 不预读 Config、不将 PATCH 转为 PUT，也不对 Config 请求执行正文大小检查；解码、PATCH 应用、元数据及内容校验、版本冲突检查、DeleteOptions 解析和正文大小限制均由 apiserver 负责，响应原样返回。
 
@@ -799,7 +801,7 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 
 全局身份准入只决定能否进入业务处理：Runner 仍须匹配路径名称及 Job 分配关系；Project owner/member、Service 的工程范围和 permission、更新字段权限均由后续业务校验处理。公开读取携带无效 Token 不降级匿名；公开 Job Watch 仍检查工程成员权限，Runner 通过自身任务列表 Watch。
 
-Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和 `/status` 读取只允许 Ops/Admin；普通对象读取、更新和状态更新允许 Ops/Admin 或 Runner。路由不再挂载重复的身份门卫。`prepareRunnerCreate` 校验注册正文；具名 Runner 读取、更新仍校验 Runner Token 的 Subject 与路径名称一致；更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；`prepareRunnerJobs` 保留路径归属、查询参数和 Watch 并发检查，名额持有到转发结束。通过这些检查后才进入 `forward`。
+Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和 `/status` 读取只允许 Ops/Admin；普通对象读取、更新和状态更新允许 Ops/Admin 或 Runner。路由不再挂载重复的身份门卫。`prepareRunnerCreate` 校验注册正文；具名 Runner 读取、更新仍校验 Runner Token 的 Subject 与路径名称一致；更新保留旧对象读取、PATCH 转 PUT 和字段权限校验；`prepareRunnerJobs` 保留路径归属、查询参数和 Watch 并发检查，名额持有到转发结束。通过这些检查后才进入 `upstream.Forward`。
 
 路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/gateway` 在 `router.go` 注册路径、组装中间件，同包的资源 Handler 协调匿名访问、Policy 授权、请求准备及最终响应或代理；`internal/middleware` 负责 Bearer JWT 校验、Service 账号实时核验、User 状态确认、路由身份准入、已认证请求限流和审计。Policy 的公共入口负责分派，Project、Runner 的授权及写入规则分别集中在各自的业务文件。全局路由链挂载审计与 panic 恢复。身份、IAM 客户端、完整对象 PATCH、上游通信和令牌桶分别位于 `internal/identity`、`iamclient`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
 

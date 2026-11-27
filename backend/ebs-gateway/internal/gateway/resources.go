@@ -21,7 +21,6 @@ const (
 )
 
 type resourceAccess struct {
-	route   policy.Route
 	pending resourceCheck
 }
 
@@ -110,7 +109,7 @@ func (a *Handler) authorizeAuthenticatedRoute(c *gin.Context, route policy.Route
 }
 
 func allowResource(c *gin.Context, route policy.Route) {
-	c.Set(resourceAccessKey, &resourceAccess{route: route, pending: requiredResourceCheck(route)})
+	c.Set(resourceAccessKey, &resourceAccess{pending: requiredResourceCheck(route)})
 	c.Next()
 }
 
@@ -165,5 +164,5 @@ func (a *Handler) forwardResource(c *gin.Context) {
 	if access == nil {
 		return
 	}
-	a.forwardRequest(c, middleware.Principal(c), access.route)
+	a.upstream.Forward(c)
 }

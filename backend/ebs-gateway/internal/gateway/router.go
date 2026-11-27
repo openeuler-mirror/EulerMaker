@@ -90,52 +90,52 @@ func registerConfigProjections(router *gin.Engine, api *Handler) {
 func registerConfigs(router *gin.Engine, api *Handler) {
 	configs := router.Group("/apis/ebs/v1/configs")
 
-	configs.GET("", api.forward)
-	configs.POST("", api.forward)
+	configs.GET("", api.upstream.Forward)
+	configs.POST("", api.upstream.Forward)
 
-	configs.GET("/:name", api.forward)
-	configs.PUT("/:name", api.forward)
-	configs.PATCH("/:name", api.forward)
-	configs.DELETE("/:name", rejectBuiltInConfigDeletion, api.forward)
+	configs.GET("/:name", api.upstream.Forward)
+	configs.PUT("/:name", api.upstream.Forward)
+	configs.PATCH("/:name", api.upstream.Forward)
+	configs.DELETE("/:name", rejectBuiltInConfigDeletion, api.upstream.Forward)
 }
 
 func registerScripts(router *gin.Engine, api *Handler) {
 	scripts := router.Group("/apis/ebs/v1/scripts")
-	scripts.GET("", api.forward)
-	scripts.POST("", api.forward)
-	scripts.GET("/:name", api.forward)
-	scripts.PUT("/:name", api.forward)
-	scripts.PATCH("/:name", api.forward)
-	scripts.DELETE("/:name", api.forward)
+	scripts.GET("", api.upstream.Forward)
+	scripts.POST("", api.upstream.Forward)
+	scripts.GET("/:name", api.upstream.Forward)
+	scripts.PUT("/:name", api.upstream.Forward)
+	scripts.PATCH("/:name", api.upstream.Forward)
+	scripts.DELETE("/:name", api.upstream.Forward)
 }
 
 func registerProjects(router *gin.Engine, api *Handler) {
 	guard := api.projectGuard("")
 	read := api.publicReadGuard("projects", "")
 	router.GET("/apis/ebs/v1/projects", read, api.forwardResource)
-	router.POST("/apis/ebs/v1/projects", guard, api.forwardResource)
+	router.POST("/apis/ebs/v1/projects", guard, api.prepareProjectCreate, api.upstream.Forward)
 
 	router.GET("/apis/ebs/v1/projects/:project", read, api.forwardResource)
-	router.PUT("/apis/ebs/v1/projects/:project", guard, api.forwardResource)
-	router.PATCH("/apis/ebs/v1/projects/:project", guard, api.forwardResource)
+	router.PUT("/apis/ebs/v1/projects/:project", guard, api.prepareProjectUpdate, api.upstream.Forward)
+	router.PATCH("/apis/ebs/v1/projects/:project", guard, api.prepareProjectUpdate, api.upstream.Forward)
 }
 
 func registerRunners(router *gin.Engine, api *Handler) {
 	runners := router.Group("/apis/ebs/v1/runners")
 
-	runners.GET("", api.forward)
-	runners.POST("", api.prepareRunnerCreate, api.forward)
+	runners.GET("", api.upstream.Forward)
+	runners.POST("", api.prepareRunnerCreate, api.upstream.Forward)
 
-	runners.GET("/:runner", api.runnerReadGuard, api.forward)
-	runners.PUT("/:runner", api.runnerUpdateGuard, api.forward)
-	runners.PATCH("/:runner", api.runnerUpdateGuard, api.forward)
-	runners.DELETE("/:runner", api.runnerDeleteGuard, api.forward)
+	runners.GET("/:runner", api.runnerReadGuard, api.upstream.Forward)
+	runners.PUT("/:runner", api.runnerUpdateGuard, api.upstream.Forward)
+	runners.PATCH("/:runner", api.runnerUpdateGuard, api.upstream.Forward)
+	runners.DELETE("/:runner", api.upstream.Forward)
 
-	runners.GET("/:runner/status", api.forward)
-	runners.PUT("/:runner/status", api.runnerStatusUpdateGuard, api.forward)
-	runners.PATCH("/:runner/status", api.runnerStatusUpdateGuard, api.forward)
+	runners.GET("/:runner/status", api.upstream.Forward)
+	runners.PUT("/:runner/status", api.runnerStatusUpdateGuard, api.upstream.Forward)
+	runners.PATCH("/:runner/status", api.runnerStatusUpdateGuard, api.upstream.Forward)
 
-	runners.GET("/:runner/jobs", api.prepareRunnerJobs, api.forward)
+	runners.GET("/:runner/jobs", api.prepareRunnerJobs, api.upstream.Forward)
 }
 
 func registerProjectScopedResources(router *gin.Engine, api *Handler) {
@@ -143,15 +143,15 @@ func registerProjectScopedResources(router *gin.Engine, api *Handler) {
 	guard := api.projectScopedGuard("builds", "")
 	readBuild := api.publicReadGuard("builds", "")
 	project.GET("/builds", readBuild, api.forwardResource)
-	project.POST("/builds", guard, api.forwardResource)
+	project.POST("/builds", guard, api.upstream.Forward)
 
 	project.GET("/builds/:name", readBuild, api.forwardResource)
-	project.DELETE("/builds/:name", guard, api.forwardResource)
+	project.DELETE("/builds/:name", guard, api.upstream.Forward)
 
 	project.GET("/builds/:name/status", api.publicReadGuard("builds", "status"), api.forwardResource)
 
 	guard = api.projectScopedGuard("builds", "abort")
-	project.POST("/builds/:name/abort", guard, api.forwardResource)
+	project.POST("/builds/:name/abort", guard, api.upstream.Forward)
 
 	readJob := api.publicReadGuard("jobs", "")
 	project.GET("/jobs", readJob, api.forwardResource)
@@ -160,10 +160,10 @@ func registerProjectScopedResources(router *gin.Engine, api *Handler) {
 
 	guard = api.projectScopedGuard("jobs", "status")
 	project.GET("/jobs/:name/status", api.publicReadGuard("jobs", "status"), api.forwardResource)
-	project.PATCH("/jobs/:name/status", guard, api.forwardResource)
+	project.PATCH("/jobs/:name/status", guard, api.prepareJobStatusUpdate, api.upstream.Forward)
 
 	guard = api.projectScopedGuard("jobs", "abort")
-	project.POST("/jobs/:name/abort", guard, api.forwardResource)
+	project.POST("/jobs/:name/abort", guard, api.upstream.Forward)
 
 	readOldJob := api.publicReadGuard("oldjobs", "")
 	project.GET("/oldjobs", readOldJob, api.forwardResource)

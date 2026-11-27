@@ -9,6 +9,7 @@ import (
 
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/middleware"
+	"ebs-gateway/internal/policy"
 )
 
 // runnerJobReadGuard verifies assignment before a Runner reads a named Job.
@@ -56,4 +57,19 @@ func (a *Handler) runnerOwnsJob(c *gin.Context, runner string) bool {
 		return false
 	}
 	return true
+}
+
+func (a *Handler) prepareJobStatusUpdate(c *gin.Context) {
+	route := policy.Route{
+		Resource:    "jobs",
+		Project:     c.Param("project"),
+		Name:        c.Param("name"),
+		Subresource: "status",
+		Method:      c.Request.Method,
+	}
+	if !a.prepareUpdate(c, middleware.Principal(c), route) {
+		c.Abort()
+		return
+	}
+	c.Next()
 }
