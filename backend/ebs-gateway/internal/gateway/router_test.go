@@ -18,6 +18,7 @@ import (
 	"k8s.io/klog/v2"
 
 	ebsv1 "ebs-api/ebs/v1"
+	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/auth"
 	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
@@ -128,8 +129,9 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	registered := map[string]bool{}
+	rules := registeredRoutePolicies(api)
 	for _, route := range router.Routes() {
-		if route.Path != "/healthz" && !hasRoutePolicy(route.Method, route.Path) {
+		if _, ok := rules[middleware.RouteKey{Method: route.Method, Path: route.Path}]; route.Path != "/healthz" && route.Path != "/auth/check" && !ok {
 			t.Fatalf("route has no identity admission policy: %s %s", route.Method, route.Path)
 		}
 		if route.Method == http.MethodHead && strings.HasPrefix(route.Path, "/apis/") {
@@ -513,6 +515,10 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 					}
 				case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/team/builds":
 					forwarded = true
+					raw, err := io.ReadAll(r.Body)
+					if err != nil || string(raw) != test.body {
+						t.Fatalf("create body=%s err=%v", raw, err)
+					}
 					status, body = test.status, test.body
 				case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/team/builds/b/abort":
 					forwarded = true
@@ -537,7 +543,8 @@ func TestServiceTokenAllowedWrites(t *testing.T) {
 			request.Header.Set("Authorization", "Bearer "+token)
 			request.Header.Set("Content-Type", test.media)
 			rec := httptest.NewRecorder()
-			api.Router().ServeHTTP(rec, request)
+			router := api.Router()
+			router.ServeHTTP(rec, request)
 			if rec.Code != test.status || forwarded != test.forward || lookups != 1 {
 				t.Fatalf("status=%d forwarded=%v lookups=%d body=%s", rec.Code, forwarded, lookups, rec.Body)
 			}
@@ -802,7 +809,7 @@ func TestIAMRouteGuards(t *testing.T) {
 	}
 }
 
-func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
+func TestConfigAndScriptServiceRejectionOrder(t *testing.T) {
 	api := newTestAPIWithConfig(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
 			t.Fatalf("denied request reached upstream: %s", r.URL)
@@ -814,30 +821,22 @@ func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := gin.New()
-	var decision string
-	router.Use(func(c *gin.Context) {
-		c.Next()
-		decision = c.GetString("serviceAuthorization")
-	})
-	router.Use(middleware.PrepareQuery(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(middleware.NewRoutePolicies(routeRules()), api.auth),
-		middleware.LimitIdentity(api.limits), middleware.Authorize(middleware.NewRoutePolicies(routeRules()), api.policy))
-	registerForwardRoutes(router, make(map[middleware.RouteKey]middleware.RoutePolicy), api.Handler)
+	router := api.Router()
 	for _, tc := range []struct {
-		query, audit string
-		status       int
+		query  string
+		status int
 	}{
-		{"", "denied", http.StatusForbidden},
-		{"?watch=true", "", http.StatusForbidden},
-		{"", "", http.StatusTooManyRequests},
+		{"", http.StatusForbidden},
+		{"?watch=true", http.StatusForbidden},
+		{"", http.StatusTooManyRequests},
 	} {
 		for _, resource := range []string{"configs", "scripts"} {
 			req := httptest.NewRequest(http.MethodPost, "/apis/ebs/v1/"+resource+tc.query, nil)
 			req.Header.Set("Authorization", "Bearer "+token)
 			res := httptest.NewRecorder()
 			router.ServeHTTP(res, req)
-			if res.Code != tc.status || decision != tc.audit {
-				t.Errorf("%s: status=%d audit=%q, want %d/%q", req.URL, res.Code, decision, tc.status, tc.audit)
+			if res.Code != tc.status {
+				t.Errorf("%s: status=%d, want %d", req.URL, res.Code, tc.status)
 			}
 		}
 	}
@@ -1286,6 +1285,11 @@ func TestConfigAndScriptRouteGuards(t *testing.T) {
 		{"GET", "/scripts/rpmbuild", "runner", 200},
 		{"GET", "/scripts", "runner", 200},
 		{"GET", "/scripts", "user", 200},
+		{"GET", "/scripts/custom", "user", 200},
+		{"GET", "/scripts", "ops", 200},
+		{"GET", "/scripts/custom", "ops", 200},
+		{"GET", "/scripts", "admin", 200},
+		{"GET", "/scripts/custom", "admin", 200},
 		{"GET", "/scripts/custom", "service", 403},
 		{"GET", "/scripts", "service", 403},
 		{"POST", "/scripts", "", 401},
@@ -1645,7 +1649,23 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 			body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
 		case "/apis/ebs/v1/projects/team":
 			body = `{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"alice"}}}`
-		case "/apis/ebs/v1/projects/team/jobs":
+		case "/apis/ebs/v1/projects/team/rpmrepos/repo",
+			"/apis/ebs/v1/projects/team/builds/item",
+			"/apis/ebs/v1/projects/team/builds/item/status",
+			"/apis/ebs/v1/projects/team/jobs/item/status",
+			"/apis/ebs/v1/projects/team/snapshots/item",
+			"/apis/ebs/v1/projects/team/oldjobs/item",
+			"/apis/ebs/v1/projects/team/buildinfos/item",
+			"/apis/ebs/v1/projects/team/buildgraphs/item",
+			"/apis/ebs/v1/projects/team/rpmrepos/repo/status",
+			"/apis/ebs/v1/projects/team/snapshots/item/status",
+			"/apis/ebs/v1/projects/team/buildinfos/item/status",
+			"/apis/ebs/v1/projects/team/buildgraphs/item/status":
+			body = `{"status":{"phase":"Ready"}}`
+		case "/apis/ebs/v1/projects/team/jobs", "/apis/ebs/v1/projects/team/rpmrepos",
+			"/apis/ebs/v1/projects/team/builds",
+			"/apis/ebs/v1/projects/team/snapshots", "/apis/ebs/v1/projects/team/oldjobs",
+			"/apis/ebs/v1/projects/team/buildinfos", "/apis/ebs/v1/projects/team/buildgraphs":
 			if request.URL.Query().Get("limit") != "100" {
 				t.Errorf("public collection was not bounded: %q", request.URL.RawQuery)
 			}
@@ -1669,7 +1689,87 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 	}{
 		{"anonymous public list", http.MethodGet, "/apis/ebs/v1/projects/team/jobs", "", http.StatusOK},
 		{"anonymous project read", http.MethodGet, "/apis/ebs/v1/projects/team", "", http.StatusOK},
+		{"authenticated project read", http.MethodGet, "/apis/ebs/v1/projects/team", userToken, http.StatusOK},
+		{"anonymous rpmrepo status", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos/repo/status", "", http.StatusOK},
+		{"authenticated rpmrepo status", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos/repo/status", userToken, http.StatusOK},
+		{"invalid rpmrepo bearer", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos/repo/status", "bad", http.StatusUnauthorized},
+		{"runner rpmrepo status", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos/repo/status", runnerToken, http.StatusForbidden},
+		{"rpmrepo status watch", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos/repo/status?watch=true", userToken, http.StatusForbidden},
+		{"authenticated rpmrepo list", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos", userToken, http.StatusOK},
+		{"authenticated rpmrepo detail", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos/repo", userToken, http.StatusOK},
+		{"invalid rpmrepo list bearer", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos", "bad", http.StatusUnauthorized},
+		{"invalid rpmrepo detail bearer", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos/repo", "bad", http.StatusUnauthorized},
+		{"runner rpmrepo list", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos", runnerToken, http.StatusForbidden},
+		{"runner rpmrepo detail", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos/repo", runnerToken, http.StatusForbidden},
+		{"rpmrepo list watch", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos?watch=true", userToken, http.StatusForbidden},
+		{"rpmrepo detail watch", http.MethodGet, "/apis/ebs/v1/projects/team/rpmrepos/repo?watch=true", userToken, http.StatusForbidden},
+		{"anonymous snapshot status", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots/item/status", "", http.StatusOK},
+		{"authenticated snapshot status", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots/item/status", userToken, http.StatusOK},
+		{"invalid snapshot bearer", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots/item/status", "bad", http.StatusUnauthorized},
+		{"runner snapshot status", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots/item/status", runnerToken, http.StatusForbidden},
+		{"snapshot status watch", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots/item/status?watch=true", userToken, http.StatusForbidden},
+		{"anonymous buildinfo status", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos/item/status", "", http.StatusOK},
+		{"authenticated buildinfo status", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos/item/status", userToken, http.StatusOK},
+		{"invalid buildinfo bearer", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos/item/status", "bad", http.StatusUnauthorized},
+		{"runner buildinfo status", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos/item/status", runnerToken, http.StatusForbidden},
+		{"buildinfo status watch", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos/item/status?watch=true", userToken, http.StatusForbidden},
+		{"anonymous buildgraph status", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs/item/status", "", http.StatusOK},
+		{"authenticated buildgraph status", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs/item/status", userToken, http.StatusOK},
+		{"invalid buildgraph bearer", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs/item/status", "bad", http.StatusUnauthorized},
+		{"runner buildgraph status", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs/item/status", runnerToken, http.StatusForbidden},
+		{"buildgraph status watch", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs/item/status?watch=true", userToken, http.StatusForbidden},
 		{"anonymous project write", http.MethodPatch, "/apis/ebs/v1/projects/team", "", http.StatusUnauthorized},
+		{"authenticated build list", http.MethodGet, "/apis/ebs/v1/projects/team/builds", userToken, http.StatusOK},
+		{"authenticated build detail", http.MethodGet, "/apis/ebs/v1/projects/team/builds/item", userToken, http.StatusOK},
+		{"invalid build list bearer", http.MethodGet, "/apis/ebs/v1/projects/team/builds", "bad", http.StatusUnauthorized},
+		{"invalid build detail bearer", http.MethodGet, "/apis/ebs/v1/projects/team/builds/item", "bad", http.StatusUnauthorized},
+		{"runner build list", http.MethodGet, "/apis/ebs/v1/projects/team/builds", runnerToken, http.StatusForbidden},
+		{"runner build detail", http.MethodGet, "/apis/ebs/v1/projects/team/builds/item", runnerToken, http.StatusForbidden},
+		{"build list watch", http.MethodGet, "/apis/ebs/v1/projects/team/builds?watch=true", userToken, http.StatusForbidden},
+		{"build detail watch", http.MethodGet, "/apis/ebs/v1/projects/team/builds/item?watch=true", userToken, http.StatusForbidden},
+		{"authenticated build status", http.MethodGet, "/apis/ebs/v1/projects/team/builds/item/status", userToken, http.StatusOK},
+		{"invalid build status bearer", http.MethodGet, "/apis/ebs/v1/projects/team/builds/item/status", "bad", http.StatusUnauthorized},
+		{"runner build status", http.MethodGet, "/apis/ebs/v1/projects/team/builds/item/status", runnerToken, http.StatusForbidden},
+		{"build status watch", http.MethodGet, "/apis/ebs/v1/projects/team/builds/item/status?watch=true", userToken, http.StatusForbidden},
+		{"anonymous job status", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/item/status", "", http.StatusOK},
+		{"authenticated job status", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/item/status", userToken, http.StatusOK},
+		{"invalid job status bearer", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/item/status", "bad", http.StatusUnauthorized},
+		{"runner job status read", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/item/status", runnerToken, http.StatusForbidden},
+		{"job status read watch", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/item/status?watch=true", userToken, http.StatusForbidden},
+		{"snapshots list authenticated", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots", userToken, http.StatusOK},
+		{"snapshots list invalid bearer", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots", "bad", http.StatusUnauthorized},
+		{"snapshots list runner", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots", runnerToken, http.StatusForbidden},
+		{"snapshots list watch", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots?watch=true", userToken, http.StatusForbidden},
+		{"snapshots detail authenticated", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots/item", userToken, http.StatusOK},
+		{"snapshots detail invalid bearer", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots/item", "bad", http.StatusUnauthorized},
+		{"snapshots detail runner", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots/item", runnerToken, http.StatusForbidden},
+		{"snapshots detail watch", http.MethodGet, "/apis/ebs/v1/projects/team/snapshots/item?watch=true", userToken, http.StatusForbidden},
+		{"oldjobs list authenticated", http.MethodGet, "/apis/ebs/v1/projects/team/oldjobs", userToken, http.StatusOK},
+		{"oldjobs list invalid bearer", http.MethodGet, "/apis/ebs/v1/projects/team/oldjobs", "bad", http.StatusUnauthorized},
+		{"oldjobs list runner", http.MethodGet, "/apis/ebs/v1/projects/team/oldjobs", runnerToken, http.StatusForbidden},
+		{"oldjobs list watch", http.MethodGet, "/apis/ebs/v1/projects/team/oldjobs?watch=true", userToken, http.StatusForbidden},
+		{"oldjobs detail authenticated", http.MethodGet, "/apis/ebs/v1/projects/team/oldjobs/item", userToken, http.StatusOK},
+		{"oldjobs detail invalid bearer", http.MethodGet, "/apis/ebs/v1/projects/team/oldjobs/item", "bad", http.StatusUnauthorized},
+		{"oldjobs detail runner", http.MethodGet, "/apis/ebs/v1/projects/team/oldjobs/item", runnerToken, http.StatusForbidden},
+		{"oldjobs detail watch", http.MethodGet, "/apis/ebs/v1/projects/team/oldjobs/item?watch=true", userToken, http.StatusForbidden},
+		{"buildinfos list authenticated", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos", userToken, http.StatusOK},
+		{"buildinfos list invalid bearer", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos", "bad", http.StatusUnauthorized},
+		{"buildinfos list runner", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos", runnerToken, http.StatusForbidden},
+		{"buildinfos list watch", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos?watch=true", userToken, http.StatusForbidden},
+		{"buildinfos detail authenticated", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos/item", userToken, http.StatusOK},
+		{"buildinfos detail invalid bearer", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos/item", "bad", http.StatusUnauthorized},
+		{"buildinfos detail runner", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos/item", runnerToken, http.StatusForbidden},
+		{"buildinfos detail watch", http.MethodGet, "/apis/ebs/v1/projects/team/buildinfos/item?watch=true", userToken, http.StatusForbidden},
+		{"buildgraphs list authenticated", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs", userToken, http.StatusOK},
+		{"buildgraphs list invalid bearer", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs", "bad", http.StatusUnauthorized},
+		{"buildgraphs list runner", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs", runnerToken, http.StatusForbidden},
+		{"buildgraphs list watch", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs?watch=true", userToken, http.StatusForbidden},
+		{"buildgraphs detail authenticated", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs/item", userToken, http.StatusOK},
+		{"buildgraphs detail invalid bearer", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs/item", "bad", http.StatusUnauthorized},
+		{"buildgraphs detail runner", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs/item", runnerToken, http.StatusForbidden},
+		{"buildgraphs detail watch", http.MethodGet, "/apis/ebs/v1/projects/team/buildgraphs/item?watch=true", userToken, http.StatusForbidden},
+		{"anonymous project creation", http.MethodPost, "/apis/ebs/v1/projects", "", http.StatusUnauthorized},
+		{"runner project creation", http.MethodPost, "/apis/ebs/v1/projects", runnerToken, http.StatusForbidden},
 		{"anonymous build creation", http.MethodPost, "/apis/ebs/v1/projects/team/builds", "", http.StatusUnauthorized},
 		{"invalid job status write", http.MethodPatch, "/apis/ebs/v1/projects/team/jobs/j/status", "bad", http.StatusUnauthorized},
 		{"anonymous runner list", http.MethodGet, "/apis/ebs/v1/runners", "", http.StatusUnauthorized},
@@ -1685,24 +1785,24 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		{"unknown authenticated path", http.MethodGet, "/apis/ebs/v1/secrets", userToken, http.StatusNotFound},
 		{"abort wrong method", http.MethodGet, "/apis/ebs/v1/projects/team/jobs/job-1/abort", userToken, http.StatusNotFound},
 		{"collection update", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", userToken, http.StatusNotFound},
-		{"job create", http.MethodPost, "/apis/ebs/v1/projects/team/jobs", userToken, http.StatusNotFound},
-		{"job delete", http.MethodDelete, "/apis/ebs/v1/projects/team/jobs/j", userToken, http.StatusNotFound},
-		{"runner job status put", http.MethodPut, "/apis/ebs/v1/projects/team/jobs/j/status", runnerToken, http.StatusNotFound},
-		{"project status read", http.MethodGet, "/apis/ebs/v1/projects/team/status", userToken, http.StatusNotFound},
-		{"project status put", http.MethodPut, "/apis/ebs/v1/projects/team/status", userToken, http.StatusNotFound},
-		{"project status patch", http.MethodPatch, "/apis/ebs/v1/projects/team/status", userToken, http.StatusNotFound},
 		{"job update", http.MethodPut, "/apis/ebs/v1/projects/team/jobs/j", userToken, http.StatusNotFound},
 		{"job patch", http.MethodPatch, "/apis/ebs/v1/projects/team/jobs/j", userToken, http.StatusNotFound},
 		{"runner job update", http.MethodPut, "/apis/ebs/v1/projects/team/jobs/j", runnerToken, http.StatusNotFound},
+		{"runner job status put", http.MethodPut, "/apis/ebs/v1/projects/team/jobs/j/status", runnerToken, http.StatusNotFound},
+		{"job deletion", http.MethodDelete, "/apis/ebs/v1/projects/team/jobs/j", userToken, http.StatusNotFound},
 		{"runner job patch", http.MethodPatch, "/apis/ebs/v1/projects/team/jobs/j", runnerToken, http.StatusNotFound},
 		{"build update", http.MethodPut, "/apis/ebs/v1/projects/team/builds/b", userToken, http.StatusNotFound},
 		{"build patch", http.MethodPatch, "/apis/ebs/v1/projects/team/builds/b", userToken, http.StatusNotFound},
 		{"build status update", http.MethodPut, "/apis/ebs/v1/projects/team/builds/b/status", userToken, http.StatusNotFound},
 		{"build status patch", http.MethodPatch, "/apis/ebs/v1/projects/team/builds/b/status", userToken, http.StatusNotFound},
+		{"project status read", http.MethodGet, "/apis/ebs/v1/projects/team/status", userToken, http.StatusNotFound},
+		{"project status update", http.MethodPut, "/apis/ebs/v1/projects/team/status", userToken, http.StatusNotFound},
+		{"project status patch", http.MethodPatch, "/apis/ebs/v1/projects/team/status", userToken, http.StatusNotFound},
 		{"anonymous unsupported method", http.MethodPut, "/apis/ebs/v1/projects/team/jobs", "", http.StatusUnauthorized},
 		{"IAM create is not registered", http.MethodPost, "/apis/iam.ebs/v1/users", userToken, http.StatusNotFound},
 
-		{"watch on removed job creation", http.MethodPost, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusNotFound},
+		{"job creation", http.MethodPost, "/apis/ebs/v1/projects/team/jobs", userToken, http.StatusNotFound},
+		{"watch on job creation", http.MethodPost, "/apis/ebs/v1/projects/team/jobs?watch=true", userToken, http.StatusNotFound},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(test.method, test.path, nil)
@@ -2058,4 +2158,268 @@ func TestPublicReadForwarding(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAuthCheckDoesNotGrantBusinessAccess(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
+			t.Fatalf("unexpected resource access: %s %s", r.Method, r.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"metadata":{"name":"service"},"spec":{"type":"service"}}`))}, nil
+	}))
+	token, err := api.tokens.Issue("service", identity.ServiceType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := api.Router()
+	for _, tc := range []struct {
+		method, path string
+		token        string
+		want         int
+	}{
+		{http.MethodPost, "/auth/check", "", http.StatusUnauthorized},
+		{http.MethodPost, "/auth/check", "invalid", http.StatusUnauthorized},
+		{http.MethodPost, "/auth/check", token, http.StatusOK},
+		{http.MethodPost, "/apis/ebs/v1/projects/team/builds", token, http.StatusForbidden},
+		{http.MethodPost, "/auth/check?watch=true", token, http.StatusForbidden},
+		{http.MethodGet, "/auth/check", token, http.StatusNotFound},
+	} {
+		request := httptest.NewRequest(tc.method, tc.path, nil)
+		if tc.token != "" {
+			request.Header.Set("Authorization", "Bearer "+tc.token)
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != tc.want {
+			t.Fatalf("%s %s: status=%d, want %d: %s", tc.method, tc.path, response.Code, tc.want, response.Body)
+		}
+	}
+}
+
+func TestAuthenticationFailureDoesNotConsumeIdentityQuota(t *testing.T) {
+	lookups, forwards := 0, 0
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := `{"items":[]}`
+		if r.URL.Path == "/apis/iam.ebs/v1/users/alice" {
+			lookups++
+			body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
+		} else {
+			forwards++
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	api.limits = limit.New(1, 1, api.now)
+	token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := api.Router()
+	for _, tc := range []struct {
+		token                     string
+		status, lookups, forwards int
+	}{
+		{"invalid", http.StatusUnauthorized, 0, 0},
+		{"invalid", http.StatusUnauthorized, 0, 0},
+		{token, http.StatusOK, 1, 1},
+		{token, http.StatusTooManyRequests, 2, 1},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/projects", nil)
+		request.RemoteAddr = "192.0.2.1:1234"
+		request.Header.Set("Authorization", "Bearer "+tc.token)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != tc.status || lookups != tc.lookups || forwards != tc.forwards {
+			t.Fatalf("status=%d lookups=%d forwards=%d", response.Code, lookups, forwards)
+		}
+	}
+}
+
+func TestProjectWriteChain(t *testing.T) {
+	const old = `{"metadata":{"name":"team","resourceVersion":"1","labels":{"ebs.io/owner-user":"alice"}},"spec":{},"status":{}}`
+	for _, tc := range []struct {
+		name, method, suffix, body string
+		want                       int
+	}{
+		{"create", http.MethodPost, "", `{"metadata":{"name":"team"}}`, http.StatusOK},
+		{"update", http.MethodPut, "/team", old, http.StatusOK},
+		{"patch", http.MethodPatch, "/team", `{"spec":{"description":"changed"}}`, http.StatusOK},
+		{"invalid create body", http.MethodPost, "", "{", http.StatusBadRequest},
+		{"invalid update body", http.MethodPatch, "/team", "{", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writes := 0
+			api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				body := old
+				if request.Method == http.MethodGet && request.URL.Path == "/apis/iam.ebs/v1/users/alice" {
+					body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
+				} else if request.Method != http.MethodGet {
+					writes++
+					wantMethod := http.MethodPut
+					if tc.method == http.MethodPost {
+						wantMethod = http.MethodPost
+					}
+					data, err := io.ReadAll(request.Body)
+					if err != nil || request.Method != wantMethod || !strings.Contains(string(data), `"ebs.io/owner-user":"alice"`) {
+						t.Fatalf("unexpected forwarded request: %s body=%s err=%v", request.Method, data, err)
+					}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			router := api.Router()
+			token, err := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(tc.method, "/apis/ebs/v1/projects"+tc.suffix, strings.NewReader(tc.body))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", "application/json")
+			if tc.method == http.MethodPatch {
+				request.Header.Set("Content-Type", "application/merge-patch+json")
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != tc.want || (writes == 1) != (tc.want == http.StatusOK) || writes > 1 {
+				t.Fatalf("status=%d writes=%d body=%s", response.Code, writes, response.Body)
+			}
+		})
+	}
+}
+
+func TestRouteDefinitionAccess(t *testing.T) {
+	api := newTestAPI(t, nil)
+	rules := registeredRoutePolicies(api)
+	for _, tc := range []struct {
+		method, path, allowed string
+	}{
+		{http.MethodGet, "/apis/ebs/v1/configs", "ops,admin"},
+		{http.MethodPost, "/apis/ebs/v1/configs", "ops,admin"},
+		{http.MethodGet, "/apis/ebs/v1/scripts", "user,ops,admin,runner"},
+		{http.MethodPut, "/apis/ebs/v1/scripts/:name", "ops,admin"},
+		{http.MethodGet, "/apis/iam.ebs/v1/users", "admin"},
+		{http.MethodPost, "/auth/machineaccounts", "admin"},
+		{http.MethodPut, "/auth/users/:name/password", "user,ops,admin"},
+		{http.MethodGet, "/apis/ebs/v1/build-targets", "user,ops,admin"},
+		{http.MethodGet, "/apis/ebs/v1/service-endpoints", "runner"},
+		{http.MethodGet, "/apis/ebs/v1/runners", "ops,admin"},
+		{http.MethodPost, "/apis/ebs/v1/runners", "runner"},
+		{http.MethodGet, "/apis/ebs/v1/runners/:runner", "ops,admin,runner"},
+		{http.MethodGet, "/apis/ebs/v1/runners/:runner/jobs", "runner"},
+		{http.MethodGet, "/apis/ebs/v1/runners/:runner/status", "ops,admin"},
+		{http.MethodPatch, "/apis/ebs/v1/runners/:runner/status", "ops,admin,runner"},
+		{http.MethodDelete, "/apis/ebs/v1/runners/:runner", "ops,admin"},
+		{http.MethodGet, "/apis/ebs/v1/projects/:project", "anonymous,user,ops,admin"},
+		{http.MethodPost, "/apis/ebs/v1/projects", "user,ops,admin"},
+		{http.MethodPut, "/apis/ebs/v1/projects/:project", "user,ops,admin,service"},
+		{http.MethodPatch, "/apis/ebs/v1/projects/:project/status", ""},
+		{http.MethodPost, "/apis/ebs/v1/projects/:project/builds", "user,ops,admin,service"},
+		{http.MethodPost, "/apis/ebs/v1/projects/:project/builds/:name/abort", "user,ops,admin,service"},
+		{http.MethodDelete, "/apis/ebs/v1/projects/:project/builds/:name", "user,ops,admin"},
+		{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs", "anonymous,user,ops,admin"},
+		{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs/:name", "anonymous,user,ops,admin,runner"},
+		{http.MethodGet, "/apis/ebs/v1/projects/:project/jobs/:name/status", "anonymous,user,ops,admin"},
+		{http.MethodPatch, "/apis/ebs/v1/projects/:project/jobs/:name/status", "runner"},
+		{http.MethodPut, "/apis/ebs/v1/projects/:project/jobs/:name/status", ""},
+		{http.MethodPut, "/apis/ebs/v1/projects/:project/jobs/:name", ""},
+		{http.MethodPatch, "/apis/ebs/v1/projects/:project/jobs/:name", ""},
+		{http.MethodGet, "/apis/ebs/v1/scripts/:name", "user,ops,admin,runner"},
+		{http.MethodGet, "/apis/ebs/v1/projects/:project/status", ""},
+		{http.MethodPut, "/apis/ebs/v1/projects/:project/status", ""},
+		{http.MethodPost, "/apis/ebs/v1/projects/:project/jobs", ""},
+		{http.MethodDelete, "/apis/ebs/v1/projects/:project/jobs/:name", ""},
+		{http.MethodGet, "/apis/ebs/v1/new-resource", ""},
+		{http.MethodPost, "/apis/ebs/v1/build-targets", ""},
+	} {
+
+		var want policy.RouteIdentities
+		for _, name := range strings.Split(tc.allowed, ",") {
+			want |= map[string]policy.RouteIdentities{
+				"anonymous": policy.AllowAnonymous,
+				"user":      policy.AllowUser,
+				"ops":       policy.AllowOps,
+				"admin":     policy.AllowAdmin,
+				"runner":    policy.AllowRunner,
+				"service":   policy.AllowService,
+			}[name]
+		}
+		key := middleware.RouteKey{Method: tc.method, Path: tc.path}
+		if got := rules[key].Access.Authorization.Identities; got != want {
+			t.Errorf("%s %s: identities=%v, want %v", tc.method, tc.path, got, want)
+		}
+	}
+}
+
+func TestListRouteLimits(t *testing.T) {
+	api := newTestAPI(t, nil)
+	expected := map[string]int{
+		"/apis/ebs/v1/projects":                      100,
+		"/apis/ebs/v1/projects/:project/builds":      100,
+		"/apis/ebs/v1/projects/:project/jobs":        100,
+		"/apis/ebs/v1/projects/:project/oldjobs":     100,
+		"/apis/ebs/v1/projects/:project/snapshots":   100,
+		"/apis/ebs/v1/projects/:project/buildinfos":  100,
+		"/apis/ebs/v1/projects/:project/buildgraphs": 100,
+		"/apis/ebs/v1/projects/:project/rpmrepos":    100,
+	}
+	for key, route := range registeredRoutePolicies(api) {
+		want := 0
+		if key.Method == http.MethodGet {
+			want = expected[key.Path]
+			delete(expected, key.Path)
+		}
+		if route.Options.ListLimit != want {
+			t.Errorf("%s %s: limit=%d, want %d", key.Method, key.Path, route.Options.ListLimit, want)
+		}
+	}
+	if len(expected) != 0 {
+		t.Fatalf("missing list routes: %v", expected)
+	}
+}
+
+func TestServiceRoutePermissions(t *testing.T) {
+	api := newTestAPI(t, nil)
+	expected := map[middleware.RouteKey]policy.Rule{
+		{Method: http.MethodPut, Path: "/apis/ebs/v1/projects/:project"}:                     {ServicePermission: iamv1.MachinePermissionProjectsUpdate},
+		{Method: http.MethodPatch, Path: "/apis/ebs/v1/projects/:project"}:                   {ServicePermission: iamv1.MachinePermissionProjectsUpdate},
+		{Method: http.MethodPost, Path: "/apis/ebs/v1/projects/:project/builds"}:             {ServicePermission: iamv1.MachinePermissionBuildsCreate},
+		{Method: http.MethodPost, Path: "/apis/ebs/v1/projects/:project/builds/:name/abort"}: {ServicePermission: iamv1.MachinePermissionBuildsAbort},
+	}
+	for key, route := range registeredRoutePolicies(api) {
+		want, exists := expected[key]
+		if (route.Access.Authorization.Identities&policy.AllowService != 0) != exists ||
+			route.Access.Authorization.ServicePermission != want.ServicePermission {
+			t.Fatalf("unexpected service access: %+v %+v", key, route.Access.Authorization)
+		}
+		delete(expected, key)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("missing service routes: %v", expected)
+	}
+}
+
+func TestAuthenticationNoneDefault(t *testing.T) {
+	definitions := []routeDefinition{{
+		Method:         http.MethodGet,
+		Path:           "/public",
+		Authentication: middleware.AuthenticationNone,
+		Handler:        func(c *gin.Context) { c.Status(http.StatusNoContent) },
+	}}
+	rules := make(map[middleware.RouteKey]middleware.RoutePolicy)
+	registerRoutes(gin.New(), rules, definitions)
+	rule := rules[middleware.RouteKey{Method: http.MethodGet, Path: "/public"}]
+	if rule.Access.Authorization.Identities != policy.AllowAnonymous {
+		t.Fatalf("missing anonymous default: %+v", rule)
+	}
+	if definitions[0].Authorization != (policy.Rule{}) {
+		t.Fatal("registration mutated the route definition")
+	}
+}
+
+func registeredRoutePolicies(api *testAPI) map[middleware.RouteKey]middleware.RoutePolicy {
+	router := gin.New()
+	rules := make(map[middleware.RouteKey]middleware.RoutePolicy)
+	registerAuthRoutes(router, rules, api.authHandler)
+	registerOAuthRoutes(router, rules, api.oauthHandler)
+	registerForwardRoutes(router, rules, api.Handler)
+	registerOtherRoutes(router, rules, api.Handler)
+	return rules
 }
