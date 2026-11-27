@@ -8,7 +8,7 @@ BuildGraph 的字段及生命周期见 [数据模型](data-models.md#buildgraph�
 
 集群级 Config 仅 Ops/Admin 可读写，不依赖工程成员关系。详见 [构建配置设计](data-models~config.md#11-config-公共资源与访问权限)。
 
-集群级 Script 使用 `/apis/ebs/v1/scripts`：所有已认证的 User、Runner、Service 身份可读取列表和单个脚本，匿名请求及无效 Token 返回 401。读写统一使用已认证限流；仅 Ops/Admin 可创建、PUT/PATCH 修改和 DELETE 脚本。Watch、status 子资源和 Project-scoped 路径均不开放。删除请求若携带 UID/resourceVersion 前置条件，由 apiserver 校验；Gateway 不按脚本名称限制删除，也不校验脚本正文。字段校验及更新冲突交给 apiserver。详见 [Script 设计](data-models~script.md)。
+集群级 Script 使用 `/apis/ebs/v1/scripts`：已认证的 User（含 Ops/Admin）和 Runner 身份可读取列表和单个脚本，Service Token 返回 403，匿名请求及无效 Token 返回 401。读写统一使用已认证限流；仅 Ops/Admin 可创建、PUT/PATCH 修改和 DELETE 脚本。Watch、status 子资源和 Project-scoped 路径均不开放。删除请求若携带 UID/resourceVersion 前置条件，由 apiserver 校验；Gateway 不按脚本名称限制删除，也不校验脚本正文。字段校验及更新冲突交给 apiserver。详见 [Script 设计](data-models~script.md)。
 
 Gateway 不开放 Build 对象及其 `/status` 的 PUT/PATCH，任何身份均不得通过 Gateway 更新 Build；Build Controller 直连 apiserver 固化增量构建的 `spec.packages`。用户创建 Build 和使用已有中止接口的权限保持不变。
 
@@ -388,9 +388,9 @@ Build 中止复用既有 `/abort` 路由及请求/响应契约，不通过主资
 3. 从已解析路由确定目标工程：Project 对象路由取对象名称，Build 路由取 Project 路径参数；不能从请求正文或查询参数扩大范围。
 4. 同时检查工程命中及路由对应权限，再执行现有候选对象/字段检查或 `/abort` 转发；身份、权限和业务校验全部通过后才调用上游写入。
 
-账号不存在或名称/类型不匹配返回 401，上游不可用或响应异常返回 503，工程未授权、缺少操作权限或操作未开放返回 403（未注册的路径或方法走未匹配路由，认证通过后返回 404）。Token 只携带身份，不固化授权列表；每次请求按账号当前配置执行，已通过核验的在途请求不作撤回保证。公开业务资源读取继续主动不带 Authorization；除已开放的 Script 读取外，带 Service Token 的资源读取请求返回拒绝，不降级为匿名。
+账号不存在或名称/类型不匹配返回 401，上游不可用或响应异常返回 503，工程未授权、缺少操作权限或操作未开放返回 403（未注册的路径或方法走未匹配路由，认证通过后返回 404）。Token 只携带身份，不固化授权列表；每次请求按账号当前配置执行，已通过核验的在途请求不作撤回保证。公开业务资源读取继续主动不带 Authorization；带 Service Token 的资源读取请求（包括 Script）返回拒绝，不降级为匿名。
 
-除上述三项操作、`/auth/check` 和 Script 列表及读取外，资源操作默认拒绝，包括 Project 创建/删除、Build 删除/普通更新、所有 `/status` 写入，以及 Runner、Job、Config、Script 和 IAM 管理。授予 `projects:update` 不会获得 MachineAccount 或其他资源更新能力。
+除上述三项操作和 `/auth/check` 外，资源操作默认拒绝，包括 Project 创建/删除、Build 删除/普通更新、所有 `/status` 写入，以及 Runner、Job、Config、Script 和 IAM 管理。授予 `projects:update` 不会获得 MachineAccount 或其他资源更新能力。
 
 授权随 Admin 调用 `POST /auth/machineaccounts` 创建账号写入；前端创建和编辑 service 账号时支持配置工程名称及三个操作权限。Admin 可通过 `PUT/PATCH /apis/iam.ebs/v1/machineaccounts/{name}` 修改 runner 和 service 账号的 `spec.tokenTTLSeconds`（300～86400 秒），service 账号还允许修改 `spec.projects`、`spec.permissions`，不能改变账号类型、元数据或凭据。普通用户、Ops、Runner Token 和 Service Token 均不具备该更新能力。Gateway 保留原始方法、正文、Content-Type 和查询参数直接转发，不预读账号、不将 PATCH 转为 PUT。Apiserver 校验不可变字段、有效期和授权内容，并处理版本冲突；上游错误原样返回，不自动重试覆盖。PUT/merge patch 应携带当前 UID/resourceVersion，JSON Patch 使用 test 操作保护对象身份和版本。有效期变更仅影响之后签发的 Token，已签发 Token 的到期时间不变。授权变更对后续请求生效，既有 Token 不需重签，已受理操作不撤销。按现有名称身份契约，同名账号重建后未过期旧 Token 可以继续使用，并按新账号授权判断。更换 secret 不撤销已签发 Token；若必须隔离旧 Token，使用新的账号名称。上线顺序为 apiserver mapping/字段支持、准备显式授权账号、Gateway 启用范围校验；缺少授权的旧账号不再全工程放行。
 
@@ -657,7 +657,7 @@ Runner 范围 Job list/watch 仅允许 Runner Token 对自身路径执行 GET，
 
 Config 请求在通过认证、Ops/Admin 权限、限流和 Watch 检查后直接代理，保留原始方法、正文和 Content-Type；DELETE 还须通过内置配置删除保护。Gateway 不预读 Config、不将 PATCH 转为 PUT，也不对 Config 请求执行正文大小检查；解码、PATCH 应用、元数据及内容校验、版本冲突检查、DeleteOptions 解析和正文大小限制均由 apiserver 负责，响应原样返回。
 
-Script 同样直接代理，由 apiserver 执行正文大小限制、解码、PATCH 应用、版本冲突和资源校验。所有已认证的 User、Runner、Service 身份可读取列表和单个脚本；写请求须具备 Ops/Admin 权限。Gateway 统一执行已认证限流并拒绝 Watch，列表查询参数原样透传。
+Script 同样直接代理，由 apiserver 执行正文大小限制、解码、PATCH 应用、版本冲突和资源校验。已认证的 User（含 Ops/Admin）和 Runner 身份可读取列表和单个脚本，Service Token 返回 403；写请求须具备 Ops/Admin 权限。Gateway 统一执行已认证限流并拒绝 Watch，列表查询参数原样透传。
 
 MachineAccount 在通过 Admin 权限校验后直接代理列表、读取、删除及 PUT/PATCH 请求。Gateway 不预读账号，不改写更新正文；解码、PATCH 应用、字段校验和并发保护均由 apiserver 负责，具体约束见 4.3.1。
 
@@ -792,7 +792,7 @@ Gateway 的业务请求链为“路径路由 → 审计 → Recovery → Watch �
 | 认证模式 | 路由范围 | 行为 |
 |----------|----------|------|
 | 无需 Bearer 认证 | `GET /openapi.json`、`GET /auth/providers`、`GET /auth/oauth/:provider/login`；`POST /auth/register`、`POST /auth/login`、`POST /auth/machine-token`、`POST /auth/oauth/:provider/callback`、`POST /auth/oauth/register` | 不解析 Bearer Token；登录、注册、机器换 Token 和 OAuth Handler 仍校验自身凭据或流程上下文 |
-| 可选认证 | Project 的 GET 集合、对象和 `/status`；Project 范围 Build、Job、Snapshot、BuildInfo、BuildGraph、RpmRepo 的 GET 集合、对象和 `/status`；OldJob 的 GET 集合和对象 | 无 Authorization 时匿名；携带 Token 必须验证，失败不得降级匿名；允许的 Watch 请求升级为必须认证 |
+| 可选认证 | Project 的 GET 集合和对象；Project 范围 Build、Job、Snapshot、BuildInfo、BuildGraph、RpmRepo 的 GET 集合、对象和 `/status`；OldJob 的 GET 集合和对象 | 无 Authorization 时匿名；携带 Token 必须验证，失败不得降级匿名；允许的 Watch 请求升级为必须认证 |
 | 必须认证 | 其余路由，包括 Config、Script、Runner、IAM、配置投影、业务写操作、`/auth/check` 和密码修改 | 校验 Token 并解析身份后才进入限流和授权 |
 
 未匹配路由也执行必须认证规则：未触发限流时，匿名返回 401，认证成功后由 `NoRoute` 返回 404。已注册路由没有配置准入规则，或调用方身份不在允许集合时，`AdmitIdentity` 返回 403，Service 拒绝记录审计结果；不能因 GET 或管理员身份而绕过规则。无需 Bearer 认证的接口按匿名身份准入，不受过期 Bearer Token 阻断，机器换 Token 的 Basic 凭据仍由 Handler 处理。
@@ -807,7 +807,7 @@ Runner 创建和任务列表在规则表中仅允许 Runner；列表、删除和
 
 认证后的用户公开读取仍使用公开读取 Handler；Runner 读取指定 Job 须通过分配关系校验，Service 只在规则允许的业务写入口继续检查工程范围与操作权限。其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。
 
-对外注册范围包括：Project 的集合、对象和 `/status`；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
+对外注册范围包括：Project 的集合和对象；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
 
 另注册固定路径 `GET /apis/ebs/v1/service-endpoints`，仅供 Runner 身份读取地址投影，不作为 apiserver 资源代理。
 
@@ -826,7 +826,7 @@ Service Token 的资源权限仅按 4.3.1，不继承下表中的公开读取或
 | `/auth/register`、`/auth/login` | 无 | 匿名注册普通用户、密码登录 |
 | `/auth/machine-token`、`/auth/check` | 无 | 前者凭 MachineAccount Basic 凭据换取 Runner/Service Token；后者凭 Bearer Token 校验身份 |
 | `/auth/users/{name}/password`、`/auth/machineaccounts` | 无 | 登录用户仅修改本人密码；仅 Admin 可创建 MachineAccount |
-| `/apis/ebs/v1/projects[/{name}][/status]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 可修改 Project（包含 `/status`）；不开放 Project 删除；member 不可写 Project |
+| `/apis/ebs/v1/projects[/{name}]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 可修改 Project；不开放 Project 删除和 `/status`；member 不可写 Project |
 | `/apis/ebs/v1/projects/{project}/{资源}[/{name}][/status]`；资源为 `snapshots`、`buildinfos`、`buildgraphs`、`rpmrepos` | 匿名及已认证用户仅可 GET | 无；只注册 GET |
 | `/apis/ebs/v1/projects/{project}/builds[/{name}][/status]`、`/apis/ebs/v1/projects/{project}/builds/{name}/abort` | 匿名及已认证用户可读取；watch 不开放 | 按上表权限创建或中止；仅 Project owner 可删除；Gateway 不允许任何身份 PUT/PATCH Build 及其 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs[/{name}][/status]` | 匿名及已认证用户可读取；Runner 仅可读取已分配的具名 Job；watch 需认证并授权 | 不开放 Job 创建、删除和本体更新；Runner 仅可 PATCH 已分配 Job 的 `/status` |
@@ -837,7 +837,7 @@ Service Token 的资源权限仅按 4.3.1，不继承下表中的公开读取或
 | `/apis/ebs/v1/build-targets` | 已认证用户可读取发行版及架构列表；机器身份不可读 | 无 |
 | `/apis/ebs/v1/configs[/{name}]` | 仅 Ops/Admin 可读 | 仅 Ops/Admin 可写；内置 `build-target`、`build-resource`、`services` 不可删除 |
 | `/apis/ebs/v1/service-endpoints` | 仅 Runner Token 可读取各实例的 Runner 地址投影 | 无 |
-| `/apis/ebs/v1/scripts[/{name}]` | 所有已认证 User、Runner、Service 身份可读取、列表 | 仅 Ops/Admin 可创建、修改、删除 |
+| `/apis/ebs/v1/scripts[/{name}]` | 已认证 User（含 Ops/Admin）和 Runner 可读取、列表；Service 禁止 | 仅 Ops/Admin 可创建、修改、删除 |
 | `/apis/iam.ebs/v1/users[/{name}]`、`/machineaccounts[/{name}]` | 仅 Admin；User 包含管理员对象 | 仅 Admin 可修改/删除非管理员 User、删除 MachineAccount、更新机器账号 Token 有效期及 service 账号的工程范围和权限；创建分别使用 `/auth/register`、`/auth/machineaccounts` |
 
 未列出的资源、子资源和 `/api/*` 别名不对外开放；匿名不能 watch 或写入。Project 范围资源的原生全局路径也不开放。完整的角色差异、Runner 字段限制和 Job 中止特例以第 4.8 节为准。

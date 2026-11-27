@@ -32,6 +32,8 @@ Policy 的公共入口负责分派，Project、Runner 的授权及写入规则�
 
 Gateway 不开放 Job 创建、删除和本体 PUT/PATCH。用户中止任务使用 `POST /projects/{project}/jobs/{name}/abort`（前缀 `/apis/ebs/v1`），Runner 通过 `PATCH /projects/{project}/jobs/{name}/status` 更新执行状态（不开放 PUT），并继续校验分配归属和允许写入的字段。内部组件直连 apiserver 的接口不变。
 
+Project 仅开放集合及对象路由，不开放 `/projects/{project}/status`。Script 读取仅允许已认证 User（含 Ops/Admin）和 Runner，Service Token 不可读取；Script 写入仍要求 Ops/Admin。
+
 ## 本地运行
 
 先准备仅包含一个 Base64 编码、解码后至少 32 字节的 HMAC 密钥文件，然后运行：
