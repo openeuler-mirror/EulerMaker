@@ -33,7 +33,7 @@ func (a *Handler) forwardRequest(c *gin.Context, who identity.Principal, route p
 }
 
 func (a *Handler) forward(c *gin.Context) {
-	a.upstream.Forward(c, c.GetBool("public"))
+	a.upstream.Forward(c)
 }
 
 func (a *Handler) readWriteBody(c *gin.Context) ([]byte, bool) {

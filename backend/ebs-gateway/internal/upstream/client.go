@@ -21,8 +21,6 @@ type Client struct {
 	proxy    *httputil.ReverseProxy
 }
 
-type publicRequestKey struct{}
-
 func New(address string, transport http.RoundTripper) (*Client, error) {
 	endpoint, err := url.Parse(address)
 	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
@@ -36,19 +34,6 @@ func New(address string, transport http.RoundTripper) (*Client, error) {
 	proxy.FlushInterval = -1
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
-	}
-	proxy.ModifyResponse = func(response *http.Response) error {
-		if response.Request == nil || response.Request.Context().Value(publicRequestKey{}) != true {
-			return nil
-		}
-		for name := range response.Header {
-			switch http.CanonicalHeaderKey(name) {
-			case "Content-Type", "Cache-Control", "X-Request-Id":
-			default:
-				response.Header.Del(name)
-			}
-		}
-		return nil
 	}
 	return &Client{
 		endpoint: endpoint,
@@ -80,11 +65,8 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader, he
 	return c.http.Do(request)
 }
 
-func (c *Client) Forward(ctx *gin.Context, public bool) {
+func (c *Client) Forward(ctx *gin.Context) {
 	request := ctx.Request
-	if public {
-		request = request.WithContext(context.WithValue(request.Context(), publicRequestKey{}, true))
-	}
 	request.Header.Del("Authorization")
 	request.Header.Del("Proxy-Authorization")
 	request.Header.Del("Forwarded")
@@ -92,11 +74,6 @@ func (c *Client) Forward(ctx *gin.Context, public bool) {
 	request.Header.Del("X-Forwarded-Host")
 	request.Header.Del("X-Forwarded-Proto")
 	request.Host = c.endpoint.Host
-	if public {
-		// The public response header allowlist intentionally excludes
-		// Content-Encoding. Let the transport negotiate/decode gzip itself.
-		request.Header.Del("Accept-Encoding")
-	}
 	c.proxy.ServeHTTP(responseWriter{ctx.Writer}, request)
 }
 

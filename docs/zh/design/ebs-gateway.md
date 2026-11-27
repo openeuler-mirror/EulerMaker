@@ -189,7 +189,7 @@ Runner 通过专用服务地址投影接口读取 Artifact Manager 和 Git Serve
 
 公开读取直接透传 apiserver 返回的完整单对象或 List，不解码、删除或重写对象字段。公开范围内的 `metadata`、`spec` 和 `status` 均可被匿名或已认证调用方读取，包括对象后续新增的字段。因此 Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo 和 Job 的 API 数据结构不得保存密码、Token、私钥或其他不应公开的信息；需要保密的数据必须存放在非公开资源或独立的受控存储中。
 
-Gateway 管理 API 不注册 HEAD。公开 GET 可以保留 `Content-Type`、缓存策略和 requestID；不得透传内部 ETag、resourceVersion 或上游身份 header。
+Gateway 管理 API 不注册 HEAD。代理不区分公开或已认证响应，不使用公开响应标记或响应头白名单；保留上游的 `Retry-After`、`Warning`、`Audit-ID` 和压缩相关响应头，逐跳头由标准反向代理处理。请求侧继续移除调用方凭据和不可信代理头，不向上游注入最终用户身份。
 
 匿名请求与已认证请求共用限流器和额度配置，按 `anonymous/{clientIP}` 隔离计数；collection 必须设置服务端允许的 `limit` 上限，禁止匿名调用方请求无界列表。Gateway 不注入最终用户身份，使用自身内部身份读取 apiserver 并原样转发对象响应。审计日志使用固定身份 `anonymous`，记录资源、verb、客户端地址、响应数量和 requestID。
 
@@ -858,8 +858,9 @@ GET /apis/ebs/v1/projects/{project}/jobs?watch=true
 gateway 需要支持流式响应：
 
 - 不读取完整 upstream response 后再返回。
-- 不为 watch 请求设置过短超时。
-- Gateway 内部 `Do` 查询和操作使用 30 秒总超时，包含响应正文读取，并遵守调用方更早的取消或截止时间；该超时不施加到 Watch 反向代理。
+- 上游 Transport 设置 30 秒响应头超时，从请求正文发送完成后开始计时；包括 Watch 在内的透传请求若迟迟未收到响应头，返回 502，响应仅包含 `upstream unavailable`，不暴露连接细节。
+- 响应头超时不限制后续正文读取；已经建立的 Watch 流不设总时长限制，保持流式转发，并随客户端取消而关闭上游请求。
+- Gateway 内部 `Do` 查询和操作另有 30 秒总超时，包含响应正文读取，并遵守调用方更早的取消或截止时间；该总超时不施加到反向代理。
 - 客户端断开时及时关闭 upstream 请求。
 - 审计日志记录连接建立和最终关闭状态。
 

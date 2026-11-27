@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
@@ -12,6 +13,54 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestForwardPreservesResponseHeadersAndCompression(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Accept-Encoding") != "gzip" {
+				t.Errorf("Accept-Encoding changed: %q", r.Header.Get("Accept-Encoding"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Header().Set("Retry-After", "5")
+			w.Header().Set("Warning", `299 ebs-apiserver "example warning"`)
+			w.Header().Set("Audit-Id", "audit-1")
+			w.Header().Set("Connection", "X-Hop")
+			w.Header().Set("X-Hop", "hop-only")
+			w.WriteHeader(status)
+			compressed := gzip.NewWriter(w)
+			_, _ = io.WriteString(compressed, `{"message":"response"}`)
+			_ = compressed.Close()
+		}))
+		client, err := New(server.URL, nil)
+		if err != nil {
+			server.Close()
+			t.Fatal(err)
+		}
+		router := gin.New()
+		router.GET("/test", client.Forward)
+		request := httptest.NewRequest(http.MethodGet, "/test", nil)
+		request.Header.Set("Accept-Encoding", "gzip")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		server.Close()
+		if response.Code != status || response.Header().Get("Content-Encoding") != "gzip" ||
+			response.Header().Get("Retry-After") != "5" ||
+			response.Header().Get("Warning") != `299 ebs-apiserver "example warning"` ||
+			response.Header().Get("Audit-Id") != "audit-1" || response.Header().Get("X-Hop") != "" {
+			t.Fatalf("unexpected response: status=%d headers=%v", response.Code, response.Header())
+		}
+		decoded, err := gzip.NewReader(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(decoded)
+		_ = decoded.Close()
+		if err != nil || string(body) != `{"message":"response"}` {
+			t.Fatalf("response body=%s err=%v", body, err)
+		}
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -78,7 +127,7 @@ func TestWatchDoesNotUseInternalRequestTimeout(t *testing.T) {
 	}
 	client.http.Timeout = time.Nanosecond
 	router := gin.New()
-	router.GET("/watch", func(c *gin.Context) { client.Forward(c, false) })
+	router.GET("/watch", client.Forward)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/watch?watch=true", nil))
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "event\n" {
@@ -130,7 +179,7 @@ func TestForwardDropsBearer(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := gin.New()
-	router.GET("/test", func(c *gin.Context) { client.Forward(c, false) })
+	router.GET("/test", client.Forward)
 	request := httptest.NewRequest(http.MethodGet, "/test", nil)
 	request.Header.Set("X-Client-Marker", "ordinary value")
 	request.Header.Set("Authorization", "Bearer forged")
@@ -139,5 +188,91 @@ func TestForwardDropsBearer(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok" {
 		t.Fatalf("unexpected proxy result: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestForwardResponseHeaderTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		watch, established bool
+	}{
+		{"waiting for headers", false, false},
+		{"watch waiting for headers", true, false},
+		{"established watch", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const headerTimeout = 100 * time.Millisecond
+			canceled := make(chan struct{})
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer close(canceled)
+				if tc.established {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+					timer := time.NewTimer(3 * headerTimeout)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+						_, _ = io.WriteString(w, "event\n")
+						w.(http.Flusher).Flush()
+					case <-r.Context().Done():
+						return
+					}
+				}
+				<-r.Context().Done()
+			}))
+			defer backend.Close()
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.ResponseHeaderTimeout = headerTimeout
+			defer transport.CloseIdleConnections()
+			client, err := New(backend.URL, transport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The internal client's total timeout must not apply to the proxy.
+			client.http.Timeout = time.Nanosecond
+			router := gin.New()
+			router.GET("/jobs", client.Forward)
+			proxy := httptest.NewServer(router)
+			defer proxy.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			path := proxy.URL + "/jobs"
+			if tc.watch {
+				path += "?watch=true"
+			}
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := proxy.Client().Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if tc.established {
+				if response.StatusCode != http.StatusOK {
+					t.Fatalf("watch status=%d", response.StatusCode)
+				}
+				event := make([]byte, len("event\n"))
+				if _, err := io.ReadFull(response.Body, event); err != nil || string(event) != "event\n" {
+					t.Fatalf("established watch interrupted: event=%q err=%v", event, err)
+				}
+				cancel()
+				if _, err := io.ReadAll(response.Body); !errors.Is(err, context.Canceled) {
+					t.Fatalf("watch cancellation error=%v", err)
+				}
+			} else {
+				body, err := io.ReadAll(response.Body)
+				if err != nil || response.StatusCode != http.StatusBadGateway || string(body) != "upstream unavailable\n" {
+					t.Fatalf("status=%d body=%q err=%v", response.StatusCode, body, err)
+				}
+			}
+			select {
+			case <-canceled:
+			case <-time.After(5 * time.Second):
+				t.Fatal("upstream request was not canceled")
+			}
+		})
 	}
 }
