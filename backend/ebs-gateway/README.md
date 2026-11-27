@@ -19,23 +19,26 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/upstream` | 可信内部读取和流式反向代理 |
 | `internal/limit` | 请求令牌桶 |
 
-从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [Authorize](internal/middleware/access.go) 和 [Policy](internal/policy/authorize.go) 查看鉴权处理。全局 [PrepareQuery](internal/middleware/query.go) 按 GET 方法和 Gin 路由模板仅允许 Project Job 列表、Runner 任务列表请求 Watch；其他已匹配路由在认证前返回 403，未匹配路由沿用 NoRoute。允许的 Watch 仍须通过后续认证、授权和查询检查。非 Watch 请求仅在配置了 `ListLimit` 的 GET 列表上规范化 `limit`；Project 及其公开子资源列表上限为 100，其余查询参数、对象读取和 Watch 参数保持原样。
-全局 [Authenticate](internal/middleware/auth.go) 按方法和路由模板处理无需 Bearer 认证、可选认证和必须认证三类请求，默认必须认证。登录等凭据入口和 OpenAPI 不解析 Bearer Token；现有公开 GET 可匿名，但带 Token 时必须验证，Watch 必须认证。各路由不重复认证或通用限流，只负责业务授权；未触发限流时，未知路径匿名返回 401，认证成功后返回 404。
-认证、身份准入及查询选项与路径、方法、额外中间件、Handler 一起声明在 [router.go](internal/gateway/router.go)，按认证、OAuth、透传及其他接口分别注册；透传路由统一设置 `upstream.Forward`。注册时生成同一份规则表，拒绝重复路由、空 Handler、空中间件及矛盾的认证或查询配置；显式 `AuthenticationNone` 自动补齐匿名准入，其余路由必须声明允许身份。`NewRouter` 在提供服务前发布 Router 独有的 `RoutePolicies` 只读副本，全局认证、准入和查询中间件共用该副本。工程归属与 Service 的 projects/permissions 由全局 `Authorize` 调用 Policy 校验，字段修改权限仍由业务 Handler 校验。
-`GET /healthz` 在业务中间件挂载前直接注册 Handler，返回固定文本，不挂载 Recovery，也不经过审计、Watch 检查、认证和限流。业务链保持 Audit 在外、Recovery 在内，后续处理 panic 恢复后仍记录最终状态；认证和限流不包含健康检查特判。
-通用限流由 [limit.go](internal/middleware/limit.go) 在业务链全局执行：认证后按身份类型/名称/IP 或匿名 IP 限流。登录、注册、机器换 Token、OAuth 和 Watch 并发限制继续保留，通用限流返回 429 和 `Retry-After: 1`。
-普通公开 GET 完成全局认证、身份准入和查询检查后直接交给 `upstream.Forward`。工程 Job 列表的 Watch 保留 owner/member 校验；指定 Job 的 GET 由 `AssignedJob` 规则检查 Runner 分配关系，只投影读取名称、命名空间和 `status.runner`；状态更新读取并复用完整旧对象。Runner 创建与任务列表仅允许 Runner 身份，列表与 `/status` 读取仅允许 Ops/Admin，由全局准入判断。Runner 路径名称由全局 `RunnerSelf` 规则校验；路由内保留注册正文、普通对象更新字段、查询参数和 Watch 并发检查；所有业务路由都有准入规则的测试保障。
-`/auth/check` 在全局业务鉴权前注册，仅执行认证、身份限流和 `AdmitIdentity(AllowAuthenticated)`，不要求 Service permission；所有允许 Service 的业务路由必须配置有效 permission。
-Config 读写要求 Ops/Admin；`build-targets` 仅允许 User 身份，`service-endpoints` 仅允许 Runner 身份，均由统一规则表声明。公共写请求处理放在 `request.go`。
-Policy 使用显式 `Rule` 声明允许身份、对象归属、Watch 归属和 Service permission，不再按资源字符串分派授权。全局 `Authorize` 适配请求参数、错误、Service 审计和请求级旧对象；Project owner/member 与 Service 工程范围校验由 Policy 完成。Project 用户更新在授权时读取完整旧对象，后续 PUT/PATCH 校验复用该对象，Service 更新仍按授权后的写入准备流程读取；仅校验归属的请求使用字段投影。
-测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
-认证接口及专用限流测试放在 [auth/handler_test.go](internal/auth/handler_test.go)，其余 Handler 测试与业务文件对应；全局请求链、路由规则和 OpenAPI 路由契约测试统一放在 [router_test.go](internal/gateway/router_test.go)。
+`cmd/app` 分别创建资源、认证和 OAuth Handler，再交给 Gateway 注册路由；`auth` 和 `oauth` 不反向依赖 `gateway`。建议按以下顺序阅读代码：
 
-Gateway 不开放 Job 创建、删除和本体 PUT/PATCH。用户中止任务使用 `POST /projects/{project}/jobs/{name}/abort`（前缀 `/apis/ebs/v1`），Runner 通过 `PATCH /projects/{project}/jobs/{name}/status` 更新执行状态（不开放 PUT），并继续校验分配归属和允许写入的字段。内部组件直连 apiserver 的接口不变。
+1. [router.go](internal/gateway/router.go)：全局中间件顺序，以及各路由的方法、路径、认证模式、授权规则、查询选项和业务中间件。
+2. [auth.go](internal/middleware/auth.go)、[access.go](internal/middleware/access.go)、[query.go](internal/middleware/query.go)：身份解析、鉴权的 HTTP 适配、Watch 检查和列表分页。
+3. [Policy](internal/policy/authorize.go)：普通 Go 参数和结果承载的身份准入、Service 工程/操作权限及对象归属判断。
+4. [request.go](internal/gateway/request.go) 和各资源 Handler：正文准备、完整对象 PATCH、字段权限校验；[upstream](internal/upstream/client.go) 负责内部读取和流式代理。
 
-ebsctl 在本地拒绝 Job 创建和删除；使用 Build 发起构建，删除所属 Build 触发 Controller 清理派生 Job。
+路由定义在注册时生成同一份规则表并发布 Router 独有的只读副本，拒绝重复路由、空处理函数和矛盾规则。显式 `AuthenticationNone` 且授权规则完全为空时自动补齐匿名准入；其余路由必须声明允许身份。用户 Build 创建、中止和工程 Job Watch 均要求 owner/member，Ops/Admin 不例外；Service 业务路由必须声明有效的 permission。
 
-Project 仅开放集合及对象路由，不开放 `/projects/{project}/status`。Script 读取仅允许已认证 User（含 Ops/Admin）和 Runner，Service Token 不可读取；Script 写入仍要求 Ops/Admin。
+业务链为审计 → Recovery → 查询检查 → 认证 → 身份限流 → 授权 → 业务处理。公开 GET 可匿名，但带 Token 时必须验证，失败不得降级；未知路径匿名返回 401、认证后返回 404。健康检查在业务链之前注册，不审计、认证或限流；`/auth/check` 仅做认证、身份准入和限流，不要求 Service 工程授权。
+
+`PrepareQuery` 仅允许工程 Job 列表和 Runner 任务列表 Watch，其他已匹配路由的 Watch 在认证前返回 403。非 Watch 请求仅对配置 `ListLimit` 的 GET 列表规范化分页，公开工程及其子资源列表上限为 100。通用限流按身份类型/名称/IP 或匿名 IP 隔离；登录、注册、机器换 Token、OAuth 和 Watch 并发限制另行保留。
+
+Project 用户更新在授权时读取完整对象并供正文校验复用；Job 状态更新同样复用 `AssignedJob` 已读取的对象。仅校验归属的 Project/Job 请求和 IAM 身份查询使用字段投影。Runner 路径名称统一由 `RunnerSelf` 校验，路由内保留注册正文、普通对象字段、查询参数及 Watch 并发检查。普通公开读取和无需正文改写的写入直接转发，具体处理链见[设计文档第五章](../../docs/zh/design/ebs-gateway.md#五路由设计)。
+
+Config 仅 Ops/Admin 可读写；`build-targets` 仅 User 可读，`service-endpoints` 仅 Runner 可读。Script 读取允许 User（含 Ops/Admin）和 Runner，不允许 Service；写入要求 Ops/Admin。Project 不开放 `/status`，状态通过普通 GET 的 `includeFields=status` 获取。
+
+Gateway 不开放 Job 创建、删除、本体 PUT/PATCH 或 `/status` PUT。用户通过 Build 发起构建或触发清理，通过 Job `/abort` 中止任务；Runner 使用 PATCH 更新已分配 Job 状态，Gateway 校验后以 PUT 转发。ebsctl 在本地拒绝 Job 创建和删除，内部组件直连 apiserver 的接口不变。
+
+测试按业务文件归类：认证接口及专用限流在 [auth/handler_test.go](internal/auth/handler_test.go)，全局链路、路由规则和 OpenAPI 路由契约在 [router_test.go](internal/gateway/router_test.go)。
 
 ## 本地运行
 
