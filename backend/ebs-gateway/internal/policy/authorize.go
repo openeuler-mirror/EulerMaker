@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -191,6 +192,28 @@ func authorizeService(who identity.Principal, project string, rule Rule) error {
 	if project == "" || grants == nil || !slices.Contains(grants.Projects, project) ||
 		!slices.Contains(grants.Permissions, rule.ServicePermission) {
 		return deny("service account lacks project or operation permission")
+	}
+	return nil
+}
+
+// Validate rejects inconsistent policy declarations before serving requests.
+func (r Rule) Validate() error {
+	if r.Identities == 0 || r.Identities & ^(AllowAnonymous|AllowAuthenticated) != 0 {
+		return fmt.Errorf("allowed identities are empty or unknown")
+	}
+	for _, access := range []ObjectAccess{r.ObjectAccess, r.WatchAccess} {
+		switch access {
+		case ObjectAccessNone, ProjectOwner, ProjectOwnerUpdate, ProjectMember, RunnerSelf, AssignedJob:
+		default:
+			return fmt.Errorf("unknown object access %q", access)
+		}
+	}
+	if r.Identities&AllowService == 0 {
+		if r.ServicePermission != "" {
+			return fmt.Errorf("service grants require an allowed Service identity")
+		}
+	} else if !r.ServicePermission.IsValid() {
+		return fmt.Errorf("Service access requires a valid ServicePermission")
 	}
 	return nil
 }

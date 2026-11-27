@@ -1,9 +1,12 @@
 package middleware
 
 import (
+	"ebs-gateway/internal/policy"
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
+	"strings"
 )
 
 // RouteKey matches an HTTP method and Gin route template, not a raw request path.
@@ -20,30 +23,19 @@ const (
 	AuthenticationNone
 )
 
-type RouteIdentities uint8
-
-const (
-	AllowAnonymous RouteIdentities = 1 << iota
-	AllowUser
-	AllowOps
-	AllowAdmin
-	AllowRunner
-	AllowService
-
-	AllowPrivileged    = AllowOps | AllowAdmin
-	AllowUsers         = AllowUser | AllowOps | AllowAdmin
-	AllowAuthenticated = AllowUsers | AllowRunner | AllowService
-)
-
-type RoutePolicy struct {
+type RouteAccess struct {
 	Authentication AuthenticationMode
-	Identities     RouteIdentities
-	Options        RouteOptions
+	Authorization  policy.Rule
 }
 
 type RouteOptions struct {
 	Watch     bool
 	ListLimit int
+}
+
+type RoutePolicy struct {
+	Access  RouteAccess
+	Options RouteOptions
 }
 
 // RoutePolicies holds an immutable, router-local copy of the access rules.
@@ -57,37 +49,60 @@ func NewRoutePolicies(rules map[RouteKey]RoutePolicy) *RoutePolicies {
 
 func (r *RoutePolicies) authentication(method, path string) AuthenticationMode {
 	if rule, ok := r.rules[RouteKey{Method: method, Path: path}]; ok {
-		return rule.Authentication
+		return rule.Access.Authentication
 	}
 	return AuthenticationRequired
 }
 
-// ValidateRoute rejects inconsistent authentication, identity and query declarations.
-func ValidateRoute(key RouteKey, rule RoutePolicy) error {
-	if rule.Identities == 0 || rule.Identities & ^(AllowAnonymous|AllowAuthenticated) != 0 {
-		return fmt.Errorf("allowed identities are empty or unknown")
+// ValidateRoute checks authentication, authorization and request options during registration.
+func ValidateRoute(key RouteKey, access RouteAccess, options RouteOptions) error {
+	if err := access.Authorization.Validate(); err != nil {
+		return err
 	}
-	switch rule.Authentication {
+	switch access.Authentication {
 	case AuthenticationRequired:
-		if rule.Identities&AllowAnonymous != 0 {
+		if access.Authorization.Identities&policy.AllowAnonymous != 0 {
 			return fmt.Errorf("required authentication cannot allow anonymous access")
 		}
 	case AuthenticationOptional:
-		if rule.Identities&AllowAnonymous == 0 {
+		if access.Authorization.Identities&policy.AllowAnonymous == 0 {
 			return fmt.Errorf("optional authentication requires anonymous access")
 		}
 	case AuthenticationNone:
-		if rule.Identities != AllowAnonymous {
+		if access.Authorization.Identities != policy.AllowAnonymous {
 			return fmt.Errorf("unauthenticated routes must allow only anonymous access")
 		}
 	default:
 		return fmt.Errorf("unknown authentication mode")
 	}
-	if rule.Options.ListLimit < 0 || (rule.Options.ListLimit > 0 && key.Method != http.MethodGet) {
+	if options.ListLimit < 0 || (options.ListLimit > 0 && key.Method != http.MethodGet) {
 		return fmt.Errorf("list limit must be nonnegative and only configured for GET")
 	}
-	if rule.Options.Watch && (key.Method != http.MethodGet || rule.Authentication == AuthenticationNone) {
+	if options.Watch && (key.Method != http.MethodGet || access.Authentication == AuthenticationNone) {
 		return fmt.Errorf("Watch requires GET with authentication")
+	}
+	if !options.Watch && access.Authorization.WatchAccess != policy.ObjectAccessNone {
+		return fmt.Errorf("Watch access requires Watch support")
+	}
+	segments := strings.Split(key.Path, "/")
+	for _, object := range []policy.ObjectAccess{access.Authorization.ObjectAccess, access.Authorization.WatchAccess} {
+		switch object {
+		case policy.ProjectOwner, policy.ProjectOwnerUpdate, policy.ProjectMember:
+			if !slices.Contains(segments, ":project") {
+				return fmt.Errorf("project ownership requires a :project parameter")
+			}
+		case policy.RunnerSelf:
+			if !slices.Contains(segments, ":runner") {
+				return fmt.Errorf("Runner ownership requires a :runner parameter")
+			}
+		case policy.AssignedJob:
+			if !slices.Contains(segments, ":project") || !slices.Contains(segments, ":name") {
+				return fmt.Errorf("Job assignment requires :project and :name parameters")
+			}
+		}
+	}
+	if access.Authorization.ServicePermission != "" && !slices.Contains(segments, ":project") {
+		return fmt.Errorf("service permission requires a :project parameter")
 	}
 	return nil
 }

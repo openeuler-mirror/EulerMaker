@@ -40,7 +40,7 @@ func Principal(c *gin.Context) identity.Principal {
 }
 
 // Authenticate resolves identity once, defaulting to required authentication for unlisted routes.
-func Authenticate(a *Auth, routes *RoutePolicies) gin.HandlerFunc {
+func Authenticate(routes *RoutePolicies, auth *Auth) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		mode := routes.authentication(c.Request.Method, c.FullPath())
 		if mode == AuthenticationNone || (mode == AuthenticationOptional &&
@@ -48,12 +48,11 @@ func Authenticate(a *Auth, routes *RoutePolicies) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if !a.verifyAccess(c) {
+		if !auth.verifyAccess(c) {
 			return
 		}
 		c.Next()
 	}
-
 }
 
 func (a *Auth) verifyToken(header string) (identity.Principal, bool) {

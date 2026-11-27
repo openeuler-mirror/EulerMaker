@@ -141,7 +141,7 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			router := gin.New()
-			router.Use(middleware.PrepareQuery(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())),
+			router.Use(middleware.PrepareQuery(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(middleware.NewRoutePolicies(routeRules()), api.auth),
 				middleware.LimitIdentity(api.limits))
 			registerForwardRoutes(router, make(map[middleware.RouteKey]middleware.RoutePolicy), api)
 			recorder := httptest.NewRecorder()

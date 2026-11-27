@@ -24,6 +24,7 @@ import (
 	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/oauth"
+	"ebs-gateway/internal/policy"
 	"ebs-gateway/internal/upstream"
 )
 
@@ -364,30 +365,48 @@ func TestRouteRegistrationValidation(t *testing.T) {
 		want   string
 	}{
 		{"valid", func(r *routeDefinition) {}, ""},
-		{"anonymous default", func(r *routeDefinition) { r.Authentication = middleware.AuthenticationNone; r.Identities = 0 }, ""},
-		{"missing access", func(r *routeDefinition) { r.Identities = 0 }, "identities"},
+		{"anonymous default", func(r *routeDefinition) {
+			r.Authentication = middleware.AuthenticationNone
+			r.Authorization.Identities = 0
+		}, ""},
+		{"missing access", func(r *routeDefinition) { r.Authorization.Identities = 0 }, "identities"},
 		{"unknown auth", func(r *routeDefinition) { r.Authentication = 99 }, "authentication mode"},
-		{"required anonymous", func(r *routeDefinition) { r.Identities |= middleware.AllowAnonymous }, "required authentication"},
+		{"required anonymous", func(r *routeDefinition) { r.Authorization.Identities |= policy.AllowAnonymous }, "required authentication"},
 		{"optional without anonymous", func(r *routeDefinition) { r.Authentication = middleware.AuthenticationOptional }, "optional authentication"},
 		{"no auth with users", func(r *routeDefinition) { r.Authentication = middleware.AuthenticationNone }, "unauthenticated routes"},
-		{"unknown identity", func(r *routeDefinition) { r.Identities = 128 }, "identities"},
+		{"unknown identity", func(r *routeDefinition) { r.Authorization.Identities = 128 }, "identities"},
+		{"unknown ownership", func(r *routeDefinition) { r.Authorization.ObjectAccess = "unknown" }, "object access"},
+		{"missing service permission", func(r *routeDefinition) { r.Authorization.Identities = policy.AllowService }, "ServicePermission"},
+		{"unused service permission", func(r *routeDefinition) { r.Authorization.ServicePermission = "builds:create" }, "allowed Service"},
+		{"missing project parameter", func(r *routeDefinition) { r.Authorization.ObjectAccess = policy.ProjectOwner }, ":project"},
+		{"missing runner parameter", func(r *routeDefinition) { r.Authorization.ObjectAccess = policy.RunnerSelf }, ":runner"},
+		{"missing job parameters", func(r *routeDefinition) { r.Authorization.ObjectAccess = policy.AssignedJob }, ":project and :name"},
+		{"unused watch permission", func(r *routeDefinition) { r.Authorization.WatchAccess = policy.ProjectMember }, "Watch access requires"},
+		{"missing service project", func(r *routeDefinition) {
+			r.Authorization.Identities = policy.AllowService
+			r.Authorization.ServicePermission = "builds:create"
+		}, "service permission requires"},
+		{"partial anonymous rule", func(r *routeDefinition) {
+			r.Authentication = middleware.AuthenticationNone
+			r.Authorization = policy.Rule{ObjectAccess: policy.ProjectMember}
+		}, "identities"},
 		{"negative limit", func(r *routeDefinition) { r.Options.ListLimit = -1 }, "list limit"},
 		{"write pagination", func(r *routeDefinition) { r.Method = http.MethodPost; r.Options.ListLimit = 100 }, "list limit"},
 		{"write watch", func(r *routeDefinition) { r.Method = http.MethodPost; r.Options.Watch = true }, "Watch requires"},
 		{"unauthenticated watch", func(r *routeDefinition) {
 			r.Options.Watch = true
 			r.Authentication = middleware.AuthenticationNone
-			r.Identities = middleware.AllowAnonymous
+			r.Authorization.Identities = policy.AllowAnonymous
 		}, "Watch requires"},
 		{"missing handler", func(r *routeDefinition) { r.Handler = nil }, "handler"},
 		{"nil middleware", func(r *routeDefinition) { r.Middlewares = []gin.HandlerFunc{nil} }, "nil Gateway middleware"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			route := routeDefinition{
-				Method:     http.MethodGet,
-				Path:       "/test",
-				Identities: middleware.AllowUsers,
-				Handler:    func(c *gin.Context) { c.Status(http.StatusNoContent) },
+				Method:        http.MethodGet,
+				Path:          "/test",
+				Authorization: policy.Rule{Identities: policy.AllowUsers},
+				Handler:       func(c *gin.Context) { c.Status(http.StatusNoContent) },
 			}
 			tc.change(&route)
 			defer func() {
@@ -801,8 +820,8 @@ func TestConfigAndScriptServiceAuthorizationAudit(t *testing.T) {
 		c.Next()
 		decision = c.GetString("serviceAuthorization")
 	})
-	router.Use(middleware.PrepareQuery(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(api.auth, middleware.NewRoutePolicies(routeRules())),
-		middleware.LimitIdentity(api.limits), middleware.AdmitIdentity(middleware.NewRoutePolicies(routeRules())))
+	router.Use(middleware.PrepareQuery(middleware.NewRoutePolicies(routeRules())), middleware.Authenticate(middleware.NewRoutePolicies(routeRules()), api.auth),
+		middleware.LimitIdentity(api.limits), middleware.Authorize(middleware.NewRoutePolicies(routeRules()), api.policy))
 	registerForwardRoutes(router, make(map[middleware.RouteKey]middleware.RoutePolicy), api.Handler)
 	for _, tc := range []struct {
 		query, audit string

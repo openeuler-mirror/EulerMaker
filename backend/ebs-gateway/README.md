@@ -19,14 +19,15 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/upstream` | 可信内部读取和流式反向代理 |
 | `internal/limit` | 请求令牌桶 |
 
-从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [resources.go](internal/gateway/resources.go) 查看资源请求的授权处理。全局 [PrepareQuery](internal/middleware/query.go) 按 GET 方法和 Gin 路由模板仅允许 Project Job 列表、Runner 任务列表请求 Watch；其他已匹配路由在认证前返回 403，未匹配路由沿用 NoRoute。允许的 Watch 仍须通过后续认证、授权和查询检查。非 Watch 请求仅在配置了 `ListLimit` 的 GET 列表上规范化 `limit`；Project 及其公开子资源列表上限为 100，其余查询参数、对象读取和 Watch 参数保持原样。
+从 [router.go](internal/gateway/router.go) 查看路径、HTTP 方法和中间件顺序；从 [Authorize](internal/middleware/access.go) 和 [Policy](internal/policy/authorize.go) 查看鉴权处理。全局 [PrepareQuery](internal/middleware/query.go) 按 GET 方法和 Gin 路由模板仅允许 Project Job 列表、Runner 任务列表请求 Watch；其他已匹配路由在认证前返回 403，未匹配路由沿用 NoRoute。允许的 Watch 仍须通过后续认证、授权和查询检查。非 Watch 请求仅在配置了 `ListLimit` 的 GET 列表上规范化 `limit`；Project 及其公开子资源列表上限为 100，其余查询参数、对象读取和 Watch 参数保持原样。
 全局 [Authenticate](internal/middleware/auth.go) 按方法和路由模板处理无需 Bearer 认证、可选认证和必须认证三类请求，默认必须认证。登录等凭据入口和 OpenAPI 不解析 Bearer Token；现有公开 GET 可匿名，但带 Token 时必须验证，Watch 必须认证。各路由不重复认证或通用限流，只负责业务授权；未触发限流时，未知路径匿名返回 401，认证成功后返回 404。
-认证、身份准入及查询选项与路径、方法、额外中间件、Handler 一起声明在 [router.go](internal/gateway/router.go)，按认证、OAuth、透传及其他接口分别注册；透传路由统一设置 `upstream.Forward`。注册时生成同一份规则表，拒绝重复路由、空 Handler、空中间件及矛盾的认证或查询配置；显式 `AuthenticationNone` 自动补齐匿名准入，其余路由必须声明允许身份。`NewRouter` 在提供服务前发布 Router 独有的 `RoutePolicies` 只读副本，全局认证、准入和查询中间件共用该副本。工程归属、Service 的 projects/permissions 和字段修改权限仍由业务 Guard 校验。
+认证、身份准入及查询选项与路径、方法、额外中间件、Handler 一起声明在 [router.go](internal/gateway/router.go)，按认证、OAuth、透传及其他接口分别注册；透传路由统一设置 `upstream.Forward`。注册时生成同一份规则表，拒绝重复路由、空 Handler、空中间件及矛盾的认证或查询配置；显式 `AuthenticationNone` 自动补齐匿名准入，其余路由必须声明允许身份。`NewRouter` 在提供服务前发布 Router 独有的 `RoutePolicies` 只读副本，全局认证、准入和查询中间件共用该副本。工程归属与 Service 的 projects/permissions 由全局 `Authorize` 调用 Policy 校验，字段修改权限仍由业务 Handler 校验。
 `GET /healthz` 在业务中间件挂载前直接注册 Handler，返回固定文本，不挂载 Recovery，也不经过审计、Watch 检查、认证和限流。业务链保持 Audit 在外、Recovery 在内，后续处理 panic 恢复后仍记录最终状态；认证和限流不包含健康检查特判。
 通用限流由 [limit.go](internal/middleware/limit.go) 在业务链全局执行：认证后按身份类型/名称/IP 或匿名 IP 限流。登录、注册、机器换 Token、OAuth 和 Watch 并发限制继续保留，通用限流返回 429 和 `Retry-After: 1`。
-普通公开 GET 完成全局认证、身份准入和查询检查后直接交给 `upstream.Forward`。工程 Job 列表的 Watch 保留 owner/member 校验；指定 Job 的 GET 保留 `runnerJobReadGuard` 检查 Runner 分配关系。Runner 创建与任务列表仅允许 Runner 身份，列表与 `/status` 读取仅允许 Ops/Admin，由全局准入判断。路由内保留注册正文、Runner 名称匹配、更新字段、查询参数和 Watch 并发检查；所有业务路由都有准入规则的测试保障。
+普通公开 GET 完成全局认证、身份准入和查询检查后直接交给 `upstream.Forward`。工程 Job 列表的 Watch 保留 owner/member 校验；指定 Job 的 GET 由 `AssignedJob` 规则检查 Runner 分配关系，只投影读取名称、命名空间和 `status.runner`；状态更新读取并复用完整旧对象。Runner 创建与任务列表仅允许 Runner 身份，列表与 `/status` 读取仅允许 Ops/Admin，由全局准入判断。路由内保留注册正文、Runner 名称匹配、更新字段、查询参数和 Watch 并发检查；所有业务路由都有准入规则的测试保障。
+`/auth/check` 在全局业务鉴权前注册，仅执行认证、身份限流和 `AdmitIdentity(AllowAuthenticated)`，不要求 Service permission；所有允许 Service 的业务路由必须配置有效 permission。
 Config 读写要求 Ops/Admin；`build-targets` 仅允许 User 身份，`service-endpoints` 仅允许 Runner 身份，均由统一规则表声明。公共写请求处理放在 `request.go`。
-Policy 使用显式 `Rule` 声明允许身份、对象归属、Watch 归属和 Service permission，不再按资源字符串分派授权。路由的 `authorizeResource` 仅适配请求参数、错误和 Service 审计；Project owner/member 与 Service 工程范围校验由 Policy 完成。Project 用户更新在授权时读取完整旧对象，后续 PUT/PATCH 校验复用该对象，Service 更新仍按授权后的写入准备流程读取；仅校验归属的请求使用字段投影。
+Policy 使用显式 `Rule` 声明允许身份、对象归属、Watch 归属和 Service permission，不再按资源字符串分派授权。全局 `Authorize` 适配请求参数、错误、Service 审计和请求级旧对象；Project owner/member 与 Service 工程范围校验由 Policy 完成。Project 用户更新在授权时读取完整旧对象，后续 PUT/PATCH 校验复用该对象，Service 更新仍按授权后的写入准备流程读取；仅校验归属的请求使用字段投影。
 测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
 认证接口及专用限流测试放在 [auth/handler_test.go](internal/auth/handler_test.go)，其余 Handler 测试与业务文件对应；全局请求链、路由规则和 OpenAPI 路由契约测试统一放在 [router_test.go](internal/gateway/router_test.go)。
 
