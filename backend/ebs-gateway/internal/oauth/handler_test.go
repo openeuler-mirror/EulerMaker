@@ -1,7 +1,6 @@
 package oauth
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -17,43 +16,77 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-jose/go-jose/v4"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
+
+	iamv1 "ebs-api/iam/v1"
 
 	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
+	"ebs-gateway/internal/upstream"
 )
 
 type fakeAccounts struct {
-	account       iamclient.OAuthAccount
-	user          iamclient.User
+	account       iamclient.OAuthResult
+	user          iamv1.User
 	registerCalls int
 	authCalls     int
-	registerError error
-	authError     error
+	registerError *iamclient.OAuthError
+	authError     *iamclient.OAuthError
 }
 
-func (f *fakeAccounts) AuthenticateOAuth(context.Context, iamclient.ExternalIdentity) (iamclient.OAuthAccount, error) {
-	f.authCalls++
-	if f.authError != nil {
-		return iamclient.OAuthAccount{}, f.authError
+func (f *fakeAccounts) RoundTrip(r *http.Request) (*http.Response, error) {
+	response := httptest.NewRecorder()
+	response.Header().Set("Content-Type", "application/json")
+	if r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/users/"+f.user.Name {
+		_ = json.NewEncoder(response).Encode(f.user)
+		return response.Result(), nil
 	}
-	if f.account.Username == "" {
-		return iamclient.OAuthAccount{RegistrationRequired: true}, nil
+	if r.Method != http.MethodPost {
+		return nil, fmt.Errorf("unexpected IAM request: %s %s", r.Method, r.URL.Path)
 	}
-	return f.account, nil
-}
-
-func (f *fakeAccounts) RegisterOAuth(_ context.Context, _ iamclient.ExternalIdentity, name, _, _ string) (iamclient.OAuthAccount, error) {
-	f.registerCalls++
-	if f.registerError != nil {
-		return iamclient.OAuthAccount{}, f.registerError
+	var input struct {
+		Method           string                     `json:"method"`
+		Username         string                     `json:"username"`
+		ExternalIdentity iamclient.ExternalIdentity `json:"externalIdentity"`
 	}
-	f.account = iamclient.OAuthAccount{Authenticated: true, Username: name, UID: "user-uid"}
-	f.user = iamclient.User{Name: name, UID: "user-uid", Enabled: true, Scopes: []identity.Scope{identity.UserScope}}
-	return f.account, nil
-}
-
-func (f *fakeAccounts) GetUser(context.Context, string) (iamclient.User, int, error) {
-	return f.user, 200, nil
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		return nil, err
+	}
+	if input.Method != "oauth" || input.ExternalIdentity.Issuer == "" || input.ExternalIdentity.Subject == "" {
+		return nil, fmt.Errorf("missing OAuth identity in IAM request")
+	}
+	var failure *iamclient.OAuthError
+	result := f.account
+	switch r.URL.Path {
+	case "/internal/iam/v1/users/authenticate":
+		f.authCalls++
+		failure = f.authError
+		if result.Username == "" {
+			result = iamclient.OAuthResult{RegistrationRequired: true}
+		}
+	case "/internal/iam/v1/users/register":
+		f.registerCalls++
+		failure = f.registerError
+		if failure == nil {
+			f.account = iamclient.OAuthResult{Authenticated: true, Username: input.Username, UID: "user-uid"}
+			f.user = iamv1.User{
+				ObjectMeta: metav1.ObjectMeta{Name: input.Username, UID: "user-uid"},
+				Spec:       iamv1.UserSpec{Enabled: ptr.To(true), Scopes: []string{string(identity.UserScope)}},
+			}
+			result = f.account
+			response.WriteHeader(http.StatusCreated)
+		}
+	default:
+		return nil, fmt.Errorf("unexpected IAM path: %s", r.URL.Path)
+	}
+	if failure != nil {
+		response.WriteHeader(failure.Status)
+		_ = json.NewEncoder(response).Encode(map[string]string{"code": failure.Code})
+	} else {
+		_ = json.NewEncoder(response).Encode(result)
+	}
+	return response.Result(), nil
 }
 
 type oauthFixture struct {
@@ -129,7 +162,11 @@ func newFixture(t *testing.T) *oauthFixture {
 	t.Cleanup(f.server.Close)
 	config := testConfig(f.server.URL)
 	tokens, _ := identity.NewTokens(base64.StdEncoding.EncodeToString(make([]byte, 32)))
-	f.h = New(config, f.accounts, tokens, func() time.Time { return f.now })
+	client, err := upstream.New("https://api.example", f.accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.h = New(config, iamclient.New(client), tokens, func() time.Time { return f.now })
 	f.h.provider = newProvider(config, f.h.now, f.server.Client().Transport)
 	return f
 }
@@ -188,7 +225,11 @@ func (f *oauthFixture) callback(t *testing.T) *httptest.ResponseRecorder {
 
 func TestLoginExistingAccount(t *testing.T) {
 	f := newFixture(t)
-	f.accounts.RegisterOAuth(context.Background(), iamclient.ExternalIdentity{}, "alice", "", "")
+	f.accounts.account = iamclient.OAuthResult{Authenticated: true, Username: "alice", UID: "user-uid"}
+	f.accounts.user = iamv1.User{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", UID: "user-uid"},
+		Spec:       iamv1.UserSpec{Enabled: ptr.To(true), Scopes: []string{string(identity.UserScope)}},
+	}
 	result := f.callback(t)
 	assertToken(t, f, result, "alice")
 	if f.tokenCalls.Load() != 1 || f.keyCalls.Load() != 1 || f.requestInvalid.Load() {
@@ -239,7 +280,7 @@ func TestRegistrationAcrossReplicasAndConfirmation(t *testing.T) {
 		t.Fatalf("callback must provide the registration form context: %s", result.Body.String())
 	}
 	cookie := cookieFrom(t, result, "register")
-	other := New(f.h.config, f.accounts, f.h.tokens, f.h.now)
+	other := New(f.h.config, f.h.accounts, f.h.tokens, f.h.now)
 	body, _ := json.Marshal(map[string]string{"registrationID": form.RegistrationID, "action": "create", "username": "admin"})
 	result = serve(other, "POST", "/auth/oauth/register", string(body), cookie)
 	assertToken(t, f, result, "admin")
@@ -252,9 +293,11 @@ func TestRegistrationAcrossReplicasAndConfirmation(t *testing.T) {
 	if f.accounts.registerCalls != 1 {
 		t.Fatal("confirmation wrote IAM")
 	}
-	f.accounts.user.Enabled = false
-	if result = serve(other, "POST", "/auth/oauth/register", string(body), cookie); result.Code != 401 {
-		t.Fatal(result.Body.String())
+	for _, enabled := range []*bool{ptr.To(false), nil} {
+		f.accounts.user.Spec.Enabled = enabled
+		if result = serve(other, "POST", "/auth/oauth/register", string(body), cookie); result.Code != 401 {
+			t.Fatal(result.Body.String())
+		}
 	}
 }
 
@@ -276,8 +319,11 @@ func TestRegistrationUnknownResultOnlyConfirms(t *testing.T) {
 	if f.accounts.registerCalls != 1 {
 		t.Fatal("confirmation recreated account")
 	}
-	f.accounts.account = iamclient.OAuthAccount{Authenticated: true, Username: "alice", UID: "uid"}
-	f.accounts.user = iamclient.User{Name: "alice", UID: "uid", Enabled: true, Scopes: []identity.Scope{identity.UserScope}}
+	f.accounts.account = iamclient.OAuthResult{Authenticated: true, Username: "alice", UID: "uid"}
+	f.accounts.user = iamv1.User{
+		ObjectMeta: metav1.ObjectMeta{Name: "alice", UID: "uid"},
+		Spec:       iamv1.UserSpec{Enabled: ptr.To(true), Scopes: []string{string(identity.UserScope)}},
+	}
 	assertToken(t, f, serve(f.h, "POST", "/auth/oauth/register", body, cookie), "alice")
 	f.accounts.user.UID = "recreated"
 	if result = serve(f.h, "POST", "/auth/oauth/register", body, cookie); result.Code != 401 {
@@ -371,7 +417,7 @@ func TestCookieAPIsRequireSameOrigin(t *testing.T) {
 func TestCallbackOnAnotherReplica(t *testing.T) {
 	f := newFixture(t)
 	cookie, state := f.login(t)
-	other := New(f.h.config, f.accounts, f.h.tokens, f.h.now)
+	other := New(f.h.config, f.h.accounts, f.h.tokens, f.h.now)
 	other.provider = newProvider(f.h.config, f.h.now, f.server.Client().Transport)
 	response := serve(other, "POST", "/auth/oauth/community/callback", `{"code":"code","state":"`+state+`"}`, cookie)
 	if response.Code != 200 || !strings.Contains(response.Body.String(), `"registrationRequired":true`) {

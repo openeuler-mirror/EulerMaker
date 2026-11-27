@@ -986,13 +986,14 @@ func TestWatchRouteAllowlist(t *testing.T) {
 }
 
 func TestLoginAndCheck(t *testing.T) {
+	userSpec := `{"enabled":true,"scopes":["ebs:user"]}`
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var body string
 		switch r.URL.Path {
 		case "/internal/iam/v1/users/authenticate":
 			body = `{"authenticated":true,"username":"alice"}`
 		case "/apis/iam.ebs/v1/users/alice":
-			body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
+			body = `{"metadata":{"name":"alice"},"spec":` + userSpec + `}`
 		default:
 			t.Errorf("unexpected IAM request %s", r.URL.Path)
 		}
@@ -1035,6 +1036,27 @@ func TestLoginAndCheck(t *testing.T) {
 	if !checked.Authenticated || checked.Identity.Type != "user" || checked.Identity.Name != "alice" ||
 		len(checked.Identity.Scopes) != 1 || checked.Identity.Scopes[0] != identity.UserScope || checked.ExpiresAt.IsZero() {
 		t.Fatalf("unexpected token check response: %+v", checked)
+	}
+	for _, spec := range []string{
+		`{"enabled":false,"scopes":["ebs:user"]}`,
+		`{"enabled":null,"scopes":["ebs:user"]}`,
+		`{"scopes":["ebs:user"]}`,
+	} {
+		userSpec = spec
+		login := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"alice","password":"correct-password"}`))
+		login.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, login)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("inactive user login: spec=%s status=%d body=%s", spec, response.Code, response.Body)
+		}
+		check := httptest.NewRequest(http.MethodPost, "/auth/check", nil)
+		check.Header.Set("Authorization", "Bearer "+result.Token)
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, check)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("inactive user token check: spec=%s status=%d body=%s", spec, response.Code, response.Body)
+		}
 	}
 }
 

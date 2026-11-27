@@ -103,7 +103,7 @@ func (a *Auth) verifyUser(c *gin.Context, who identity.Principal) bool {
 		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "user service unavailable"})
 		return false
 	}
-	if status == http.StatusNotFound || user.Name != who.Subject || !user.Enabled || len(user.Scopes) != 1 || user.Scopes[0] != who.Scope {
+	if status == http.StatusNotFound || user.Name != who.Subject || user.Spec.Enabled == nil || !*user.Spec.Enabled || len(user.Spec.Scopes) != 1 || identity.Scope(user.Spec.Scopes[0]) != who.Scope {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		return false
 	}

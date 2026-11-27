@@ -191,8 +191,8 @@ func (a *Authorizer) validateProjectLabels(ctx context.Context, who identity.Pri
 func (a *Authorizer) validateMember(ctx context.Context, name string) error {
 	client := iamclient.New(a.upstream)
 	user, status, err := client.GetUser(ctx, name)
-	if err != nil || status != http.StatusOK || user.Name != name || !user.Enabled || len(user.Scopes) != 1 ||
-		(user.Scopes[0] != identity.UserScope && user.Scopes[0] != identity.OpsScope) {
+	if err != nil || status != http.StatusOK || user.Name != name || user.Spec.Enabled == nil || !*user.Spec.Enabled || len(user.Spec.Scopes) != 1 ||
+		(identity.Scope(user.Spec.Scopes[0]) != identity.UserScope && identity.Scope(user.Spec.Scopes[0]) != identity.OpsScope) {
 		return deny("Project user must exist, be enabled and have User or Ops scope")
 	}
 	return nil
