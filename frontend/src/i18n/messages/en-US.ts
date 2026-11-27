@@ -487,7 +487,7 @@ export default {
   },
   admin: {
     usersTitle: "User accounts",
-    usersHint: "Registered users can be assigned the operations role here. Administrator accounts are excluded.",
+    usersHint: "Registered users can be assigned the operations role here. Administrator accounts are read-only and cannot be edited or removed.",
     machineAccounts: "Machine accounts",
     machineHint: "Manage service accounts and their token lifetimes.",
     searchUsers: "Search users on this page",
@@ -505,6 +505,7 @@ export default {
     active: "Enabled",
     disabled: "Disabled",
     regularUser: "Regular user",
+    adminUser: "Administrator",
     opsUser: "Operations user",
     editUser: "Edit user {name}",
     deleteUser: "Delete user {name}",
