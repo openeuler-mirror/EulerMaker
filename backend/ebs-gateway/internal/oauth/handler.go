@@ -14,15 +14,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/mutation"
 )
 
 type accountClient interface {
-	AuthenticateOAuth(context.Context, iam.ExternalIdentity) (iam.OAuthAccount, error)
-	RegisterOAuth(context.Context, iam.ExternalIdentity, string, string, string) (iam.OAuthAccount, error)
-	GetUser(context.Context, string) (iam.User, int, error)
+	AuthenticateOAuth(context.Context, iamclient.ExternalIdentity) (iamclient.OAuthAccount, error)
+	RegisterOAuth(context.Context, iamclient.ExternalIdentity, string, string, string) (iamclient.OAuthAccount, error)
+	GetUser(context.Context, string) (iamclient.User, int, error)
 }
 
 type Handler struct {
@@ -80,7 +80,7 @@ func failure(status int, code string) error {
 func respondError(c *gin.Context, err error) {
 	status, code := 503, "OAuthUnavailable"
 	var local *apiError
-	var remote *iam.OAuthError
+	var remote *iamclient.OAuthError
 	if errors.As(err, &local) {
 		status, code = local.status, local.code
 	} else if errors.As(err, &remote) {
@@ -350,7 +350,7 @@ func (h *Handler) Register(c *gin.Context) {
 	}
 	ctx, cancel := requestContext(c, state)
 	defer cancel()
-	var created iam.OAuthAccount
+	var created iamclient.OAuthAccount
 	if input["action"] == "create" {
 		created, err = h.accounts.RegisterOAuth(ctx, *state.Identity, input["username"], input["displayName"], input["email"])
 		if err != nil {
@@ -386,7 +386,7 @@ func (h *Handler) Register(c *gin.Context) {
 	h.loginAccount(c, ctx, state, account)
 }
 
-func (h *Handler) loginAccount(c *gin.Context, ctx context.Context, state browserContext, account iam.OAuthAccount) {
+func (h *Handler) loginAccount(c *gin.Context, ctx context.Context, state browserContext, account iamclient.OAuthAccount) {
 	user, status, err := h.accounts.GetUser(ctx, account.Username)
 	if err != nil || status >= 500 {
 		respondError(c, failure(503, "OAuthUnavailable"))

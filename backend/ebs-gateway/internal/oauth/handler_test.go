@@ -18,41 +18,41 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-jose/go-jose/v4"
 
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 )
 
 type fakeAccounts struct {
-	account       iam.OAuthAccount
-	user          iam.User
+	account       iamclient.OAuthAccount
+	user          iamclient.User
 	registerCalls int
 	authCalls     int
 	registerError error
 	authError     error
 }
 
-func (f *fakeAccounts) AuthenticateOAuth(context.Context, iam.ExternalIdentity) (iam.OAuthAccount, error) {
+func (f *fakeAccounts) AuthenticateOAuth(context.Context, iamclient.ExternalIdentity) (iamclient.OAuthAccount, error) {
 	f.authCalls++
 	if f.authError != nil {
-		return iam.OAuthAccount{}, f.authError
+		return iamclient.OAuthAccount{}, f.authError
 	}
 	if f.account.Username == "" {
-		return iam.OAuthAccount{RegistrationRequired: true}, nil
+		return iamclient.OAuthAccount{RegistrationRequired: true}, nil
 	}
 	return f.account, nil
 }
 
-func (f *fakeAccounts) RegisterOAuth(_ context.Context, _ iam.ExternalIdentity, name, _, _ string) (iam.OAuthAccount, error) {
+func (f *fakeAccounts) RegisterOAuth(_ context.Context, _ iamclient.ExternalIdentity, name, _, _ string) (iamclient.OAuthAccount, error) {
 	f.registerCalls++
 	if f.registerError != nil {
-		return iam.OAuthAccount{}, f.registerError
+		return iamclient.OAuthAccount{}, f.registerError
 	}
-	f.account = iam.OAuthAccount{Authenticated: true, Username: name, UID: "user-uid"}
-	f.user = iam.User{Name: name, UID: "user-uid", Enabled: true, Scopes: []identity.Scope{identity.UserScope}}
+	f.account = iamclient.OAuthAccount{Authenticated: true, Username: name, UID: "user-uid"}
+	f.user = iamclient.User{Name: name, UID: "user-uid", Enabled: true, Scopes: []identity.Scope{identity.UserScope}}
 	return f.account, nil
 }
 
-func (f *fakeAccounts) GetUser(context.Context, string) (iam.User, int, error) {
+func (f *fakeAccounts) GetUser(context.Context, string) (iamclient.User, int, error) {
 	return f.user, 200, nil
 }
 
@@ -188,7 +188,7 @@ func (f *oauthFixture) callback(t *testing.T) *httptest.ResponseRecorder {
 
 func TestLoginExistingAccount(t *testing.T) {
 	f := newFixture(t)
-	f.accounts.RegisterOAuth(context.Background(), iam.ExternalIdentity{}, "alice", "", "")
+	f.accounts.RegisterOAuth(context.Background(), iamclient.ExternalIdentity{}, "alice", "", "")
 	result := f.callback(t)
 	assertToken(t, f, result, "alice")
 	if f.tokenCalls.Load() != 1 || f.keyCalls.Load() != 1 || f.requestInvalid.Load() {
@@ -264,7 +264,7 @@ func TestRegistrationUnknownResultOnlyConfirms(t *testing.T) {
 	cookie := cookieFrom(t, result, "register")
 	var form struct{ RegistrationID string }
 	json.Unmarshal(result.Body.Bytes(), &form)
-	f.accounts.registerError = &iam.OAuthError{Status: 503, Code: "IAMUnavailable"}
+	f.accounts.registerError = &iamclient.OAuthError{Status: 503, Code: "IAMUnavailable"}
 	body := `{"registrationID":"` + form.RegistrationID + `","action":"create","username":"alice"}`
 	if result = serve(f.h, "POST", "/auth/oauth/register", body, cookie); result.Code != 503 {
 		t.Fatal(result.Body.String())
@@ -276,8 +276,8 @@ func TestRegistrationUnknownResultOnlyConfirms(t *testing.T) {
 	if f.accounts.registerCalls != 1 {
 		t.Fatal("confirmation recreated account")
 	}
-	f.accounts.account = iam.OAuthAccount{Authenticated: true, Username: "alice", UID: "uid"}
-	f.accounts.user = iam.User{Name: "alice", UID: "uid", Enabled: true, Scopes: []identity.Scope{identity.UserScope}}
+	f.accounts.account = iamclient.OAuthAccount{Authenticated: true, Username: "alice", UID: "uid"}
+	f.accounts.user = iamclient.User{Name: "alice", UID: "uid", Enabled: true, Scopes: []identity.Scope{identity.UserScope}}
 	assertToken(t, f, serve(f.h, "POST", "/auth/oauth/register", body, cookie), "alice")
 	f.accounts.user.UID = "recreated"
 	if result = serve(f.h, "POST", "/auth/oauth/register", body, cookie); result.Code != 401 {

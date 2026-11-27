@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 )
 
 func TestCookieRotationAndPurpose(t *testing.T) {
@@ -87,7 +87,7 @@ func TestCookieAuthenticationConfigChanges(t *testing.T) {
 func TestCookiePayloadLimit(t *testing.T) {
 	f := newFixture(t)
 	state := browserContext{Purpose: "register", Provider: "community", ConfigFingerprint: f.h.config.fingerprint(), IssuedAt: f.now.Unix(), ExpiresAt: f.now.Add(time.Minute).Unix(), ReturnTo: "/",
-		RegistrationID: randomValue(), Identity: &iam.ExternalIdentity{Issuer: "issuer", Subject: "subject"}, Profile: profile{DisplayName: strings.Repeat("x", 5000)}}
+		RegistrationID: randomValue(), Identity: &iamclient.ExternalIdentity{Issuer: "issuer", Subject: "subject"}, Profile: profile{DisplayName: strings.Repeat("x", 5000)}}
 	cookie, err := f.h.encodeCookie(state)
 	if err != nil || len(cookie.String()) > 3800 {
 		t.Fatal("optional profile was not dropped", err)

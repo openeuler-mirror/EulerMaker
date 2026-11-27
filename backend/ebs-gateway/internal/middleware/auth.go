@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	iamv1 "ebs-api/iam/v1"
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/policy"
 )
@@ -16,11 +16,11 @@ import (
 // Auth verifies tokens and resolves their current account identity.
 type Auth struct {
 	tokens *identity.Tokens
-	iam    *iam.Client
+	iam    *iamclient.Client
 	now    func() time.Time
 }
 
-func NewAuth(tokens *identity.Tokens, client *iam.Client, now func() time.Time) *Auth {
+func NewAuth(tokens *identity.Tokens, client *iamclient.Client, now func() time.Time) *Auth {
 	return &Auth{
 		tokens: tokens,
 		iam:    client,

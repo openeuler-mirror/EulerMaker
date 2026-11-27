@@ -7,7 +7,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/sets"
 
-	"ebs-gateway/internal/iam"
+	"ebs-gateway/internal/iamclient"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
 	"ebs-gateway/internal/middleware"
@@ -22,7 +22,7 @@ type Dependencies struct {
 	Limits           *limit.Buckets
 	IPLimits         *limit.Buckets
 	BodyLimit        int64
-	IAM              *iam.Client
+	IAM              *iamclient.Client
 	LocalAuthEnabled bool
 }
 
@@ -34,7 +34,7 @@ type Handler struct {
 	now                   func() time.Time
 	limits                *limit.Buckets
 	ipLimits              *limit.Buckets
-	iam                   *iam.Client
+	iam                   *iamclient.Client
 	auth                  *middleware.Auth
 	bodyLimit             int64
 	registerIP            *limit.Buckets

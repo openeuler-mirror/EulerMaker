@@ -11,7 +11,7 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/gateway` | 注册 Gin 路由，组装中间件，按资源处理和转发请求 |
 | `internal/middleware` | 身份认证、账号核验、路由身份准入、请求限流和审计 |
 | `internal/identity` | JWT 签发、验证和身份类型 |
-| `internal/iam` | 调用 apiserver 的 IAM 接口 |
+| `internal/iamclient` | 调用 apiserver 的 IAM 接口 |
 | `internal/oauth` | OAuth/OIDC 提供方认证、加密 Cookie、首次注册及结果确认 |
 | `internal/policy` | 工程归属、Service 授权范围及资源字段写入保护 |
 | `internal/mutation` | 严格解析 PUT/PATCH 并生成完整候选对象 |
