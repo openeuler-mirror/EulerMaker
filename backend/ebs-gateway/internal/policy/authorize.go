@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -11,6 +13,51 @@ import (
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/upstream"
 )
+
+type ObjectAccess string
+
+const (
+	ObjectAccessNone   ObjectAccess = ""
+	ProjectOwner       ObjectAccess = "project-owner"
+	ProjectOwnerUpdate ObjectAccess = "project-owner-update"
+	ProjectMember      ObjectAccess = "project-member"
+	RunnerSelf         ObjectAccess = "runner-self"
+	AssignedJob        ObjectAccess = "assigned-job"
+)
+
+type RouteIdentities uint8
+
+const (
+	AllowAnonymous RouteIdentities = 1 << iota
+	AllowUser
+	AllowOps
+	AllowAdmin
+	AllowRunner
+	AllowService
+
+	AllowPrivileged    = AllowOps | AllowAdmin
+	AllowUsers         = AllowUser | AllowOps | AllowAdmin
+	AllowAuthenticated = AllowUsers | AllowRunner | AllowService
+)
+
+type Rule struct {
+	Identities        RouteIdentities
+	ObjectAccess      ObjectAccess
+	WatchAccess       ObjectAccess
+	ServicePermission iamv1.MachineAccountPermission
+}
+
+type Request struct {
+	Method  string
+	Project string
+	Runner  string
+	Path    string
+	Watch   bool
+}
+
+type Result struct {
+	UpdateObject []byte
+}
 
 type Route struct {
 	Resource    string
@@ -32,124 +79,49 @@ func deny(message string) error {
 }
 
 type Authorizer struct {
-	upstream *upstream.Client
+	upstream  *upstream.Client
+	bodyLimit int64
 }
 
-func New(upstreamClient *upstream.Client) *Authorizer {
-	return &Authorizer{upstream: upstreamClient}
+func New(upstreamClient *upstream.Client, bodyLimit int64) *Authorizer {
+	return &Authorizer{upstream: upstreamClient, bodyLimit: bodyLimit}
 }
 
-func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, route Route) error {
-	if who.Type == identity.ServiceType {
-		return authorizeService(who, route)
+// ReadAssignedJob projects assignment fields for reads, retaining a full object only for status updates.
+func (a *Authorizer) ReadAssignedJob(ctx context.Context, path, runner string, forUpdate bool) ([]byte, error) {
+	if !forUpdate {
+		path += "?includeFields=metadata.name,metadata.namespace,status.runner"
 	}
-	switch route.Resource {
-	case "projects":
-		return a.authorizeProject(ctx, who, route)
-	case "builds":
-		return a.authorizeBuild(ctx, who, route)
-	case "jobs":
-		return a.authorizeJob(ctx, who, route)
-	default:
-		return deny("resource is not exposed")
+	response, err := a.upstream.Do(ctx, http.MethodGet, path, nil, nil)
+	if err != nil || response == nil {
+		return nil, &Error{Status: http.StatusServiceUnavailable, Message: "Job lookup unavailable"}
 	}
-}
-
-func (a *Authorizer) authorizeBuild(ctx context.Context, who identity.Principal, route Route) error {
-	if who.Type == identity.RunnerType {
-		return deny("Runner project access denied")
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound {
+		return nil, &Error{Status: http.StatusNotFound, Message: "Job not found"}
 	}
-	if route.Method == http.MethodDelete {
-		if who.Type != identity.UserType || who.Subject == "" || route.Project == "" {
-			return deny("only the Project owner can delete Build")
-		}
-		access, err := a.projectAccess(ctx, route.Project, who.Subject)
-		if err != nil {
-			return err
-		}
-		if !access.owner {
-			return deny("only the Project owner can delete Build")
-		}
-		return nil
+	if response.StatusCode != http.StatusOK {
+		return nil, &Error{Status: http.StatusServiceUnavailable, Message: "Job lookup unavailable"}
 	}
-	_, err := a.projectMembership(ctx, who, route.Project)
-	return err
-}
-
-func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, route Route) error {
-	if route.Subresource == "" && isWrite(route.Method) {
-		return deny("Job creation, deletion and ordinary updates are not exposed through Gateway")
+	raw, err := io.ReadAll(io.LimitReader(response.Body, a.bodyLimit+1))
+	if err != nil || int64(len(raw)) > a.bodyLimit {
+		return nil, &Error{Status: http.StatusBadGateway, Message: "invalid Job response"}
 	}
-	if route.Subresource == "abort" {
-		return a.jobAbort(ctx, who, route)
+	var object struct {
+		Status struct {
+			Runner string `json:"runner"`
+		} `json:"status"`
 	}
-	if who.Type == identity.RunnerType {
-		if route.Project != "" && route.Name != "" &&
-			((route.Subresource == "" && route.Method == http.MethodGet) ||
-				(route.Subresource == "status" && route.Method == http.MethodPatch)) {
-			return nil // Object assignment is verified by the Job handler before forwarding.
-		}
-		return deny("Runner project access denied")
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, &Error{Status: http.StatusBadGateway, Message: "invalid Job response"}
 	}
-	if route.Subresource == "status" && isWrite(route.Method) {
-		return deny("user cannot update Job status")
+	if object.Status.Runner != runner {
+		return nil, deny("Job is not assigned to Runner")
 	}
-	_, err := a.projectMembership(ctx, who, route.Project)
-	return err
-}
-
-func authorizeService(who identity.Principal, route Route) error {
-	project, permission := ServiceOperation(route)
-	if permission == "" {
-		return deny("service operation is not allowed")
+	if !forUpdate {
+		return nil, nil
 	}
-	grants := who.ServiceGrants
-	if grants == nil || !slices.Contains(grants.Projects, project) || !slices.Contains(grants.Permissions, permission) {
-		return deny("service account lacks project or operation permission")
-	}
-	return nil
-}
-
-// ServiceOperation identifies the project and permission required by an exposed service write route.
-func ServiceOperation(route Route) (string, iamv1.MachineAccountPermission) {
-	switch route.Resource {
-	case "projects":
-		if route.Project == "" && route.Name != "" && route.Subresource == "" &&
-			(route.Method == http.MethodPut || route.Method == http.MethodPatch) {
-			return route.Name, iamv1.MachinePermissionProjectsUpdate
-		}
-	case "builds":
-		if route.Project != "" && route.Method == http.MethodPost {
-			if route.Name == "" && route.Subresource == "" {
-				return route.Project, iamv1.MachinePermissionBuildsCreate
-			}
-			if route.Name != "" && route.Subresource == "abort" {
-				return route.Project, iamv1.MachinePermissionBuildsAbort
-			}
-		}
-	}
-	return "", ""
-}
-
-func (a *Authorizer) jobAbort(ctx context.Context, who identity.Principal, route Route) error {
-	if route.Method != http.MethodPost || route.Project == "" || route.Name == "" {
-		return deny("Job abort requires a named Job and POST")
-	}
-	if !who.IsUser() {
-		return deny("Job abort requires a project member")
-	}
-	access, err := a.projectAccess(ctx, route.Project, who.Subject)
-	if err != nil {
-		return err
-	}
-	if !access.owner && !access.member {
-		return deny("Job abort requires a project member")
-	}
-	return nil
-}
-
-func isWrite(method string) bool {
-	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete
+	return raw, nil
 }
 
 func HasWatch(query url.Values) bool {
@@ -157,6 +129,94 @@ func HasWatch(query url.Values) bool {
 		if !strings.EqualFold(value, "false") {
 			return true
 		}
+	}
+	return false
+}
+
+// Authorize evaluates identity, service grants and object ownership without HTTP context mutation.
+func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, request Request, rule Rule) (Result, error) {
+	if !rule.Identities.Allows(who) {
+		return Result{}, deny("identity is not allowed for this route")
+	}
+	if who.Type == identity.ServiceType {
+		return Result{}, authorizeService(who, request.Project, rule)
+	}
+	access := rule.ObjectAccess
+	if request.Watch {
+		access = rule.WatchAccess
+	}
+	return a.authorizeObject(ctx, who, request, access)
+}
+
+func (a *Authorizer) authorizeObject(ctx context.Context, who identity.Principal, request Request, access ObjectAccess) (Result, error) {
+	switch access {
+	case ObjectAccessNone:
+		return Result{}, nil
+	case RunnerSelf:
+		if who.Type == identity.RunnerType && request.Runner != who.Subject {
+			return Result{}, deny("Runner identity mismatch")
+		}
+		return Result{}, nil
+	case ProjectOwner, ProjectOwnerUpdate, ProjectMember:
+		if a == nil || a.upstream == nil {
+			return Result{}, &Error{Status: http.StatusInternalServerError, Message: "object authorization is unavailable"}
+		}
+		if access == ProjectOwnerUpdate {
+			raw, err := a.authorizeProjectUpdate(ctx, who, request.Project)
+			return Result{UpdateObject: raw}, err
+		}
+		if access == ProjectOwner {
+			return Result{}, a.AuthorizeProjectOwner(ctx, who, request.Project)
+		}
+		return Result{}, a.AuthorizeProjectMember(ctx, who, request.Project)
+	case AssignedJob:
+		if who.Type != identity.RunnerType {
+			return Result{}, nil
+		}
+		if a == nil || a.upstream == nil {
+			return Result{}, &Error{Status: http.StatusInternalServerError, Message: "object authorization is unavailable"}
+		}
+		raw, err := a.ReadAssignedJob(ctx, request.Path, who.Subject, request.Method == http.MethodPatch)
+		return Result{UpdateObject: raw}, err
+	default:
+		return Result{}, deny("object access is not allowed")
+	}
+}
+
+func authorizeService(who identity.Principal, project string, rule Rule) error {
+	if !rule.ServicePermission.IsValid() {
+		return deny("service operation is not allowed")
+	}
+	grants := who.ServiceGrants
+	if project == "" || grants == nil || !slices.Contains(grants.Projects, project) ||
+		!slices.Contains(grants.Permissions, rule.ServicePermission) {
+		return deny("service account lacks project or operation permission")
+	}
+	return nil
+}
+
+// Allows checks identity admission without evaluating business permissions.
+func (allowed RouteIdentities) Allows(who identity.Principal) bool {
+	if who.Type == "" && who.Subject == "" {
+		return allowed&AllowAnonymous != 0
+	}
+	if who.Subject == "" {
+		return false
+	}
+	switch who.Type {
+	case identity.UserType:
+		switch who.Scope {
+		case identity.UserScope:
+			return allowed&AllowUser != 0
+		case identity.OpsScope:
+			return allowed&AllowOps != 0
+		case identity.AdminScope:
+			return allowed&AllowAdmin != 0
+		}
+	case identity.RunnerType:
+		return allowed&AllowRunner != 0
+	case identity.ServiceType:
+		return allowed&AllowService != 0
 	}
 	return false
 }

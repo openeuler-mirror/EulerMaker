@@ -26,7 +26,7 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 通用限流由 [limit.go](internal/middleware/limit.go) 在业务链全局执行：认证后按身份类型/名称/IP 或匿名 IP 限流。登录、注册、机器换 Token、OAuth 和 Watch 并发限制继续保留，通用限流返回 429 和 `Retry-After: 1`。
 普通公开 GET 完成全局认证、身份准入和查询检查后直接交给 `upstream.Forward`。工程 Job 列表的 Watch 保留 owner/member 校验；指定 Job 的 GET 保留 `runnerJobReadGuard` 检查 Runner 分配关系。Runner 创建与任务列表仅允许 Runner 身份，列表与 `/status` 读取仅允许 Ops/Admin，由全局准入判断。路由内保留注册正文、Runner 名称匹配、更新字段、查询参数和 Watch 并发检查；所有业务路由都有准入规则的测试保障。
 Config 读写要求 Ops/Admin；`build-targets` 仅允许 User 身份，`service-endpoints` 仅允许 Runner 身份，均由统一规则表声明。公共写请求处理放在 `request.go`。
-Policy 的公共入口负责分派，Project、Runner 的授权及写入规则集中到 `project.go`、`runner.go`。
+Policy 使用显式 `Rule` 声明允许身份、对象归属、Watch 归属和 Service permission，不再按资源字符串分派授权。路由的 `authorizeResource` 仅适配请求参数、错误和 Service 审计；Project owner/member 与 Service 工程范围校验由 Policy 完成。Project 用户更新在授权时读取完整旧对象，后续 PUT/PATCH 校验复用该对象，Service 更新仍按授权后的写入准备流程读取；仅校验归属的请求使用字段投影。
 测试与业务文件同名，每个业务文件只对应一个 `*_test.go`，不额外拆分 internal 或 integration 测试文件。
 认证接口及专用限流测试放在 [auth/handler_test.go](internal/auth/handler_test.go)，其余 Handler 测试与业务文件对应；全局请求链、路由规则和 OpenAPI 路由契约测试统一放在 [router_test.go](internal/gateway/router_test.go)。
 

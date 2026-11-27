@@ -68,15 +68,3 @@ func (a *Handler) prepareJobStatusUpdate(c *gin.Context) {
 	}
 	c.Next()
 }
-
-func (a *Handler) jobWatchGuard(c *gin.Context) {
-	if !policy.HasWatch(c.Request.URL.Query()) {
-		c.Next()
-		return
-	}
-	a.authorizeAuthenticatedRoute(c, policy.Route{
-		Resource: "jobs",
-		Project:  c.Param("project"),
-		Method:   c.Request.Method,
-	})
-}

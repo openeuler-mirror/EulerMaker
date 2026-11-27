@@ -48,15 +48,10 @@ func TestProjectAccessProjectionAndErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			a := New(client)
+			a := New(client, 1<<20)
 			who := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
-			for _, route := range []Route{
-				{Resource: "projects", Name: "team", Method: http.MethodPatch},
-				{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete},
-				{Resource: "builds", Project: "team", Method: http.MethodPost},
-				{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost},
-			} {
-				err := a.Authorize(context.Background(), who, route)
+			for _, check := range []func(context.Context, identity.Principal, string) error{a.AuthorizeProjectOwner, a.AuthorizeProjectMember} {
+				err := check(context.Background(), who, "team")
 				if tc.want == 0 {
 					if err != nil {
 						t.Fatal(err)
@@ -65,7 +60,7 @@ func TestProjectAccessProjectionAndErrors(t *testing.T) {
 				}
 				var classified *Error
 				if !errors.As(err, &classified) || classified.Status != tc.want {
-					t.Fatalf("route=%+v error=%v, want status %d", route, err, tc.want)
+					t.Fatalf("error=%v, want status %d", err, tc.want)
 				}
 				if strings.Contains(err.Error(), "private") {
 					t.Fatal("upstream details exposed")
@@ -86,7 +81,35 @@ func projectAuthorizer(t *testing.T) *Authorizer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(client)
+	return New(client, 1<<20)
+}
+
+func TestProjectOwnership(t *testing.T) {
+	a := projectAuthorizer(t)
+	for _, scope := range []identity.Scope{identity.UserScope, identity.OpsScope, identity.AdminScope} {
+		for _, subject := range []string{"alice", "bob", "outsider"} {
+			who := identity.Principal{Type: identity.UserType, Subject: subject, Scope: scope}
+			for _, tc := range []struct {
+				name    string
+				check   func(context.Context, identity.Principal, string) error
+				allowed bool
+			}{
+				{"owner", a.AuthorizeProjectOwner, subject == "alice"},
+				{"member", a.AuthorizeProjectMember, subject == "alice" || subject == "bob"},
+			} {
+				t.Run(string(scope)+"/"+subject+"/"+tc.name, func(t *testing.T) {
+					err := tc.check(context.Background(), who, "team")
+					if tc.allowed {
+						if err != nil {
+							t.Fatal(err)
+						}
+					} else if denied, ok := err.(*Error); !ok || denied.Status != http.StatusForbidden {
+						t.Fatalf("expected forbidden: %v", err)
+					}
+				})
+			}
+		}
+	}
 }
 
 func TestProjectCreateBuildPurpose(t *testing.T) {
@@ -119,7 +142,7 @@ func TestProjectCreateValidatesAndPreservesMembers(t *testing.T) {
 		}
 		who := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
 		body := []byte(`{"metadata":{"name":"team","labels":{"ebs.io/member-user.bob":"true","custom":"keep"}},"spec":{"distro":"openEuler"}}`)
-		encoded, err := New(client).PrepareCreate(context.Background(), who, Route{Resource: "projects", Method: http.MethodPost}, body)
+		encoded, err := New(client, 1<<20).PrepareCreate(context.Background(), who, Route{Resource: "projects", Method: http.MethodPost}, body)
 		if !enabled {
 			if rejected, ok := err.(*Error); !ok || rejected.Status != http.StatusForbidden {
 				t.Fatalf("disabled member error=%v", err)
@@ -238,7 +261,7 @@ func TestProjectPurposeOwnerPermissions(t *testing.T) {
 					}
 					who := identity.Principal{Type: identity.UserType, Subject: subject, Scope: scope}
 					route := Route{Resource: "projects", Name: "team", Method: method}
-					err := a.Authorize(context.Background(), who, route)
+					err := a.AuthorizeProjectOwner(context.Background(), who, route.Name)
 					if err == nil {
 						err = a.ValidateUpdate(context.Background(), who, route, old, next)
 					}

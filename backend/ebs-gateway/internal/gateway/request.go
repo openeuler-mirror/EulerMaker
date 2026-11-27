@@ -69,24 +69,27 @@ func (a *Handler) prepareCreate(c *gin.Context, who identity.Principal, route po
 }
 
 func (a *Handler) prepareUpdate(c *gin.Context, who identity.Principal, route policy.Route) bool {
-	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet, c.Request.URL.Path, nil, nil)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "unable to read current object"})
-		return false
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound {
-		c.Status(http.StatusNotFound)
-		return false
-	}
-	if response.StatusCode != http.StatusOK {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "unable to read current object"})
-		return false
-	}
-	old, err := io.ReadAll(io.LimitReader(response.Body, a.bodyLimit+1))
-	if err != nil || int64(len(old)) > a.bodyLimit {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "current object exceeds body limit"})
-		return false
+	old := updateObject(c)
+	if old == nil {
+		response, err := a.upstream.Do(c.Request.Context(), http.MethodGet, c.Request.URL.Path, nil, nil)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "unable to read current object"})
+			return false
+		}
+		defer response.Body.Close()
+		if response.StatusCode == http.StatusNotFound {
+			c.Status(http.StatusNotFound)
+			return false
+		}
+		if response.StatusCode != http.StatusOK {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "unable to read current object"})
+			return false
+		}
+		old, err = io.ReadAll(io.LimitReader(response.Body, a.bodyLimit+1))
+		if err != nil || int64(len(old)) > a.bodyLimit {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "current object exceeds body limit"})
+			return false
+		}
 	}
 	incoming, ok := a.readWriteBody(c)
 	if !ok {
@@ -115,4 +118,11 @@ func setJSONBody(request *http.Request, encoded []byte) {
 	request.ContentLength = int64(len(encoded))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Del("Content-Length")
+}
+
+func policyErrorStatus(err error) int {
+	if classified, ok := err.(*policy.Error); ok {
+		return classified.Status
+	}
+	return http.StatusForbidden
 }
