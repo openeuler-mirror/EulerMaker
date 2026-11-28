@@ -57,7 +57,7 @@ backend/ebs-apiserver/
 │   │   │   └── validation/            # 按资源组织的校验
 │   │   └── iam/register.go            # IAM 内部版本注册
 │   ├── iam/                           # 可选 IAM 模块
-│   │   ├── credential/                # Argon2id 哈希与凭据验证
+│   │   ├── credential/                # 密码、机器凭据及个人访问凭证
 │   │   └── install.go                 # IAM 路由安装
 │   ├── registry/
 │   │   ├── iam/                       # User、MachineAccount REST storage 与校验
@@ -219,6 +219,9 @@ IAM 模块还注册仅供 gateway 使用的内部接口：
 POST /internal/iam/v1/users/register
 PUT  /internal/iam/v1/users/{name}/password
 POST /internal/iam/v1/users/authenticate
+POST /internal/iam/v1/users/{name}/credentials
+GET  /internal/iam/v1/users/{name}/credentials
+DELETE /internal/iam/v1/users/{name}/credentials/{id}
 POST /internal/iam/v1/machineaccounts/register
 POST /internal/iam/v1/machineaccounts/authenticate
 ```
@@ -297,6 +300,114 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 
 用户密码和 MachineAccount client secret 均使用 Argon2id 自描述哈希保存，随机 salt、算法版本和参数编码在哈希字符串中。固定参数为 `memory=19456 KiB`、`iterations=2`、`parallelism=1`。密码长度为 12 到 128 个字符；两类凭据分别维护失败次数，同一主体连续失败 5 次后锁定 15 分钟，成功认证后清零失败次数。认证失败返回统一结果，不区分主体不存在、凭据错误、未设置凭据或账号被锁定。
 
+<a id="personal-access-credentials"></a>
+
+### 个人访问凭证
+
+apiserver 已实现 User 个人访问凭证（PAT）的内部管理与认证，主要供后续 ebsctl 接入使用。
+不新增公共资源类型、MachineAccount 或 ES 索引，也不将凭证加入 `User.spec`。
+Gateway、前端和 ebsctl 尚未接入；后续由 Gateway 验证 Bearer PAT 后使用 User 身份授权，不交换 JWT。
+
+#### 私有存储与生命周期
+
+在 `ebs-users` 文档已有的私有 `credential` 对象中增加 `personalCredentials` 数组：
+
+```json
+{
+  "personalCredentials": [
+    {
+      "id": "<random-id>",
+      "name": "开发机",
+      "secretHash": "<sha256-hex>",
+      "createdAt": "2026-11-28T00:00:00Z",
+      "expiresAt": "2027-02-26T00:00:00Z"
+    }
+  ]
+}
+```
+
+- 每个 User 最多 **5 个有效凭证**；有效指记录存在且 `now < expiresAt`。默认有效期 **90 天**，一天按
+  24 小时计算。首版允许通过 `expiresInDays` 指定 1～90 的整数，不支持永久凭证或延长已有凭证。
+  上限和默认值作为内部常量，不增加部署参数；仅省略字段时应用默认值，显式 null、0 或非整数均拒绝。
+- 创建时间、到期时间和 ID 由 apiserver 生成；名称去除首尾空白后为 1～64 个 Unicode 字符，不允许控制字符。
+  名称仅作用途说明，可以重复；撤销按 ID 精确定位。
+- 列表只返回有效凭证的 `id/name/createdAt/expiresAt`，按创建时间和 ID 排序；不保存 `lastUsedAt`，认证只读。
+  创建时在同一次条件写入中移除过期项，再检查额度和追加记录，不增加后台清理任务。
+- 撤销直接移除记录，不增加 revoked 状态或墓碑。到期即失效，不依赖清理；轮换采用创建新凭证后撤销旧凭证，
+  两者同时有效时都占额度。已满 5 个时先撤销一个。
+- User 删除时凭证随文档删除，同名重建不继承旧凭证。禁用账号时所有 PAT 不可用；重新启用后未撤销且未过期的
+  PAT 恢复可用。密码修改不自动撤销 PAT，也不覆盖凭证数组；PAT 操作保留密码、失败计数和外部身份。
+- `credential` 已为 `enabled:false` 的对象，本方案无需新增 Mapping 字段。普通 User GET/List、字段投影和
+  资源 OpenAPI 均不包含私有凭证。公共 User 更新必须保留私有字段，不能借 PUT/PATCH 写入 PAT。
+  无密码的 OAuth User 可以只包含 `personalCredentials`；密码认证须显式检查密码哈希是否存在。
+
+#### 格式与核验
+
+```text
+ebs_pat_v1.<base64url(username)>.<credentialID>.<secret>
+```
+
+用户名采用无填充 Base64URL；ID 为 16 字节安全随机数的十六进制表示，secret 为 32 字节安全随机数的
+无填充 Base64URL 表示。解析须检查固定版本、段数、规范编码和长度，整体最长 512 字节。
+定位信息不代表可信身份，不能只凭用户名或 ID 认证。
+
+存储完整规范 PAT 的 SHA-256 摘要，并用恒定时间比较；不保存可还原的 secret 或明文 PAT。
+该摘要方案仅用于服务端生成的高熵随机凭证，密码仍使用 Argon2id。凭证不使用 Gateway JWT 签名密钥，
+不受 JWT 的 24 小时验证上限约束。创建成功且持久化确认后仅返回一次明文，后续无法查询或重新展示。
+
+认证以用户名执行实时 GET，不通过 ES Search 查找。核验记录 ID、摘要、到期时间，以及同一文档内 User
+存在、未删除、已启用、恰好具有一个合法角色。认证返回当前角色，不在 PAT 内固化权限。
+PAT 失败不读写密码失败计数或锁定状态；密码临时锁定不影响 PAT，账号禁用影响所有认证方式。
+
+#### 内部接口
+
+以下新增接口及 `method=credential` 分支仅允许经过内部 mTLS 认证的
+`spiffe://eulermaker/internal/ebs-gateway` 调用；未配置内部证书认证时不开放 PAT 能力。
+Gateway 负责核验最终用户本人身份，apiserver 校验目标 User 和凭证内容，不信任客户端身份头。
+
+| 方法与路径 | 输入 | 成功响应 |
+| --- | --- | --- |
+| `POST /internal/iam/v1/users/{name}/credentials` | `name`（凭证用途名称）、可选 `expiresInDays` | 201，凭证元数据和一次性 `token` |
+| `GET /internal/iam/v1/users/{name}/credentials` | 无正文 | 200，`{"items":[...]}`，仅有效凭证元数据 |
+| `DELETE /internal/iam/v1/users/{name}/credentials/{id}` | 无正文 | 204，目标凭证已不存在也返回成功 |
+| `POST /internal/iam/v1/users/authenticate` | `{"method":"credential","token":"<PAT>"}` | 200，`authenticated/username/uid/scopes/credentialID/expiresAt` |
+
+认证响应的 `scopes` 来自当前 User，且只有一个合法角色；其余认证方式的响应不变。
+创建接口不能指定 ID、secret、时间戳、角色或工程权限。认证分支不接受 password、externalIdentity 或另传 username；
+未知字段、混用字段、非法 JSON 和输入超限在访问存储前拒绝。注册接口不接受 `method=credential`。
+沿用内部 IAM 正文大小限制，凭证管理和认证响应设置 `Cache-Control: no-store`。
+
+| 场景 | HTTP / 错误码 |
+| --- | --- |
+| 输入结构、名称或有效期非法 | 400 `InvalidRequest` |
+| PAT 格式或密钥错误、已过期/撤销、User 不存在/删除/禁用/角色非法 | 401 `InvalidCredential`，不区分具体原因 |
+| 无内部认证身份 / 已认证但非 Gateway | 401 `Unauthorized` / 403 `Forbidden` |
+| 管理接口目标 User 不存在 | 404 `UserNotFound` |
+| 管理接口目标 User 不可用 | 403 `UserUnavailable` |
+| 已有 5 个有效凭证 | 409 `CredentialLimitExceeded` |
+| 条件写入冲突重试耗尽或 User 被同名替换 | 409 `CredentialConflict` |
+| ES 不可用、响应异常或写入结果无法确认 | 503 `CredentialServiceUnavailable` |
+
+业务错误沿用 OAuth IAM 的 `{"code":"...","error":"..."}` 结构，不返回输入、密钥或存储原始错误。
+
+#### 并发与未知结果
+
+创建和撤销使用 ES `seq_no/primary_term` 条件更新同一个 User 文档；冲突后重新读取，重新检查 User UID、状态、
+有效凭证数量和目标记录，最多执行 3 次条件写入。UID 与首次读取不一致时停止，不能把操作应用到同名新 User。
+生成的凭证 ID 在本次操作重试间保持不变。不能先检查数量再无条件写入，也不能丢失并发新增的其他凭证。
+
+网络超时不当作确定的版本冲突自动重试。创建结果未知时，客户端先重新列表查看记录；未拿到明文的记录由用户撤销，
+再显式重新创建，服务端不补发 secret。创建未确认成功不能向客户端交付 PAT。撤销可按相同 ID 重试，
+但只有明确确认写入成功或记录不存在才返回 204。读取最新 User 后修改密码及其他凭据，也须保留 PAT 并遵守条件写入。
+
+#### 验收边界
+
+- 第 5 个创建成功、第 6 个拒绝；多副本并发不能突破额度；过期和撤销释放额度，认证恰在到期时拒绝。
+- 默认 90 天、有效期上下界、随机格式、摘要校验、未知 method/字段、无密码 OAuth User。
+- 创建/撤销与改密、User 更新并发不互相覆盖；同名 User 重建及删除竞争不复活原凭证。
+- 创建响应丢失、存储超时、冲突耗尽不交付未确认凭证；撤销重复调用安全。
+- 公共资源响应和日志不泄漏凭证或摘要；不同角色、禁用/启用和当前权限变化符合核验规则。
+
 ### OAuth IAM 扩展
 
 #### 职责与接口
@@ -310,7 +421,9 @@ apiserver 只处理本地账号及外部身份归属，不连接社区认证服�
 | `POST /internal/iam/v1/users/authenticate` | 扩展现有接口 | 密码认证，或按已验证外部身份查找并核验本地 User |
 | `POST /internal/iam/v1/users/register` | 扩展现有接口 | 密码注册，或一次创建带外部身份的无密码普通 User |
 
-认证和注册请求通过 `method=password|oauth` 分流，省略时按 password 处理；未知 method、混用两种方式的字段及未知字段均拒绝。两种方式分别校验，复用底层账号存储。密码模式沿用前述协议；MachineAccount 接口不变。
+注册通过 `method=password|oauth` 分流，认证另支持 `method=credential`；省略时按 password 处理，混用字段及未知字段均拒绝。
+`method=credential` 仅用于认证，契约见[个人访问凭证](#personal-access-credentials)，不扩展注册方式。
+各方式分别校验，复用底层账号存储。密码模式沿用前述协议；MachineAccount 接口不变。
 
 两个接口的 OAuth 分支仅允许已认证的 `spiffe://eulermaker/internal/ebs-gateway` 身份调用，从 apiserver 认证上下文取得身份，不信任请求头自报值；未配置内部证书认证时也不放宽此限制。对外 Gateway 路由不能允许调用方通过提交 method 或 externalIdentity 绕过外部认证或注册上下文校验。
 
@@ -573,7 +686,9 @@ ebs-oldjobs
 
 此外，内部索引 `ebs-build-target-claims` 用于构建目标互斥，`ebs-oauth-identity-claims` 用于外部身份唯一性占位，均不作为 API 资源暴露。物理索引使用 `-v1` 后缀，业务请求通过同名无版本别名访问。
 
-`ebs-users` 使用 User 名称作为文档 ID，公开对象存放在 data 中，credential 与 externalIdentity 为同层私有字段。密码注册仅创建 credential，OAuth 注册仅创建 externalIdentity，后续设置密码可使两者并存。以下为同时具备两种凭据的文档示意：
+`ebs-users` 使用 User 名称作为文档 ID，公开对象存放在 data 中，credential 与 externalIdentity 为同层私有字段。密码注册仅创建 credential，OAuth 注册仅创建 externalIdentity，后续设置密码可使两者并存。
+个人访问凭证保存在 `credential.personalCredentials`，不新增顶层字段，见[个人访问凭证](#personal-access-credentials)。
+以下为同时具备密码和外部身份的文档示意：
 
 ```json
 {

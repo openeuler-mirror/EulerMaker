@@ -53,8 +53,13 @@ type oauthIdentityClaimHit struct {
 }
 
 type userRequest struct {
-	Method, Username, Password, DisplayName, Email string
-	Identity                                       oauthIdentity
+	Method      string
+	Username    string
+	Password    string
+	DisplayName string
+	Email       string
+	Token       string
+	Identity    oauthIdentity
 }
 
 // decodeUserRequest validates method-specific fields before any identity lookup or reservation.
@@ -75,7 +80,7 @@ func decodeUserRequest(req *http.Request, registration bool) (userRequest, error
 			return body, invalidRequest()
 		}
 	}
-	if body.Method != "password" && body.Method != "oauth" {
+	if body.Method != "password" && body.Method != "oauth" && (body.Method != "credential" || registration) {
 		return body, invalidRequest()
 	}
 	allowed := map[string]*string{"method": &body.Method}
@@ -84,6 +89,12 @@ func decodeUserRequest(req *http.Request, registration bool) (userRequest, error
 	}
 	if body.Method == "password" {
 		allowed["password"] = &body.Password
+	}
+	if body.Method == "credential" {
+		if _, exists := fields["token"]; !exists {
+			return body, invalidRequest()
+		}
+		allowed["token"] = &body.Token
 	}
 	if registration {
 		allowed["displayName"], allowed["email"] = &body.DisplayName, &body.Email
@@ -206,21 +217,8 @@ func writeOAuthError(resp *restful.Response, err error) {
 	_ = resp.WriteHeaderAndEntity(failure.status, map[string]string{"code": failure.code, "error": failure.message})
 }
 
-func oauthGateway(req *restful.Request, resp *restful.Response) bool {
-	principal, ok := request.UserFrom(req.Request.Context())
-	if !ok || principal.GetName() == "system:anonymous" {
-		writeOAuthError(resp, &oauthError{401, "Unauthorized", "internal authentication required"})
-		return false
-	}
-	if principal.GetName() != "spiffe://eulermaker/internal/ebs-gateway" {
-		writeOAuthError(resp, &oauthError{403, "Forbidden", "Gateway identity required"})
-		return false
-	}
-	return true
-}
-
 func (h *Handler) authenticateOAuth(req *restful.Request, resp *restful.Response, body userRequest) {
-	if !oauthGateway(req, resp) {
+	if !requireGateway(req, resp) {
 		return
 	}
 	claim, err := h.oauth.lookup(req.Request.Context(), body.Identity)
@@ -245,7 +243,7 @@ func (h *Handler) authenticateOAuth(req *restful.Request, resp *restful.Response
 }
 
 func (h *Handler) registerOAuth(req *restful.Request, resp *restful.Response, body userRequest) {
-	if !oauthGateway(req, resp) {
+	if !requireGateway(req, resp) {
 		return
 	}
 	user, created, err := h.oauth.register(req.Request.Context(), body)
