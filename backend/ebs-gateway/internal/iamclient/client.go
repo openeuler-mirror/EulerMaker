@@ -144,7 +144,10 @@ func (c *Client) GetMachine(ctx context.Context, name string) (*iamv1.MachineAcc
 	}
 	projects := sets.New[string]()
 	for _, project := range account.Spec.Projects {
-		if len(validation.IsDNS1123Label(project)) != 0 || projects.Has(project) {
+		if project == iamv1.MachineAccountAllProjects && len(account.Spec.Projects) != 1 {
+			return nil, response.StatusCode, fmt.Errorf("invalid IAM machine account projects: * must be used alone")
+		}
+		if (project != iamv1.MachineAccountAllProjects && len(validation.IsDNS1123Label(project)) != 0) || projects.Has(project) {
 			return nil, response.StatusCode, fmt.Errorf("invalid IAM machine account projects")
 		}
 		projects.Insert(project)

@@ -198,7 +198,7 @@ spec:
 - 类型使用固定枚举；创建时省略 type 默认 `runner`，显式空值和未知值拒绝。已存储的无 type 账号按 runner 读取和认证，GET 不触发回写。
 - 类型在创建时确定，不开放类型修改；MachineAccount 的 PUT/PATCH 允许更新两类账号的 `spec.tokenTTLSeconds`，service 账号还允许更新 `spec.projects` 和 `spec.permissions`。
 - 内部注册请求接收 `type`、`tokenTTLSeconds`、`projects` 和 `permissions`，写入对应 spec 字段；对象与凭据仍单文档原子创建。
-- `projects` 是去重的精确 Project 名称列表，按 Project 名称规则校验，不支持通配符或全局授权。
+- `projects` 是去重的工程范围列表，支持精确 Project 名称和特殊值 `*`。`*` 覆盖所有现有及未来工程，但不跳过操作权限校验；普通条目按 Project 名称规则校验，不支持 `demo-*` 等部分匹配。`*` 必须单独使用，不得与具名工程混用；重复条目仍拒绝。
   不要求注册时工程已存在；授权按名称绑定，同名工程重建后仍在范围内，写入仍须校验当轮 UID 和版本。
 - `permissions` 仅支持 `projects:update`、`builds:create`、`builds:abort`，三个权限相互独立，无隐含继承；权限适用于 `projects` 内每个工程，不增加独立 RBAC 对象或逐工程权限映射。需要不同工程权限组合时使用不同账号。
 - `projects:update` 授权更新完整 Project 主资源，不限制为软件包列表；仍遵守现有字段和并发版本校验。`builds:create` 授权创建 Build，`builds:abort` 授权调用已有 Build `/abort`，具体路由及检查顺序以 Gateway 设计为准。公开读取主动使用匿名请求，不增加读取权限，也不要求写权限依赖读取权限。

@@ -31,6 +31,7 @@ func TestServiceMissingGrants(t *testing.T) {
 		{"empty grants", &identity.ServiceGrants{}},
 		{"missing projects", &identity.ServiceGrants{Permissions: []iamv1.MachineAccountPermission{iamv1.MachinePermissionBuildsCreate}}},
 		{"missing permissions", &identity.ServiceGrants{Projects: []string{"team"}}},
+		{"* without permissions", &identity.ServiceGrants{Projects: []string{iamv1.MachineAccountAllProjects}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			who := identity.Principal{Type: identity.ServiceType, Subject: "service", ServiceGrants: tc.grants}
@@ -130,17 +131,20 @@ func TestAuthorizeService(t *testing.T) {
 		iamv1.MachinePermissionProjectsUpdate, iamv1.MachinePermissionBuildsCreate, iamv1.MachinePermissionBuildsAbort,
 	}
 	a := New(nil, 1<<20)
-	for _, required := range permissions {
-		for _, granted := range permissions {
-			for _, project := range []string{"team", "other", ""} {
-				who := identity.Principal{
-					Type: identity.ServiceType, Subject: "sync",
-					ServiceGrants: &identity.ServiceGrants{Projects: []string{"team"}, Permissions: []iamv1.MachineAccountPermission{granted}},
-				}
-				rule := Rule{Identities: AllowService, ServicePermission: required, ObjectAccess: ProjectOwner}
-				_, err := a.Authorize(context.Background(), who, Request{Project: project}, rule)
-				if (err == nil) != (required == granted && project == "team") {
-					t.Errorf("required=%s granted=%s project=%q err=%v", required, granted, project, err)
+	for _, projects := range [][]string{{"team"}, {iamv1.MachineAccountAllProjects}, {"all"}} {
+		for _, required := range permissions {
+			for _, granted := range permissions {
+				for _, project := range []string{"team", "other", ""} {
+					who := identity.Principal{
+						Type: identity.ServiceType, Subject: "sync",
+						ServiceGrants: &identity.ServiceGrants{Projects: projects, Permissions: []iamv1.MachineAccountPermission{granted}},
+					}
+					rule := Rule{Identities: AllowService, ServicePermission: required, ObjectAccess: ProjectOwner}
+					_, err := a.Authorize(context.Background(), who, Request{Project: project}, rule)
+					allowedProject := project != "" && (projects[0] == "*" || (projects[0] == "team" && project == "team"))
+					if (err == nil) != (required == granted && allowedProject) {
+						t.Errorf("projects=%v required=%s granted=%s project=%q err=%v", projects, required, granted, project, err)
+					}
 				}
 			}
 		}

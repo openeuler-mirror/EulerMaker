@@ -201,7 +201,7 @@ func TestGetMachineProjectsAuthorizationFields(t *testing.T) {
 			request.URL.Query().Get("includeFields") != "metadata.name,spec.type,spec.projects,spec.permissions" {
 			t.Fatalf("unexpected machine lookup: %s %s", request.Method, request.URL)
 		}
-		body := `{"metadata":{"name":"service"},"spec":{"type":"service","projects":["demo"],"permissions":["builds:create"]}}`
+		body := `{"metadata":{"name":"service"},"spec":{"type":"service","projects":["*"],"permissions":["builds:create"]}}`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
 	if err != nil {
@@ -212,7 +212,7 @@ func TestGetMachineProjectsAuthorizationFields(t *testing.T) {
 		t.Fatalf("GetMachine status=%d err=%v", status, err)
 	}
 	if account.Name != "service" || account.Spec.Type != "service" ||
-		len(account.Spec.Projects) != 1 || account.Spec.Projects[0] != "demo" ||
+		len(account.Spec.Projects) != 1 || account.Spec.Projects[0] != iamv1.MachineAccountAllProjects ||
 		len(account.Spec.Permissions) != 1 || account.Spec.Permissions[0] != "builds:create" {
 		t.Fatalf("incomplete machine authorization: %+v", account)
 	}

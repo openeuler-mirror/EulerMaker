@@ -8,21 +8,22 @@ EulerMaker 是面向 openEuler 及其衍生发行版的软件包构建系统，�
 
 ## 主要能力
 
-- 工程管理：维护软件包仓库、默认 Git ref、构建目标及 Bootstrap repositories，区分社区工程与个人工程。
-- 构建管理：支持全量、增量、指定增量和 single 构建类型；single 可以指定多个包。
-- 源码管理：通过 git-server 同步仓库，由 Snapshot Controller 将 ref 解析为固定 commit。
-- 任务调度与执行：Scheduler 将 Job 分配给 Runner，Runner 执行任务并上报状态、日志和产物。
-- 产物与仓库服务：管理上传清单、产物和实时日志，提供不可变过程仓版本创建及正式发布接口。
-- 访问控制：Gateway 提供认证、工程级授权及机器账号访问；Web 控制台和 ebsctl 作为用户入口。
-- 构建配置：使用集群级 `Config/build-target` 管理目标系统、架构和镜像，使用 `Config/build-resource` 管理构建资源规则。
+- 工程与源码管理：维护发行版、构建架构、软件包仓库和 Bootstrap 仓库；Git Server 同步源码，Snapshot 固定构建 commit。
+- 构建管理：支持全量、增量、指定增量和 single 构建；single 可选择多个包，仅选择一个包时可通过 `ebs.io/git-ref` 指定 PR 等完整引用；非 single 构建可控制是否发布。
+- 调度与执行：支持构建优先级、资源匹配、标签选择及污点容忍，通过门禁资源池隔离任务；Runner 支持 Docker 和 containerd 原生客户端。
+- 产物与仓库服务：提供日志查看与下载、产物上传、可选 RPM 签名、过程仓物化及正式仓发布。
+- 访问控制：支持本地或 OAuth 登录、工程 owner/member 授权及 Runner/Service 机器账号；Service 账号按工程范围和操作权限接入自动化流程。
+- 集中运维：Web 控制台支持构建状态、依赖图谱、Runner 详情及标签/污点管理，统一维护构建配置、资源规则、服务地址、脚本和账号；同时提供 ebsctl。
+- 软件包清单同步：可选 Release Management 插件周期读取社区清单，更新工程软件包列表，提供差异预览和手动同步。
 
-当前 Controller Manager 已注册 Build、Snapshot、BuildInfo、RpmRepo、Job 和 Runner Controller。完整构建流程仍需结合部署配置和测试验证；实际支持范围以组件代码和测试为准。
+控制器以持久化资源状态持续调谐，通过检查点、幂等操作及重试恢复未完成流程；Runner 支持上传恢复，
+资源删除通过 finalizer 逐层收敛。部署约束与安全注意事项见各组件及部署文档。
 
 ## 组件与目录
 
 | 目录 | 职责 |
 | --- | --- |
-| [api](api/README.md) | 独立 Go module，提供共享的 `ebs/v1` API 类型 |
+| [api](api/README.md) | 独立 Go module，提供共享的 `ebs/v1`、`iam/v1` API 类型 |
 | [backend/ebs-apiserver](backend/ebs-apiserver/README.md) | 资源 API、校验、状态更新与持久化 |
 | [backend/ebs-gateway](backend/ebs-gateway/README.md) | 外部资源访问入口、认证、授权、限流与审计 |
 | [backend/controller-manager](backend/controller-manager/README.md) | 控制器框架及资源调谐 |
@@ -30,30 +31,28 @@ EulerMaker 是面向 openEuler 及其衍生发行版的软件包构建系统，�
 | [backend/runner](backend/runner/README.md) | 任务执行、心跳及日志和产物上传 |
 | [backend/git-server](backend/git-server/README.md) | Git 仓库同步、查询和克隆服务 |
 | [backend/artifact-manager](backend/artifact-manager/README.md) | 产物、日志、过程仓和正式发布服务 |
+| [backend/release-management](backend/release-management/README.md) | 可选的软件包清单周期同步插件 |
 | [frontend](frontend/README.md) | Vue 3 Web 控制台，支持中文与英文 |
 | [tools/ebsctl](tools/ebsctl/README.md) | 面向 Gateway 的命令行客户端 |
-| [hacks](hacks/docker-compose.yml) | 本地开发环境的 Docker Compose 配置 |
+| [hacks](hacks/README.md) | Docker Compose 开发部署、TLS 联调及辅助脚本 |
+| [deploy/kubernetes](deploy/kubernetes/README.md) | Kubernetes 部署模板、证书配置与升级操作 |
 
 Job 和 Runner 存储在 etcd 中，支持 List/Watch；其他业务资源和 IAM 对象存储在 Elasticsearch 中，通过 List/Get 访问。构建文件和 Git 仓库保存在各自服务的持久化目录中。
 
-## 开发环境
+## 部署与版本文档
+
+- [版本变更记录](CHANGELOG.md)：各版本能力、接口变化和升级注意事项。
+- [Kubernetes 部署](deploy/kubernetes/README.md)：按组件部署，包含存储、证书和 Mapping 升级说明。
+- [Compose 开发部署与 TLS 联调](hacks/README.md)：配置、凭据及目录权限准备；[TLS 覆盖文件](hacks/docker-compose.tls.yml)须与基础 Compose 一起使用。
+- [Release Management 使用说明](backend/release-management/README.md)：清单来源、机器凭据和同步操作。启用前先执行 `plan`，确认整个包列表替换的影响。
+
+## 快速开始：本地开发环境
 
 ### 准备
 
 推荐使用 Linux 主机、Docker Engine 和 Docker Compose v2。镜像构建需要能够访问对应镜像仓库及 Go/npm 依赖源。
 
-在启动 [Compose](hacks/docker-compose.yml) 前：
-
-1. 准备 `hacks/ebs-gateway-jwt-secret`，内容为 Base64 编码的随机 HMAC 密钥，生成方法见 [Gateway README](backend/ebs-gateway/README.md)。
-2. 创建并检查以下宿主机目录，确保对应容器用户具有读写权限。绑定挂载不会自动继承镜像内目录的所有权。
-
-| 宿主机目录 | 用途 |
-| --- | --- |
-| `/srv/etcd` | etcd 数据 |
-| `/srv/es` | Elasticsearch 数据 |
-| `/srv/git` | Git 仓库 |
-| `/srv/artifact` | 产物、日志及 RPM 仓库 |
-Runner 独立部署前，还需在系统中创建有效的 MachineAccount，并将其 `clientID` 和 `clientSecret` 写入 `hacks/runner-machine-credential.json`，格式见 [Runner README](backend/runner/README.md)。不要提交凭据文件。Runner 使用宿主机 Docker socket：设置 `DOCKER_GID` 为该 socket 的实际组 ID，并确认宿主机存在 `/usr/bin/docker`。在 Runner 节点准备 `/var/lib/ebs-runner`，且宿主机与容器内必须使用相同的绝对路径。
+按 [Compose 开发部署说明](hacks/README.md) 准备 `hacks/ebs-gateway-jwt-secret`，以及 `/srv/etcd`、`/srv/es`、`/srv/git`、`/srv/artifact` 数据目录。密钥需允许 Gateway 容器用户读取，数据目录需允许对应容器用户读写；绑定挂载不会自动继承镜像内目录的所有权。不要提交凭据文件。
 
 ### 启动与检查
 
@@ -79,15 +78,23 @@ curl -fsS http://localhost:8080/healthz
 
 Compose 从当前工作区构建应用镜像。默认配置使用开发用 TLS 跳过校验、未启用 Elasticsearch 安全认证，并暴露多个内部服务端口，**不适合直接用于公网或生产部署**。生产环境需要独立规划证书、网络隔离、凭据管理、持久化与备份。Docker socket 访问也应限制在受信任的 Runner。
 
-构建服务地址由 `Config/services` 管理，可由 Ops/Admin 在运维页面的“服务配置”中修改。控制面的 `internalURL` 使用 Compose 服务名；Runner 通过 Gateway 获取 `runnerInternalURL` 或 `runnerExternalURL`。同机、宿主机网络的 Runner 可使用初始化默认值：Artifact Manager 为 `http://127.0.0.1:8081`，Git Server 为 `http://127.0.0.1:8084`；异机 Runner 必须改为构建节点及 Job 容器可达的地址。所选网络需能访问 Gateway `8080`、Artifact Manager `8081` 和 Git Smart HTTP `8084` 端口，不应将内部端口直接开放到公网。
+### 接入 Runner
+
+控制面就绪后，由 Admin 创建 `type=runner` 的 MachineAccount，将 `clientID`、`clientSecret` 保存到 `hacks/runner-machine-credential.json`，格式见 [Runner README](backend/runner/README.md)。在 Runner 节点准备可写的 `/var/lib/ebs-runner`，宿主机与容器内必须使用相同的绝对路径。
+
+Runner 使用[独立 Compose 文件](hacks/docker-compose.runner.yml)，不会随控制面启动。该模板通过原生 Docker 客户端连接宿主机 daemon，需挂载 Docker socket 并设置其实际组 ID；Runner 执行任务不依赖 Docker CLI。
 
 ```bash
-docker compose -f hacks/docker-compose.yml up -d --build
 DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
   docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
 
-Runner 单独使用 [Compose 文件](hacks/docker-compose.runner.yml)，默认通过宿主机网络访问 `127.0.0.1:8080`，不会随控制面启动。跨主机运行时，在 Runner 节点设置可达的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`。`RUNNER_SERVICE_ACCESS_MODE` 默认为 `internal`，两类服务均使用 `runnerInternalURL`；设为 `external` 时均使用 `runnerExternalURL`，不会自动回退。先填写所选模式的服务地址并确认控制面就绪，再启动 Runner。可用相同的 `-p eulermaker-runner -f hacks/docker-compose.runner.yml` 参数查看状态和日志。
+构建服务地址由 `Config/services` 管理，Ops/Admin 可在运维页面“服务配置”中修改。控制面的 `internalURL` 使用 Compose 服务名；Runner 通过 Gateway 获取访问地址：
+
+- `RUNNER_SERVICE_ACCESS_MODE=internal`（默认）：制品服务和 Git Server 均使用 `runnerInternalURL`。
+- `RUNNER_SERVICE_ACCESS_MODE=external`：制品服务使用 `runnerExternalURL`；源码直接使用 Job 的 `origin_url`，保留固定 `commit_id`，不需要 Git Server 外网地址。
+
+同机宿主机网络模式默认使用 Gateway `http://127.0.0.1:8080`、Artifact Manager `http://127.0.0.1:8081` 和 Git Server `http://127.0.0.1:8084`。跨主机部署时，设置可达的 `RUNNER_GATEWAY_URL`、唯一的 `RUNNER_NAME`，并确保所选服务地址及源码地址可由 Runner 和 Job 容器访问；缺失地址不会自动回退到另一模式。containerd 接入方式见 [Runner 文档](backend/runner/README.md)与 [Kubernetes 模板](deploy/kubernetes/runner-containerd.yaml)。
 
 ## 本地开发与验证
 
@@ -96,7 +103,9 @@ Runner 单独使用 [Compose 文件](hacks/docker-compose.runner.yml)，默认�
 ```bash
 (cd api && go test ./...)
 (cd backend/ebs-apiserver && go test ./...)
+(cd backend/ebs-gateway && go test ./...)
 (cd backend/controller-manager && go test ./...)
+(cd backend/release-management && go test ./...)
 (cd tools/ebsctl && go test ./...)
 ```
 
@@ -110,7 +119,15 @@ npm run build
 npm run dev
 ```
 
-修改共享 API 类型后，按 [API README](api/README.md) 更新 DeepCopy，并在 `backend/ebs-apiserver` 中执行 `bash hacks/update-openapi.sh` 更新 OpenAPI。各组件的构建命令和运行参数见对应 README。
+修改共享 API 类型后，按顺序更新生成代码：
+
+```bash
+(cd api && bash hacks/update-codegen.sh)
+(cd backend/ebs-apiserver && bash hacks/update-openapi.sh)
+(cd backend/ebs-gateway && bash hacks/update-openapi.sh)
+```
+
+修改 Gateway 路由或对外契约时，同步更新其 OpenAPI；执行 `bash hacks/update-openapi.sh --check` 检查生成结果。代码生成说明见 [API README](api/README.md)，各组件的构建命令和参数见对应 README。
 
 ## 设计文档
 
@@ -120,6 +137,7 @@ npm run dev
 - [Controller Manager](docs/zh/design/controller-manager.md) 与 [Scheduler](docs/zh/design/scheduler.md)
 - [构建配置](docs/zh/design/data-models~config.md)、[构建脚本](docs/zh/design/data-models~script.md)与[标签约定](docs/zh/design/labels.md)
 - [Git Server](docs/zh/design/git-server.md) 与 [Artifact Manager](docs/zh/design/artifact-manager.md)
+- [Runner](docs/zh/design/runner.md) 与 [Release Management](docs/zh/design/release-management.md)
 
 ## 参与贡献
 

@@ -72,6 +72,8 @@ func TestServiceAccountUpdateBoundary(t *testing.T) {
 			a.Spec.Permissions = []iamv1.MachineAccountPermission{iamv1.MachinePermissionBuildsAbort}
 		}, true},
 		{"empty grants", func(a *iamv1.MachineAccount) {}, true},
+		{"all projects", func(a *iamv1.MachineAccount) { a.Spec.Projects = []string{iamv1.MachineAccountAllProjects} }, true},
+		{"mixed wildcard scope", func(a *iamv1.MachineAccount) { a.Spec.Projects = []string{"*", "demo"} }, false},
 		{"TTL", func(a *iamv1.MachineAccount) { a.Spec.TokenTTLSeconds = 7200 }, true},
 		{"labels", func(a *iamv1.MachineAccount) { a.Labels = map[string]string{"x": "y"} }, false},
 		{"annotations", func(a *iamv1.MachineAccount) { a.Annotations = map[string]string{"x": "y"} }, false},

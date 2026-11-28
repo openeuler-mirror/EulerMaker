@@ -187,10 +187,39 @@ test("empty project or permission list is allowed without implicit grants", asyn
   }
 });
 
+test("Service accounts require standalone * scope on creation and update", async () => {
+  for (const projects of ["*", "*, demo", "demo, *"]) {
+    for (const edit of [false, true]) {
+      const { state, calls } = setup();
+      if (edit) {
+        state.openEdit(serviceAccount());
+      } else {
+        state.openCreate();
+        state.name.value = "automation";
+        state.accountType.value = "service";
+      }
+      state.projectNames.value = projects;
+      state.permissions.value = ["builds:create"];
+      await (edit ? state.updateAccount() : state.createAccount());
+      if (projects !== "*") {
+        assert.equal(calls.length, 0);
+        assert.equal(state.dialogError.value, "admin.serviceProjectsWildcardExclusive");
+        continue;
+      }
+      assert.equal(calls.length, 1);
+      const grants = edit ? calls[0].body.spec : calls[0].body;
+      assert.deepEqual(grants.projects, projects.split(", "));
+      assert.deepEqual(grants.permissions, ["builds:create"]);
+    }
+  }
+});
+
 test("invalid or duplicate grants are rejected before registration", async () => {
   const cases = [
-    ["*", [], "admin.invalidServiceProjects"],
+    ["demo-*", [], "admin.invalidServiceProjects"],
+    ["*, *", [], "admin.serviceProjectsWildcardExclusive"],
     ["Demo", [], "admin.invalidServiceProjects"],
+    ["ALL", [], "admin.invalidServiceProjects"],
     ["demo/distro", [], "admin.invalidServiceProjects"],
     ["a".repeat(64), [], "admin.invalidServiceProjects"],
     ["demo, demo", [], "admin.invalidServiceProjects"],
@@ -301,7 +330,7 @@ test("edit validation and cancel preserve the list; create resets edit state", a
   const { state, calls } = setup();
   const account = serviceAccount();
   state.openEdit(account);
-  state.projectNames.value = "*";
+  state.projectNames.value = "demo-*";
   await state.updateAccount();
   assert.equal(calls.length, 0);
   assert.equal(state.dialogError.value, "admin.invalidServiceProjects");

@@ -370,7 +370,7 @@ Gateway要求 admin 权限，校验请求后调用`POST /internal/iam/v1/machine
 
 ##### Service Token 的工程范围与操作权限
 
-MachineAccount.spec 增加 `projects` 和 `permissions`，注册和持久化约束见 [MachineAccount 类型](ebs-apiserver.md#machineaccount-type)。`projects` 为精确工程名称列表，不支持通配符；权限适用于列表中的每个工程。任一列表缺省或为空时无资源操作权限，但仍可换取 Token 和调用 `/auth/check`。不增加独立权限对象，不根据客户端传入的权限、JWT scopes 或同名 User 推导授权。
+MachineAccount.spec 增加 `projects` 和 `permissions`，注册和持久化约束见 [MachineAccount 类型](ebs-apiserver.md#machineaccount-type)。`projects` 支持精确工程名称及特殊值 `*`；`["*"]` 覆盖所有现有及未来工程，必须单独使用，不得与具名工程混用，不支持部分匹配。权限适用于授权范围中的每个工程，`*` 不跳过操作权限或字段保护校验。任一列表缺省或为空时无资源操作权限，但仍可换取 Token 和调用 `/auth/check`。不增加独立权限对象，不根据客户端传入的权限、JWT scopes 或同名 User 推导授权。
 
 | 权限 | 方法 | 路径 | 能力 |
 |------|------|------|------|
