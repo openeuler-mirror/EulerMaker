@@ -43,6 +43,7 @@ const (
 
 type Rule struct {
 	Identities        RouteIdentities
+	UserJWTOnly       bool
 	ObjectAccess      ObjectAccess
 	WatchAccess       ObjectAccess
 	ServicePermission iamv1.MachineAccountPermission
@@ -139,6 +140,9 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, requ
 	if !rule.Identities.Allows(who) {
 		return Result{}, deny("identity is not allowed for this route")
 	}
+	if rule.UserJWTOnly && (!who.IsUser() || who.AuthenticationMethod != identity.AuthenticationJWT) {
+		return Result{}, deny("user login token required")
+	}
 	if who.Type == identity.ServiceType {
 		return Result{}, authorizeService(who, request.Project, rule)
 	}
@@ -199,6 +203,9 @@ func authorizeService(who identity.Principal, project string, rule Rule) error {
 
 // Validate rejects inconsistent policy declarations before serving requests.
 func (r Rule) Validate() error {
+	if r.UserJWTOnly && r.Identities & ^AllowUsers != 0 {
+		return fmt.Errorf("login-only routes must allow only User identities")
+	}
 	if r.Identities == 0 || r.Identities & ^(AllowAnonymous|AllowAuthenticated) != 0 {
 		return fmt.Errorf("allowed identities are empty or unknown")
 	}

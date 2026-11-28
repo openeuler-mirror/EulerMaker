@@ -16,6 +16,7 @@ var optionalBearer = []object{{}, {"BearerAuth": []string{}}}
 func operations() object {
 	paths := object{}
 	oauthOperations(paths)
+	personalCredentialOperations(paths)
 	auth := func(method, path, id, summary, description, input, output, code string, security []object) {
 		op := operation(id, "Authentication", summary, description, security, ref(output), code)
 		if input != "" {
@@ -30,8 +31,10 @@ func operations() object {
 	auth("post", "/auth/login", "login", "Obtain a user token", "Anonymous password login. Response must not be cached. Returns 403 when OAuth is enabled, including during provider outages.", "LoginRequest", "LoginResponse", "200", []object{})
 	auth("post", "/auth/machine-token", "obtainMachineToken", "Obtain a machine token", "Requires MachineAccount Basic credentials. Runner accounts send a runner name; service accounts send an empty object. The stored account type determines the token identity. Service tokens carry identity only; each resource request checks current MachineAccount projects and permissions. Empty grants allow token exchange but no resource operations. Invalid or missing account type in the IAM response returns 503.", "MachineTokenRequest", "MachineTokenResponse", "200", []object{{"MachineBasic": []string{}}})
 	auth("post", "/auth/check", "checkToken", "Check a token", "Accepts user, Runner and service Bearer tokens. No request body. User tokens require a matching, enabled User with the same scope; missing, disabled or mismatched users return 403. Runner tokens require no account lookup. Service tokens require a live MachineAccount with matching name and service type. Deleted service accounts return 401; recreating a service account with the same name makes unexpired tokens valid again. IAM failures return 503. Does not grant resource permissions.", "", "CheckResponse", "200", bearer)
-	auth("put", "/auth/users/{name}/password", "changePassword", "Change your password", "Only the user named in the path may change their password; current password is required.", "PasswordRequest", "", "204", bearer)
+	auth("put", "/auth/users/{name}/password", "changePassword", "Change your password", "Requires a User login JWT, not a PAT. Only the user named in the path may change their password; current password is required.", "PasswordRequest", "", "204", bearer)
 	auth("post", "/auth/machineaccounts", "registerMachineAccount", "Register a machine account", "Admin only. The secret is supplied by the caller and is never returned.", "MachineRequest", "RegisteredMachine", "201", bearer)
+	check := paths["/auth/check"].(object)["post"].(object)
+	check["description"] = check["description"].(string) + " User PATs are also accepted, including with OAuth-only login. Returns the current User role and PAT expiry; invalid PATs return 401 InvalidCredential and unavailable or malformed IAM responses return 503 CredentialServiceUnavailable. No JWT exchange or PAT authentication cache."
 	for _, r := range []struct{ name, kind string }{{"users", "User"}, {"machineaccounts", "MachineAccount"}} {
 		base := "/apis/iam.ebs/v1/" + r.name
 		for _, named := range []bool{false, true} {
@@ -51,6 +54,9 @@ func operations() object {
 				}
 				if method == "put" && r.name == "users" {
 					op["requestBody"] = body(ref("UserUpdate"), true)
+				}
+				if r.name == "users" && (method == "put" || method == "patch") {
+					op["description"] = op["description"].(string) + " Requires an Admin login JWT; PATs are forbidden for all User updates."
 				}
 				if method == "get" && r.name != "users" {
 					op["parameters"] = queryParameters(!named, false, true)
@@ -206,6 +212,24 @@ func oauthOperations(paths object) {
 			delete(responses, "200")
 			responses["302"] = object{"description": "Redirect to the configured provider and set a Secure HttpOnly SameSite=Lax login Cookie.", "headers": object{"Location": object{"schema": textSchema()}}}
 			op["parameters"] = []object{{"name": "returnTo", "in": "query", "schema": textSchema(), "description": "Known frontend business route; defaults to /. External and authentication URLs are rejected."}}
+		}
+		add(paths, route.path, route.method, op)
+	}
+}
+
+func personalCredentialOperations(paths object) {
+	for _, route := range []struct{ method, path, id, description, schema, code string }{
+		{"post", "/auth/credentials", "createPersonalCredential", "Requires a local or OAuth User login JWT; PAT, Runner and Service tokens are forbidden. Creates a credential for the authenticated user only. At most five active credentials; default lifetime 90 days, optionally 1–90 days. Returns the plaintext token once after a confirmed write. No automatic retry after an unknown write result: list, revoke the inaccessible credential, then explicitly create again.", "CreatedPersonalCredential", "201"},
+		{"get", "/auth/credentials", "listPersonalCredentials", "User JWT or PAT. Lists only the caller's active credentials, sorted by creation time and ID, without tokens or hashes. No request body.", "PersonalCredentialList", "200"},
+		{"delete", "/auth/credentials/{id}", "deletePersonalCredential", "User JWT or PAT. Revokes only the caller's credential; repeated deletion and self-revocation are supported. No request body. Subsequent requests and Watch reconnects require fresh authentication; already established Watch streams are not terminated.", "", "204"},
+	} {
+		op := operation(route.id, "Authentication", route.id, route.description+" Watch is forbidden. Responses use Cache-Control: no-store. Business failures use {code,error}: InvalidRequest (400), UserUnavailable (403), UserNotFound (404), CredentialLimitExceeded or CredentialConflict (409), CredentialServiceUnavailable (503). Internal authentication failures are not exposed.", bearer, ref(route.schema), route.code)
+		if route.method == "post" {
+			op["requestBody"] = body(ref("PersonalCredentialRequest"), true)
+			op["requestBody"].(object)["description"] = "Strict JSON object, at most 64 KiB; unknown fields or oversized input return 400. Omit expiresInDays for the default; null is invalid."
+		}
+		if route.code == "204" {
+			op["responses"].(object)["204"] = object{"description": "Credential is absent; no response body."}
 		}
 		add(paths, route.path, route.method, op)
 	}

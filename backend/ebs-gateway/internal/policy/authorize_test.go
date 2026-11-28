@@ -22,6 +22,25 @@ func TestHasWatch(t *testing.T) {
 	}
 }
 
+func TestUserJWTOnly(t *testing.T) {
+	rule := Rule{Identities: AllowUsers, UserJWTOnly: true}
+	if err := rule.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []identity.AuthenticationMethod{"", identity.AuthenticationJWT, identity.AuthenticationCredential} {
+		who := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.AdminScope, AuthenticationMethod: method}
+		_, err := New(nil, 1<<20).Authorize(context.Background(), who, Request{}, rule)
+		if (err == nil) != (method == identity.AuthenticationJWT) {
+			t.Fatalf("method=%s err=%v", method, err)
+		}
+	}
+	for _, identities := range []RouteIdentities{AllowAnonymous, AllowUsers | AllowRunner, AllowUsers | AllowService} {
+		if err := (Rule{Identities: identities, UserJWTOnly: true}).Validate(); err == nil {
+			t.Fatal("login-only rule accepted non-user identities")
+		}
+	}
+}
+
 func TestServiceMissingGrants(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

@@ -38,8 +38,8 @@ func main() {
 			"schemas":   schemas(),
 			"responses": errorResponses(),
 			"securitySchemes": object{
-				"BearerAuth": object{"type": "http", "scheme": "bearer", "bearerFormat": "JWT",
-					"description": "User, Runner or service token. Service resource requests require both an exact Project match and the corresponding projects:update, builds:create or builds:abort permission from the current MachineAccount. Empty grants deny resource access; use anonymous requests for public reads."},
+				"BearerAuth": object{"type": "http", "scheme": "bearer", "bearerFormat": "JWT or PAT",
+					"description": "User JWT or personal access credential (PAT), Runner JWT or service JWT. PATs are verified against IAM on every request using current User roles, without caching or JWT exchange. Invalid PATs return 401 InvalidCredential; IAM failures or invalid responses return 503 CredentialServiceUnavailable, never anonymous access. PATs cannot create credentials, change passwords or PUT/PATCH Users. Use HTTPS; do not send credentials in URLs or cookies. Service resource requests require a Project grant and the corresponding projects:update, builds:create or builds:abort permission from the current MachineAccount. Empty grants deny resource access."},
 				"MachineBasic": object{"type": "http", "scheme": "basic",
 					"description": "MachineAccount client ID and client secret for /auth/machine-token. The stored account type selects Runner or service identity."},
 			},

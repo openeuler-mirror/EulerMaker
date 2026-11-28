@@ -59,7 +59,9 @@ func schemas() object {
 	requestSchemas(result)
 	result[schemaName("k8s.io/apimachinery/pkg/apis/meta/v1.Time")] = object{"type": "string", "format": "date-time"}
 	result[schemaName("k8s.io/apimachinery/pkg/runtime.RawExtension")] = object{"type": "object", "additionalProperties": true}
-	result["GatewayError"] = record(object{"error": textSchema()}, "error")
+	result["GatewayError"] = record(object{
+		"error": textSchema(), "code": object{"type": "string", "description": "Stable error code when supplied, including personal credential failures."},
+	}, "error")
 	result["RegisteredUser"] = record(object{"username": textSchema()}, "username")
 	result["RegisteredMachine"] = record(object{"name": textSchema()}, "name")
 	result["WatchEvent"] = record(object{
@@ -113,6 +115,25 @@ func schemas() object {
 		"currentPassword": object{"type": "string", "format": "password"},
 		"newPassword":     object{"type": "string", "format": "password", "description": "12–128 UTF-8 bytes."},
 	}, "currentPassword", "newPassword")
+	result["PersonalCredentialRequest"] = record(object{
+		"name":          object{"type": "string", "minLength": 1, "maxLength": 64, "description": "Trimmed purpose name; no control characters."},
+		"expiresInDays": object{"type": "integer", "minimum": 1, "maximum": 90, "default": 90, "description": "Omit to use 90 days. Explicit null is invalid."},
+	}, "name")
+	credentialFields := object{
+		"id": object{"type": "string", "pattern": "^[0-9a-f]{32}$"}, "name": textSchema(),
+		"createdAt": object{"type": "string", "format": "date-time"},
+		"expiresAt": object{"type": "string", "format": "date-time"},
+	}
+	result["PersonalCredential"] = record(credentialFields, "id", "name", "createdAt", "expiresAt")
+	createdFields := object{}
+	for key, value := range credentialFields {
+		createdFields[key] = value
+	}
+	createdFields["token"] = object{"type": "string", "description": "One-time plaintext PAT. Store securely; never log it."}
+	result["CreatedPersonalCredential"] = record(createdFields, "id", "name", "createdAt", "expiresAt", "token")
+	result["PersonalCredentialList"] = record(object{
+		"items": object{"type": "array", "maxItems": 5, "items": ref("PersonalCredential")},
+	}, "items")
 	result["MachineRequest"] = record(object{
 		"name":            textSchema(),
 		"type":            object{"type": "string", "enum": []string{"runner", "service"}, "default": "runner", "description": "Immutable account type. Omitted: runner. Only service accounts may have nonempty projects and permissions; service accounts cannot obtain Runner tokens."},
@@ -133,7 +154,7 @@ func schemas() object {
 			"description": "Independent service permissions, checked against the current account on every request. Omitted or empty: no resource access. No read permission; use anonymous requests for public reads.",
 		},
 	}, "name", "clientSecret")
-	for _, name := range []string{"LoginRequest", "RegisterRequest", "PasswordRequest", "MachineRequest", "JobAbort"} {
+	for _, name := range []string{"LoginRequest", "RegisterRequest", "PasswordRequest", "MachineRequest", "JobAbort", "PersonalCredentialRequest"} {
 		result[name].(map[string]any)["additionalProperties"] = false
 	}
 	result["BuildCreate"].(map[string]any)["example"] = object{

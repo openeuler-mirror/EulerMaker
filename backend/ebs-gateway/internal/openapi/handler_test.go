@@ -150,6 +150,47 @@ func TestDocumentContract(t *testing.T) {
 	}
 }
 
+func TestPersonalCredentialContract(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(document, &doc); err != nil {
+		t.Fatal(err)
+	}
+	components := doc["components"].(map[string]any)
+	bearer := components["securitySchemes"].(map[string]any)["BearerAuth"].(map[string]any)
+	if bearer["bearerFormat"] != "JWT or PAT" {
+		t.Fatal("Bearer contract omits PAT")
+	}
+	schemas := components["schemas"].(map[string]any)
+	request := schemas["PersonalCredentialRequest"].(map[string]any)
+	days := request["properties"].(map[string]any)["expiresInDays"].(map[string]any)
+	if request["additionalProperties"] != false || days["default"] != float64(90) || days["minimum"] != float64(1) || days["maximum"] != float64(90) {
+		t.Fatal("invalid credential input constraints")
+	}
+	properties := schemas["PersonalCredential"].(map[string]any)["properties"].(map[string]any)
+	if properties["token"] != nil || properties["secretHash"] != nil {
+		t.Fatal("credential metadata exposes secrets")
+	}
+	paths := doc["paths"].(map[string]any)
+	for _, tc := range []struct{ path, method, phrase string }{
+		{"/auth/credentials", "post", "login JWT"},
+		{"/auth/credentials", "get", "caller"},
+		{"/auth/credentials/{id}", "delete", "self-revocation"},
+		{"/auth/check", "post", "PAT"},
+		{"/auth/users/{name}/password", "put", "not a PAT"},
+		{"/apis/iam.ebs/v1/users/{name}", "patch", "PATs are forbidden"},
+		{"/apis/iam.ebs/v1/users/{name}", "put", "PATs are forbidden"},
+	} {
+		op := paths[tc.path].(map[string]any)[tc.method].(map[string]any)
+		if !strings.Contains(op["description"].(string), tc.phrase) || len(op["security"].([]any)) == 0 {
+			t.Fatalf("missing permission contract for %s %s", tc.method, tc.path)
+		}
+	}
+	deleteResponse := paths["/auth/credentials/{id}"].(map[string]any)["delete"].(map[string]any)["responses"].(map[string]any)["204"].(map[string]any)
+	if deleteResponse["content"] != nil {
+		t.Fatal("204 response must not define a body")
+	}
+}
+
 func TestTransformedResponseSchemas(t *testing.T) {
 	var doc struct {
 		Components struct {
