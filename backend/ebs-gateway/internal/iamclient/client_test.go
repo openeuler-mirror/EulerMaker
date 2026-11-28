@@ -2,12 +2,14 @@ package iamclient
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	iamv1 "ebs-api/iam/v1"
 
@@ -18,6 +20,115 @@ import (
 type transportFunc func(*http.Request) (*http.Response, error)
 
 func (f transportFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
+
+func TestAuthenticateUserCredential(t *testing.T) {
+	now := time.Unix(1790000000, 0).UTC()
+	id := strings.Repeat("a", 32)
+	token := "ebs_pat_v1.YWxpY2U." + id + "." + base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	for _, tc := range []struct {
+		name, field string
+		value       any
+		status      int
+		code        string
+	}{
+		{name: "current user"},
+		{name: "current admin", field: "scopes", value: []string{"ebs:admin"}},
+		{name: "wrong user", field: "username", value: "bob", code: "CredentialServiceUnavailable"},
+		{name: "wrong id", field: "credentialID", value: "other", code: "CredentialServiceUnavailable"},
+		{name: "missing uid", field: "uid", value: "", code: "CredentialServiceUnavailable"},
+		{name: "expired response", field: "expiresAt", value: now, code: "CredentialServiceUnavailable"},
+		{name: "missing scope", field: "scopes", value: nil, code: "CredentialServiceUnavailable"},
+		{name: "multiple scopes", field: "scopes", value: []string{"ebs:user", "ebs:admin"}, code: "CredentialServiceUnavailable"},
+		{name: "unknown scope", field: "scopes", value: []string{"admin"}, code: "CredentialServiceUnavailable"},
+		{name: "false authenticated", field: "authenticated", value: false, code: "CredentialServiceUnavailable"},
+		{name: "wrong type", field: "authenticated", value: "true", code: "CredentialServiceUnavailable"},
+		{name: "revoked", status: 401, value: "InvalidCredential", code: "InvalidCredential"},
+		{name: "internal unauthorized", status: 401, value: "Unauthorized", code: "CredentialServiceUnavailable"},
+		{name: "internal forbidden", status: 403, value: "Forbidden", code: "CredentialServiceUnavailable"},
+		{name: "wrong status", status: 403, value: "InvalidCredential", code: "CredentialServiceUnavailable"},
+		{name: "missing API", status: 404, value: "NotFound", code: "CredentialServiceUnavailable"},
+		{name: "storage unavailable", status: 503, value: "CredentialServiceUnavailable", code: "CredentialServiceUnavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client, _ := upstream.New("https://api.example", transportFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.Method != "POST" || r.URL.Path != "/internal/iam/v1/users/authenticate" || r.Header.Get("Authorization") != "" {
+					t.Fatal("invalid internal authentication request")
+				}
+				var input map[string]string
+				if json.NewDecoder(r.Body).Decode(&input) != nil || len(input) != 2 || input["method"] != "credential" || input["token"] != token {
+					t.Fatal("invalid authentication body")
+				}
+				body := map[string]any{
+					"authenticated": true, "username": "alice", "uid": "uid-alice", "credentialID": id,
+					"scopes": []string{"ebs:user"}, "expiresAt": now.Add(90 * 24 * time.Hour),
+				}
+				status := http.StatusOK
+				if tc.field != "" {
+					body[tc.field] = tc.value
+				}
+				if tc.status != 0 {
+					status, body = tc.status, map[string]any{"code": tc.value, "error": "PRIVATE " + token}
+				}
+				data, _ := json.Marshal(body)
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+			}))
+			who, err := New(client).AuthenticateUserCredential(context.Background(), token, now)
+			if calls != 1 {
+				t.Fatalf("calls=%d", calls)
+			}
+			if tc.code != "" {
+				var failure *CredentialError
+				if !errors.As(err, &failure) || failure.Code != tc.code || strings.Contains(err.Error(), token) || who.Subject != "" {
+					t.Fatal("unexpected or sensitive failure")
+				}
+				return
+			}
+			if err != nil || who.Subject != "alice" || who.Type != identity.UserType || who.AuthenticationMethod != identity.AuthenticationCredential || who.CredentialID != id {
+				t.Fatalf("invalid principal: %+v, %v", who, err)
+			}
+			if tc.name == "current admin" && who.Scope != identity.AdminScope {
+				t.Fatal("current scope not used")
+			}
+		})
+	}
+}
+
+func TestPersonalRequestsFailClosedWithoutRetry(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		err  error
+	}{
+		{body: `null`}, {body: `{}`}, {body: `{"items":null}`}, {body: `not json`},
+		{body: `{"items":[]} {}`}, {body: strings.Repeat("x", (1<<20)+1)}, {err: errors.New("PRIVATE storage error")},
+	} {
+		calls := 0
+		client, _ := upstream.New("https://api.example", transportFunc(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if tc.err != nil {
+				return nil, tc.err
+			}
+			status := 200
+			if r.Method == "POST" {
+				status = 201
+			}
+			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+		}))
+		api := New(client)
+		_, listErr := api.ListPersonalCredentials(context.Background(), "alice")
+		created, createErr := api.CreatePersonalCredential(context.Background(), "alice", map[string]string{"name": "CLI"})
+		for _, err := range []error{listErr, createErr} {
+			var failure *CredentialError
+			if !errors.As(err, &failure) || failure.Status != 503 || strings.Contains(err.Error(), "PRIVATE") {
+				t.Fatalf("unexpected error %v", err)
+			}
+		}
+		if calls != 2 || created.Token != "" {
+			t.Fatal("request retried or token returned on unknown result")
+		}
+	}
+}
 
 func TestClientUsesInternalIAMContract(t *testing.T) {
 	paths := make([]string, 0, 3)

@@ -69,6 +69,52 @@ func (a *testAPI) Router() *gin.Engine {
 	return router
 }
 
+func TestPersonalCredentialCreateContract(t *testing.T) {
+	for _, tc := range []struct {
+		input, days string
+		status      int
+		code        string
+	}{
+		{`{"name":"CLI"}`, "", 409, "CredentialLimitExceeded"},
+		{`{"name":"CLI","expiresInDays":1}`, "1", 409, "CredentialConflict"},
+		{`{"name":"CLI","expiresInDays":null}`, "null", 400, "InvalidRequest"},
+		{`{"name":"CLI","expiresInDays":0}`, "0", 400, "InvalidRequest"},
+		{`{"name":"CLI","expiresInDays":91}`, "91", 400, "InvalidRequest"},
+		{`{"name":"CLI"}`, "", 403, "UserUnavailable"},
+		{`{"name":"CLI"}`, "", 404, "UserNotFound"},
+		{`{"name":"CLI"}`, "", 503, "CredentialServiceUnavailable"},
+	} {
+		calls := 0
+		api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if r.URL.Path != "/internal/iam/v1/users/alice/credentials" || r.Method != "POST" || r.URL.RawQuery != "" {
+				t.Fatal("credential target did not come only from principal")
+			}
+			var input map[string]json.RawMessage
+			if json.NewDecoder(r.Body).Decode(&input) != nil || string(input["name"]) != `"CLI"` || string(input["expiresInDays"]) != tc.days {
+				t.Fatal("credential input changed")
+			}
+			return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(`{"code":"` + tc.code + `","error":"PRIVATE response"}`))}, nil
+		}))
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set("principal", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.AdminScope})
+		})
+		router.POST("/auth/credentials", api.CreatePersonalCredential)
+		req := httptest.NewRequest("POST", "/auth/credentials?username=bob", strings.NewReader(tc.input))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-EBS-User", "bob")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.code) || strings.Contains(rec.Body.String(), "PRIVATE") || calls != 1 {
+			t.Fatalf("status=%d calls=%d", rec.Code, calls)
+		}
+		if rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("error response is cacheable")
+		}
+	}
+}
+
 func TestAuthenticationAccountLimits(t *testing.T) {
 	for _, tc := range []struct {
 		path           string

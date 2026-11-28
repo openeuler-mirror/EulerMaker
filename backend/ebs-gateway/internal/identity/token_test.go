@@ -8,6 +8,26 @@ import (
 	"time"
 )
 
+func TestParsePersonalToken(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	secret := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	valid := "ebs_pat_v1.YWxpY2U." + id + "." + secret
+	name, gotID, err := ParsePersonalToken(valid)
+	if err != nil || name != "alice" || gotID != id {
+		t.Fatal("valid credential rejected")
+	}
+	for _, token := range []string{
+		"", "ebs_pat_v1", strings.Replace(valid, "v1", "v2", 1), valid + ".extra",
+		strings.Replace(valid, "YWxpY2U", "YWxpY2U=", 1), strings.Replace(valid, "YWxpY2U", "Li4vYWxpY2U", 1),
+		strings.Replace(valid, id, strings.ToUpper(id), 1), strings.Replace(valid, id, "ab", 1),
+		strings.Replace(valid, secret, "AA", 1), valid + "=", strings.Repeat("x", 513),
+	} {
+		if _, _, err := ParsePersonalToken(token); err == nil {
+			t.Error("invalid credential accepted")
+		}
+	}
+}
+
 func TestIssueAndVerify(t *testing.T) {
 	tokens, err := NewTokens(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32))))
 	if err != nil {

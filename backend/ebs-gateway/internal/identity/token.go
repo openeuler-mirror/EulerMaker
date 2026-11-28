@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	iamv1 "ebs-api/iam/v1"
 )
 
@@ -38,12 +40,21 @@ const (
 	ServiceType Type = "service"
 )
 
+type AuthenticationMethod string
+
+const (
+	AuthenticationJWT        AuthenticationMethod = "jwt"
+	AuthenticationCredential AuthenticationMethod = "credential"
+)
+
 type Principal struct {
-	Type      Type
-	Subject   string
-	Scope     Scope
-	ID        string
-	ExpiresAt time.Time
+	AuthenticationMethod AuthenticationMethod
+	CredentialID         string
+	Type                 Type
+	Subject              string
+	Scope                Scope
+	ID                   string
+	ExpiresAt            time.Time
 	// ServiceGrants comes from the current account lookup, never from JWT claims.
 	ServiceGrants *ServiceGrants `json:"-"`
 }
@@ -146,15 +157,41 @@ func (t *Tokens) Verify(token string, now time.Time) (Principal, error) {
 		return Principal{}, errors.New("invalid token claims")
 	}
 	principal := Principal{
-		Type:      c.Type,
-		Subject:   c.Subject,
-		ID:        c.ID,
-		ExpiresAt: time.Unix(c.ExpiresAt, 0),
+		AuthenticationMethod: AuthenticationJWT,
+		Type:                 c.Type,
+		Subject:              c.Subject,
+		ID:                   c.ID,
+		ExpiresAt:            time.Unix(c.ExpiresAt, 0),
 	}
 	if len(c.Scopes) == 1 {
 		principal.Scope = c.Scopes[0]
 	}
 	return principal, nil
+}
+
+// ParsePersonalToken validates the wire format, not the caller's identity.
+func ParsePersonalToken(token string) (string, string, error) {
+	invalid := errors.New("invalid personal credential")
+	if len(token) > 512 {
+		return "", "", invalid
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 4 || parts[0] != "ebs_pat_v1" {
+		return "", "", invalid
+	}
+	username, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || base64.RawURLEncoding.EncodeToString(username) != parts[1] || len(validation.IsDNS1123Label(string(username))) != 0 {
+		return "", "", invalid
+	}
+	id, err := hex.DecodeString(parts[2])
+	if err != nil || len(id) != 16 || hex.EncodeToString(id) != parts[2] {
+		return "", "", invalid
+	}
+	secret, err := base64.RawURLEncoding.DecodeString(parts[3])
+	if err != nil || len(secret) != 32 || base64.RawURLEncoding.EncodeToString(secret) != parts[3] {
+		return "", "", invalid
+	}
+	return string(username), parts[2], nil
 }
 
 func (t *Tokens) signature(message string) []byte {
