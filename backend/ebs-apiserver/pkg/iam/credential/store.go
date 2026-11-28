@@ -34,15 +34,19 @@ var ErrInvalidPassword = errors.New("password must contain 12 to 128 characters"
 var ErrUserNotFound = errors.New("user not found")
 
 type Credential struct {
-	PasswordHash      string     `json:"passwordHash"`
-	PasswordUpdatedAt time.Time  `json:"passwordUpdatedAt"`
-	FailedAttempts    int        `json:"failedAttempts"`
-	LockedUntil       *time.Time `json:"lockedUntil,omitempty"`
+	PasswordHash        string                     `json:"passwordHash"`
+	PasswordUpdatedAt   time.Time                  `json:"passwordUpdatedAt"`
+	FailedAttempts      int                        `json:"failedAttempts"`
+	LockedUntil         *time.Time                 `json:"lockedUntil,omitempty"`
+	PersonalCredentials []personalCredentialRecord `json:"personalCredentials,omitempty"`
 }
 
-type Store struct{ client *es.Client }
+type Store struct {
+	client *es.Client
+	now    func() time.Time
+}
 
-func NewStore(client *es.Client) *Store { return &Store{client: client} }
+func NewStore(client *es.Client) *Store { return &Store{client: client, now: time.Now} }
 
 // CanAuthenticate checks account availability independently of the credential method.
 func CanAuthenticate(user *iamv1.User) bool {
@@ -79,7 +83,18 @@ func (s *Store) SetPassword(ctx context.Context, username, password string) erro
 	if err != nil {
 		return err
 	}
-	cred := Credential{PasswordHash: hash, PasswordUpdatedAt: time.Now().UTC()}
+	var doc es.IAMDocument
+	if err := hit.Decode(&doc); err != nil {
+		return err
+	}
+	var cred Credential
+	if len(doc.Credential) != 0 {
+		if err := json.Unmarshal(doc.Credential, &cred); err != nil {
+			return err
+		}
+	}
+	cred.PasswordHash, cred.PasswordUpdatedAt = hash, time.Now().UTC()
+	cred.FailedAttempts, cred.LockedUntil = 0, nil
 	return s.update(ctx, username, hit, cred)
 }
 
@@ -116,6 +131,9 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (bo
 		return false, err
 	}
 	if !CanAuthenticate(&user) {
+		return false, nil
+	}
+	if cred.PasswordHash == "" {
 		return false, nil
 	}
 	now := time.Now().UTC()
