@@ -248,6 +248,38 @@ func (c *Client) Exists(ctx context.Context, resource string, query map[string]i
 	return len(result.Hits.Hits) != 0, nil
 }
 
+// Count counts matching documents without fetching their source.
+func (c *Client) Count(ctx context.Context, resource string, query map[string]interface{}) (int64, error) {
+	data, err := json.Marshal(map[string]interface{}{"query": query})
+	if err != nil {
+		return 0, err
+	}
+	u := fmt.Sprintf("%s/%s/_count", c.addr(), resourceIndex(resource))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Count  *int64 `json:"count"`
+		Shards struct {
+			Failed *int `json:"failed"`
+		} `json:"_shards"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, err
+	}
+	if result.Count == nil || *result.Count < 0 || result.Shards.Failed == nil || *result.Shards.Failed != 0 {
+		return 0, fmt.Errorf("elasticsearch count query returned an incomplete result")
+	}
+	return *result.Count, nil
+}
+
 func (c *Client) SearchPIT(ctx context.Context, pitID, keepAlive string, query map[string]interface{}, size int64, searchAfter []json.RawMessage) (*SearchResult, error) {
 	return c.SearchPITWithSourceFilter(ctx, pitID, keepAlive, query, size, searchAfter, SourceFilter{})
 }

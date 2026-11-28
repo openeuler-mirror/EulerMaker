@@ -56,7 +56,7 @@ func TestMappingCommand(t *testing.T) {
 				t.Error(err)
 			}
 			for key, value := range patch["properties"].(map[string]any) {
-				mapping["properties"].(map[string]any)[key] = value
+				mergeMappingProperty(mapping["properties"].(map[string]any), key, value)
 			}
 			_, _ = w.Write([]byte(`{"acknowledged":true}`))
 		default:
@@ -82,6 +82,18 @@ func TestMappingCommand(t *testing.T) {
 	if err != nil || writes != 1 || !strings.Contains(out, "Unchanged=1") {
 		t.Fatalf("repeat out=%s err=%v writes=%d", out, err, writes)
 	}
+}
+
+func mergeMappingProperty(target map[string]any, key string, value any) {
+	next, nextMap := value.(map[string]any)
+	current, currentMap := target[key].(map[string]any)
+	if nextMap && currentMap {
+		for field, child := range next {
+			mergeMappingProperty(current, field, child)
+		}
+		return
+	}
+	target[key] = value
 }
 
 func TestMappingCommandSelection(t *testing.T) {

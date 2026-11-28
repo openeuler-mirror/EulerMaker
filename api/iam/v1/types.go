@@ -10,11 +10,19 @@ type User struct {
 }
 
 type UserSpec struct {
-	Enabled     *bool    `json:"enabled,omitempty"`
-	Scopes      []string `json:"scopes,omitempty"`
-	DisplayName string   `json:"displayName,omitempty"`
-	Email       string   `json:"email,omitempty"`
+	Enabled     *bool      `json:"enabled,omitempty"`
+	Scopes      []string   `json:"scopes,omitempty"`
+	DisplayName string     `json:"displayName,omitempty"`
+	Email       string     `json:"email,omitempty"`
+	Quota       *UserQuota `json:"quota,omitempty"`
 }
+
+type UserQuota struct {
+	// Projects limits owned projects. Nil is unlimited; zero prevents new projects.
+	Projects *int32 `json:"projects,omitempty"`
+}
+
+const DefaultProjectQuota int32 = 20
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type UserList struct {

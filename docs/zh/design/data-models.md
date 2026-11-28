@@ -80,6 +80,11 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 **API**: `/apis/ebs/v1/projects`  
 **Elasticsearch**: 索引 `ebs-projects`，文档 ID `{name}`
 
+工程数量配额按 `ebs.io/owner-user` 统计，限制定义于 `iam.ebs/v1` 的 `User.spec.quota.projects`，
+新注册用户显式设置为 20，缺失时不限制。member 关系不占额度，所有工程类型使用同一计数口径，
+实际删除并对 ES 查询可见后不再计入，不在 Project 中重复保存配额。采用查询计数的软配额，允许并发超额，详见
+[用户工程数量配额](ebs-apiserver.md#user-project-quota)；apiserver 已实现，Gateway 的 Admin 管理入口及前端待实现。
+
 ### Project
 
 ```go

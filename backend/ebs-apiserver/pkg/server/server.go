@@ -353,7 +353,12 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 
 	projectStorage := projectstore.NewStorage()
 	projectES := esstore.New(esClient, "project", "Project", projectStorage.Resource.(*genericregistry.Store))
-	projectES.SetCreateHook(projectstore.ValidateConfig(configES))
+	projectES.SetCreateHook(func(ctx context.Context, obj runtime.Object) error {
+		if err := projectstore.ValidateConfig(configES)(ctx, obj); err != nil {
+			return err
+		}
+		return projectstore.ValidateQuota(esClient, projectES.Count)(ctx, obj)
+	})
 	projectES.SetUpdateHook(projectstore.ValidateConfigUpdate(configES))
 	v1Storage["projects"] = projectES
 	v1Storage["projects/status"] = esstore.NewStatus(projectES, projectStorage.Status.(*genericregistry.Store))

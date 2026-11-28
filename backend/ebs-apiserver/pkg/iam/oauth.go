@@ -363,10 +363,25 @@ func (s *oauthService) register(ctx context.Context, body userRequest) (*iamv1.U
 		return s.confirm(ctx, body)
 	}
 	enabled := true
+	projectQuota := iamv1.DefaultProjectQuota
 	user := &iamv1.User{
-		TypeMeta:   metav1.TypeMeta{APIVersion: iamv1.SchemeGroupVersion.String(), Kind: "User"},
-		ObjectMeta: metav1.ObjectMeta{Name: body.Username, UID: types.UID(reserved.UserUID)},
-		Spec:       iamv1.UserSpec{Enabled: &enabled, Scopes: []string{"ebs:user"}, DisplayName: body.DisplayName, Email: body.Email},
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: iamv1.SchemeGroupVersion.String(),
+			Kind:       "User",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: body.Username,
+			UID:  types.UID(reserved.UserUID),
+		},
+		Spec: iamv1.UserSpec{
+			Enabled:     &enabled,
+			Scopes:      []string{"ebs:user"},
+			DisplayName: body.DisplayName,
+			Email:       body.Email,
+			Quota: &iamv1.UserQuota{
+				Projects: &projectQuota,
+			},
+		},
 	}
 	identity := &es.ExternalIdentity{Issuer: reserved.Issuer, Subject: reserved.Subject, LinkedAt: time.Now().UTC().Format(time.RFC3339)}
 	_, err = s.users.CreateWithExternalIdentity(request.WithNamespace(ctx, ""), user, identity)

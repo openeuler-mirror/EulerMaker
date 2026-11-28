@@ -66,6 +66,9 @@ func (*strategy) WarningsOnUpdate(context.Context, runtime.Object, runtime.Objec
 
 func validateUser(user *iamv1.User) field.ErrorList {
 	var errs field.ErrorList
+	if quota := user.Spec.Quota; quota != nil && quota.Projects != nil && *quota.Projects < 0 {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "quota", "projects"), *quota.Projects, "must be non-negative"))
+	}
 	namePath := field.NewPath("metadata", "name")
 	if user.Name == "" {
 		errs = append(errs, field.Required(namePath, "name is required"))

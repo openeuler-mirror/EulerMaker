@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	iamv1 "ebs-api/iam/v1"
 )
@@ -44,5 +45,28 @@ func TestValidateUser(t *testing.T) {
 				t.Fatalf("has errors=%v, want %v", got, tt.wantErrors)
 			}
 		})
+	}
+}
+
+func TestUserProjectQuota(t *testing.T) {
+	for _, limit := range []int32{-1, 0, 20, 100} {
+		u := &iamv1.User{ObjectMeta: objectMeta("alice"), Spec: iamv1.UserSpec{
+			Scopes: []string{"ebs:user"}, Quota: &iamv1.UserQuota{Projects: &limit},
+		}}
+		s := &strategy{}
+		for _, errs := range []field.ErrorList{s.Validate(context.Background(), u), s.ValidateUpdate(context.Background(), u, u.DeepCopy())} {
+			if (len(errs) != 0) != (limit < 0) {
+				t.Fatalf("quota=%d errors=%v", limit, errs)
+			}
+		}
+	}
+	for _, quota := range []*iamv1.UserQuota{nil, {}} {
+		u := &iamv1.User{ObjectMeta: objectMeta("alice"), Spec: iamv1.UserSpec{Quota: quota}}
+		s := &strategy{}
+		s.PrepareForCreate(context.Background(), u)
+		s.PrepareForUpdate(context.Background(), u, u.DeepCopy())
+		if u.Spec.Quota != quota || (quota != nil && quota.Projects != nil) {
+			t.Fatal("missing quota was defaulted by resource storage")
+		}
 	}
 }

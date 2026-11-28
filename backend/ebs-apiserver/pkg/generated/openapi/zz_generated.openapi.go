@@ -82,6 +82,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/iam/v1.MachineAccountSpec":      schema_ebs_api_iam_v1_MachineAccountSpec(ref),
 		"ebs-api/iam/v1.User":                    schema_ebs_api_iam_v1_User(ref),
 		"ebs-api/iam/v1.UserList":                schema_ebs_api_iam_v1_UserList(ref),
+		"ebs-api/iam/v1.UserQuota":               schema_ebs_api_iam_v1_UserQuota(ref),
 		"ebs-api/iam/v1.UserSpec":                schema_ebs_api_iam_v1_UserSpec(ref),
 	}
 }
@@ -3010,6 +3011,25 @@ func schema_ebs_api_iam_v1_UserList(ref common.ReferenceCallback) common.OpenAPI
 	}
 }
 
+func schema_ebs_api_iam_v1_UserQuota(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"projects": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Projects limits owned projects. Nil is unlimited; zero prevents new projects.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func schema_ebs_api_iam_v1_UserSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -3047,8 +3067,15 @@ func schema_ebs_api_iam_v1_UserSpec(ref common.ReferenceCallback) common.OpenAPI
 							Format: "",
 						},
 					},
+					"quota": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("ebs-api/iam/v1.UserQuota"),
+						},
+					},
 				},
 			},
 		},
+		Dependencies: []string{
+			"ebs-api/iam/v1.UserQuota"},
 	}
 }
