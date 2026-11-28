@@ -26,19 +26,47 @@ import (
 	"ebs-gateway/internal/upstream"
 )
 
-func TestLocalAuthenticationEnabled(t *testing.T) {
+func TestNew(t *testing.T) {
+	client, err := upstream.New("https://api.example", transportFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("constructor must not call IAM")
+		return nil, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts := iamclient.New(client)
+	tokens, err := identity.NewTokens(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := testConfig("https://id.example.com")
 	for _, tc := range []struct {
-		name   string
-		config Config
-		want   bool
+		name    string
+		opts    Options
+		local   bool
+		wantErr bool
 	}{
-		{"local", Config{}, true},
-		{"OAuth", testConfig("https://id.example.com"), false},
+		{"local without dependencies", Options{}, true, false},
+		{"OAuth", Options{Config: config, IAM: accounts, Tokens: tokens}, false, false},
+		{"missing IAM", Options{Config: config, Tokens: tokens}, false, true},
+		{"missing tokens", Options{Config: config, IAM: accounts}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := New(tc.config, nil, nil, nil)
-			if got := h.LocalAuthenticationEnabled(); got != tc.want {
-				t.Fatalf("LocalAuthenticationEnabled()=%v, want %v", got, tc.want)
+			h, err := New(tc.opts)
+			if tc.wantErr {
+				if err == nil || h != nil {
+					t.Fatalf("expected construction failure, got handler=%v error=%v", h, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.now == nil || h.accounts != tc.opts.IAM || h.tokens != tc.opts.Tokens {
+				t.Fatal("OAuth dependencies were not initialized")
+			}
+			if got := h.LocalAuthenticationEnabled(); got != tc.local {
+				t.Fatalf("LocalAuthenticationEnabled()=%v, want %v", got, tc.local)
 			}
 		})
 	}
@@ -172,7 +200,7 @@ func newFixture(t *testing.T) *oauthFixture {
 				w.WriteHeader(401)
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{"sub": f.userSub, "openeuler_username": "community-alice", "name": "Alice", "email": "alice@example.com", "email_verified": true})
+			json.NewEncoder(w).Encode(map[string]any{"sub": f.userSub, "username": "community-alice", "name": "Alice", "email": "alice@example.com", "email_verified": true})
 		default:
 			w.WriteHeader(404)
 		}
@@ -184,7 +212,10 @@ func newFixture(t *testing.T) *oauthFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.h = New(config, iamclient.New(client), tokens, func() time.Time { return f.now })
+	f.h, err = New(Options{Config: config, IAM: iamclient.New(client), Tokens: tokens, Now: func() time.Time { return f.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.h.provider = newProvider(config, f.h.now, f.server.Client().Transport)
 	return f
 }
@@ -338,7 +369,10 @@ func TestRegistrationAcrossReplicasAndConfirmation(t *testing.T) {
 		t.Fatalf("callback must provide the registration form context: %s", result.Body.String())
 	}
 	cookie := cookieFrom(t, result, "register")
-	other := New(f.h.config, f.h.accounts, f.h.tokens, f.h.now)
+	other, err := New(Options{Config: f.h.config, IAM: f.h.accounts, Tokens: f.h.tokens, Now: f.h.now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	body, _ := json.Marshal(map[string]string{"registrationID": form.RegistrationID, "action": "create", "username": "admin"})
 	result = serve(other, "POST", "/auth/oauth/register", string(body), cookie)
 	assertToken(t, f, result, "admin")
@@ -475,7 +509,10 @@ func TestCookieAPIsRequireSameOrigin(t *testing.T) {
 func TestCallbackOnAnotherReplica(t *testing.T) {
 	f := newFixture(t)
 	cookie, state := f.login(t)
-	other := New(f.h.config, f.h.accounts, f.h.tokens, f.h.now)
+	other, err := New(Options{Config: f.h.config, IAM: f.h.accounts, Tokens: f.h.tokens, Now: f.h.now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	other.provider = newProvider(f.h.config, f.h.now, f.server.Client().Transport)
 	response := serve(other, "POST", "/auth/oauth/community/callback", `{"code":"code","state":"`+state+`"}`, cookie)
 	if response.Code != 200 || !strings.Contains(response.Body.String(), `"registrationRequired":true`) {

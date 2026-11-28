@@ -7,7 +7,6 @@ import (
 
 const (
 	maxEntries    = 4096
-	idleTTL       = 10 * time.Minute
 	sweepInterval = time.Minute
 )
 
@@ -42,21 +41,31 @@ func (b *Buckets) Allow(key string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
-	if !now.Before(b.nextSweep) {
+	_, known := b.entries[key]
+	needsRoom := !known && len(b.entries) >= maxEntries
+	if !now.Before(b.nextSweep) || needsRoom {
+		var oldestKey string
+		var oldestTime time.Time
+		hasOldest := false
 		for key, entry := range b.entries {
 			elapsed := now.Sub(entry.last)
-			// Only discard buckets whose allowance has fully recovered.
-			if elapsed >= idleTTL && entry.tokens+elapsed.Seconds()*b.rate >= b.capacity {
+			// Reclaim recovered buckets before considering LRU eviction.
+			if entry.tokens+elapsed.Seconds()*b.rate >= b.capacity {
 				delete(b.entries, key)
+				continue
 			}
+			if !hasOldest || entry.last.Before(oldestTime) {
+				oldestKey, oldestTime, hasOldest = key, entry.last, true
+			}
+		}
+		// At capacity, admit new keys even if eviction resets an existing key's allowance.
+		if needsRoom && len(b.entries) >= maxEntries && hasOldest {
+			delete(b.entries, oldestKey)
 		}
 		b.nextSweep = now.Add(sweepInterval)
 	}
 	entry, found := b.entries[key]
 	if !found {
-		if len(b.entries) >= maxEntries {
-			return false
-		}
 		entry = bucket{tokens: b.capacity, last: now}
 	}
 	if elapsed := now.Sub(entry.last).Seconds(); elapsed > 0 {

@@ -195,14 +195,14 @@ func (p *provider) request(req *http.Request, output any) error {
 }
 
 type claims struct {
-	Subject           string `json:"sub"`
-	OpenEulerUsername string `json:"openeuler_username"`
-	Name              string `json:"name"`
-	Email             string `json:"email"`
-	EmailVerified     bool   `json:"email_verified"`
-	AuthorizedParty   string `json:"azp"`
-	IssuedAt          int64  `json:"iat"`
-	NotBefore         int64  `json:"nbf"`
+	Subject         string `json:"sub"`
+	Username        string `json:"username"`
+	Name            string `json:"name"`
+	Email           string `json:"email"`
+	EmailVerified   bool   `json:"email_verified"`
+	AuthorizedParty string `json:"azp"`
+	IssuedAt        int64  `json:"iat"`
+	NotBefore       int64  `json:"nbf"`
 }
 
 func (p *provider) exchange(ctx context.Context, code string, state browserContext, responseIssuer string) (iamclient.ExternalIdentity, profile, error) {
@@ -268,7 +268,7 @@ func (p *provider) exchange(ctx context.Context, code string, state browserConte
 	if !validIdentity(identity) {
 		return identity, profile{}, failure(401, "OAuthAuthenticationFailed")
 	}
-	result := profile{Username: info.OpenEulerUsername, DisplayName: info.Name}
+	result := profile{Username: info.Username, DisplayName: info.Name}
 	if info.EmailVerified {
 		result.Email = info.Email
 	}
