@@ -3,10 +3,14 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -140,7 +144,7 @@ func TestCheckIdentity(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer token-a" {
 			t.Fatalf("unexpected Authorization header: %q", r.Header.Get("Authorization"))
 		}
-		_, _ = io.WriteString(w, `{"authenticated":true,"identity":{"type":"user","name":"alice","scopes":["ebs:user"]}}`)
+		_, _ = io.WriteString(w, `{"authenticated":true,"identity":{"type":"user","name":"alice","scopes":["ebs:user"]},"expiresAt":"2099-01-01T00:00:00Z"}`)
 	}))
 	defer server.Close()
 	api, err := New(Options{Gateway: server.URL, Token: "token-a", Timeout: time.Second})
@@ -153,5 +157,90 @@ func TestCheckIdentity(t *testing.T) {
 	}
 	if identity.Type != "user" || identity.Name != "alice" || len(identity.Scopes) != 1 || identity.Scopes[0] != "ebs:user" {
 		t.Fatalf("unexpected identity: %#v", identity)
+	}
+}
+
+func TestPersonalCredentialTransport(t *testing.T) {
+	const token = "ebs_pat_v1.private-test-credential"
+	for _, options := range []Options{
+		{Gateway: "http://localhost:8080", Token: token},
+		{Gateway: "https://localhost:8080", Token: token, InsecureSkipVerify: true},
+		{Gateway: "https://localhost:8080", Token: token + "\n"},
+	} {
+		if _, err := New(options); err == nil || strings.Contains(err.Error(), token) {
+			t.Fatal("unsafe personal credential transport accepted or leaked")
+		}
+	}
+	for _, watch := range []bool{false, true} {
+		t.Run(fmt.Sprint("watch=", watch), func(t *testing.T) {
+			calls := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Path != "/redirect" {
+					t.Error("followed a credential redirect")
+				}
+				w.Header().Set("Location", "http://"+r.Host+"/leaked")
+				w.WriteHeader(http.StatusTemporaryRedirect)
+			}))
+			defer server.Close()
+			api := trustedClient(t, server, token)
+			var err error
+			if watch {
+				_, err = api.OpenWatch(context.Background(), "/redirect", "job")
+			} else {
+				_, _, err = api.Do(context.Background(), http.MethodGet, "/redirect", "", nil, "project", "")
+			}
+			if err == nil || calls != 1 {
+				t.Fatalf("redirect err=%v calls=%d", err, calls)
+			}
+			if _, err := api.newRequest(context.Background(), http.MethodGet, "https://other.invalid/", "", nil); err == nil {
+				t.Fatal("allowed credentials to another origin")
+			}
+		})
+	}
+}
+
+func trustedClient(t *testing.T, server *httptest.Server, token string) *Client {
+	t.Helper()
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api, err := New(Options{Gateway: server.URL, Token: token, CAFile: ca})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return api
+}
+
+func TestPersonalCredentialFallbackAndWatch(t *testing.T) {
+	const token = "ebs_pat_v1.private-test-credential"
+	for _, watch := range []bool{false, true} {
+		calls := 0
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if r.Header.Get("Authorization") != "" {
+				w.Header().Set("X-Request-ID", token)
+				w.WriteHeader(http.StatusUnauthorized)
+				io.WriteString(w, token)
+				return
+			}
+			io.WriteString(w, `{"items":[]}`)
+		}))
+		api := trustedClient(t, server, token)
+		if watch {
+			_, err := api.OpenWatch(context.Background(), "/apis/ebs/v1/projects/demo/jobs?watch=true", "job")
+			if err == nil || ExitClass(err) != 3 || calls != 1 || strings.Contains(err.Error(), token) {
+				t.Fatal("watch downgraded or leaked the credential")
+			}
+		} else {
+			if _, _, err := api.Get(context.Background(), "/apis/ebs/v1/projects", "project", "", true); err != nil || calls != 2 {
+				t.Fatalf("public fallback err=%v calls=%d", err, calls)
+			}
+		}
+		if api.token != token {
+			t.Fatal("fallback changed saved credential")
+		}
+		server.Close()
 	}
 }

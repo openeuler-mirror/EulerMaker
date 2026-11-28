@@ -725,7 +725,7 @@ export default {
     created: "Credential created",
     token: "Personal access credential",
     oneTime: "The full credential is shown only once. Copy and store it securely now. It cannot be retrieved after closing this dialog or leaving this page.",
-    cliHint: "Use this credential for Bearer API requests. The command below requires an ebsctl version supporting --token-stdin; CLI integration is still planned. Do not put secrets in command arguments or shell history.",
+    cliHint: "Use this credential for Bearer API requests or ebsctl login through stdin. Read it from a protected file or pipe, not command arguments or shell history.",
     copy: "Copy credential",
     copied: "Copied. Store it securely.",
     copyFailed: "Clipboard access failed. Select and copy the credential above manually.",

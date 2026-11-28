@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -120,8 +119,4 @@ func (a *App) client(resolved configpkg.Resolved, requireToken bool) (*client.Cl
 		Gateway: resolved.Gateway, Token: resolved.Token, CAFile: resolved.TLS.CAFile, ServerName: resolved.TLS.ServerName,
 		InsecureSkipVerify: a.insecure, Timeout: a.timeout, Verbose: a.verbose, Diagnostic: a.streams.ErrOut,
 	})
-}
-
-func stdinFile() *os.File {
-	return os.Stdin
 }

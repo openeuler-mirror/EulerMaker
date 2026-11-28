@@ -37,7 +37,7 @@ function setup(role = "ops", username = "owner") {
       return current;
     },
   };
-  const state = new Function(...Object.keys(dependencies), transpile(script) + "\nreturn { t, canEdit, entries, editing, saving, errorKey, rows, lockedRows, startEditing, save };")(...Object.values(dependencies));
+  const state = new Function(...Object.keys(dependencies), transpile(script) + "\nreturn { t, canEdit, entries, visibleEntries, editing, saving, errorKey, rows, lockedRows, startEditing, save };")(...Object.values(dependencies));
   const html = () => renderToString(Vue.createSSRApp({ setup: () => state, render }));
   const edit = () => { state.startEditing(); state.rows.value.find(row => row.key === "pool").value = "gating"; };
   return { project, current, state, calls, events, html, edit, dependencies, dispose: () => dispose() };
@@ -62,6 +62,8 @@ test("Project label editor shows key/value rows and restricts editing to owners"
 
 test("Project labels patch adds, edits and removes only changed labels using the current version", async () => {
   const view = setup();
+  view.project.metadata.labels["ebs.io/member-user.member"] = "true";
+  view.current.metadata.labels["ebs.io/member-user.member"] = "true";
   view.edit();
   view.state.rows.value = view.state.rows.value.filter(row => row.key !== "remove");
   view.state.rows.value.push({ key: "new", value: "" });
@@ -75,6 +77,23 @@ test("Project labels patch adds, edits and removes only changed labels using the
   assert.deepEqual(view.events, [["saved", view.current]]);
   assert.match(read("../src/views/ProjectView.vue"), /<ProjectLabels[^>]*@saved="project = \$event"/);
   assert.equal(view.state.editing.value, false);
+});
+
+test("Project label display hides ownership labels without removing them from editing", async () => {
+  const view = setup();
+  view.project.metadata.labels["ebs.io/member-user.member"] = "true";
+  const html = await view.html();
+  assert.doesNotMatch(html, /ebs.io\/owner-user|ebs.io\/member-user\./);
+  assert.match(html, /<dt>pool<\/dt>/);
+  view.state.startEditing();
+  assert.ok(view.state.rows.value.some(row => row.key === PROJECT_OWNER_LABEL));
+  assert.ok(view.state.rows.value.some(row => row.key === "ebs.io/member-user.member"));
+  await view.state.save();
+  assert.equal(view.calls.length, 0);
+
+  view.project.metadata.labels = { [PROJECT_OWNER_LABEL]: "owner", "ebs.io/member-user.member": "true" };
+  assert.match(await view.html(), /project.noLabels/);
+  assert.doesNotMatch(await view.html(), /class="label-list"/);
 });
 
 test("Reserved Project label edits follow user, Ops and Admin permissions", () => {

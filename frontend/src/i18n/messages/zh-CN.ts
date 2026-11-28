@@ -722,7 +722,7 @@ export default {
     created: "凭证已创建",
     token: "个人访问凭证",
     oneTime: "完整凭证仅显示这一次。请立即复制并安全保存，关闭或离开页面后无法再次查看。",
-    cliHint: "凭证可用于 Bearer API 请求。以下为支持 --token-stdin 的 ebsctl 版本的用法；CLI 接入尚待实现，请勿将密钥写入命令参数或历史记录。",
+    cliHint: "凭证可用于 Bearer API 请求，或通过 stdin 登录 ebsctl。请从受保护的文件或管道输入，不要将密钥写入命令参数或历史记录。",
     copy: "复制凭证",
     copied: "已复制，请安全保存。",
     copyFailed: "无法写入剪贴板，请手动选择上方凭证复制。",

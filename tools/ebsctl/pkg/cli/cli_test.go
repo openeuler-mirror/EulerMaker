@@ -103,7 +103,7 @@ func TestAuthenticatedCommandsKeepAuthenticationFailures(t *testing.T) {
 					t.Error("expected authenticated request")
 				}
 				if r.URL.Path == "/auth/check" {
-					_, _ = io.WriteString(w, `{"authenticated":true,"identity":{"type":"user","name":"alice"}}`)
+					_, _ = io.WriteString(w, `{"authenticated":true,"identity":{"type":"user","name":"alice","scopes":["ebs:user"]},"expiresAt":"2099-01-01T00:00:00Z"}`)
 					return
 				}
 				http.Error(w, "invalid token", http.StatusUnauthorized)
@@ -176,62 +176,6 @@ func TestCreateJobRejectedLocally(t *testing.T) {
 	}
 }
 
-func TestLoginThenCreateAndGet(t *testing.T) {
-	var created map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/auth/login":
-			var login map[string]string
-			_ = json.NewDecoder(r.Body).Decode(&login)
-			if login["username"] != "alice" || login["password"] != "password-value" {
-				t.Fatalf("unexpected login: %#v", login)
-			}
-			_, _ = io.WriteString(w, `{"token":"token-a","tokenType":"Bearer","expiresIn":3600}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/project-a/builds":
-			if r.Header.Get("Authorization") != "Bearer token-a" {
-				t.Fatalf("missing token")
-			}
-			_ = json.NewDecoder(r.Body).Decode(&created)
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(created)
-		case r.Method == http.MethodGet && r.URL.Path == "/apis/ebs/v1/projects/project-a/builds/build-a":
-			_ = json.NewEncoder(w).Encode(created)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	directory := t.TempDir()
-	if err := os.Chmod(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(directory, "config.yaml")
-	loginOut, loginErr := &bytes.Buffer{}, &bytes.Buffer{}
-	code := Execute(context.Background(), Streams{In: strings.NewReader("password-value\n"), Out: loginOut, ErrOut: loginErr}, []string{"--config", configPath, "--insecure-skip-tls-verify", "login", server.URL, "--username", "alice", "--password-stdin"})
-	if code != 0 {
-		t.Fatalf("login code=%d stderr=%s", code, loginErr.String())
-	}
-	manifest := filepath.Join(directory, "build.yaml")
-	data := []byte("apiVersion: ebs/v1\nkind: Build\nmetadata:\n  name: build-a\nspec:\n  priority: 10\n")
-	if err := os.WriteFile(manifest, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	createOut, createErr := &bytes.Buffer{}, &bytes.Buffer{}
-	code = Execute(context.Background(), Streams{In: strings.NewReader(""), Out: createOut, ErrOut: createErr}, []string{"--config", configPath, "-n", "project-a", "create", "-f", manifest, "-o", "name"})
-	if code != 0 || strings.TrimSpace(createOut.String()) != "build/build-a" {
-		t.Fatalf("create code=%d stdout=%q stderr=%q", code, createOut.String(), createErr.String())
-	}
-	metadata := created["metadata"].(map[string]any)
-	if metadata["namespace"] != "project-a" {
-		t.Fatalf("namespace not injected: %#v", created)
-	}
-	getOut, getErr := &bytes.Buffer{}, &bytes.Buffer{}
-	code = Execute(context.Background(), Streams{In: strings.NewReader(""), Out: getOut, ErrOut: getErr}, []string{"--config", configPath, "-p", "project-a", "get", "build", "build-a", "-o", "json"})
-	if code != 0 || !strings.Contains(getOut.String(), `"build-a"`) {
-		t.Fatalf("get code=%d stdout=%q stderr=%q", code, getOut.String(), getErr.String())
-	}
-}
-
 func TestGetProjectCanUseAnonymousGatewayOverride(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
@@ -259,7 +203,7 @@ func TestGetProjectsMineFiltersTrustedUserProjects(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer token-a" {
 				t.Fatalf("missing token")
 			}
-			_, _ = io.WriteString(w, `{"authenticated":true,"identity":{"type":"user","name":"alice"}}`)
+			_, _ = io.WriteString(w, `{"authenticated":true,"identity":{"type":"user","name":"alice","scopes":["ebs:user"]},"expiresAt":"2099-01-01T00:00:00Z"}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/apis/ebs/v1/projects":
 			_, _ = io.WriteString(w, `{"kind":"ProjectList","metadata":{"resourceVersion":"9"},"items":[`+
 				`{"metadata":{"name":"owned","labels":{"ebs.io/owner-user":"alice"}}},`+

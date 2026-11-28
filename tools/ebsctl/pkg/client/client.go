@@ -14,14 +14,20 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"k8s.io/apimachinery/pkg/util/validation"
+
+	configpkg "ebsctl/pkg/config"
 )
 
 const maxResponseBytes = 32 << 20
+
+var bearerFormat = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
 
 type Options struct {
 	Gateway            string
@@ -90,9 +96,18 @@ func (e *APIError) Error() string {
 }
 
 func New(options Options) (*Client, error) {
+	if err := configpkg.ValidateGateway(options.Gateway); err != nil {
+		return nil, err
+	}
+	if options.Token != "" && (len(options.Token) > 4096 || !bearerFormat.MatchString(options.Token)) {
+		return nil, fmt.Errorf("invalid bearer token format")
+	}
 	base, err := url.Parse(options.Gateway)
 	if err != nil {
 		return nil, fmt.Errorf("parse gateway: %w", err)
+	}
+	if strings.HasPrefix(options.Token, "ebs_pat_") && (base.Scheme != "https" || options.InsecureSkipVerify) {
+		return nil, fmt.Errorf("personal credentials require HTTPS with certificate verification")
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: options.ServerName}
@@ -120,11 +135,13 @@ func New(options Options) (*Client, error) {
 	if options.Diagnostic == nil {
 		options.Diagnostic = io.Discard
 	}
+	// Never forward credentials through a redirect, including HTTPS downgrades.
+	checkRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &Client{
 		base:       base,
 		token:      options.Token,
-		http:       &http.Client{Transport: transport, Timeout: options.Timeout},
-		watchHTTP:  &http.Client{Transport: transport},
+		http:       &http.Client{Transport: transport, Timeout: options.Timeout, CheckRedirect: checkRedirect},
+		watchHTTP:  &http.Client{Transport: transport, CheckRedirect: checkRedirect},
 		verbose:    options.Verbose,
 		diagnostic: options.Diagnostic,
 	}, nil
@@ -193,11 +210,19 @@ func (c *Client) CheckIdentity(ctx context.Context) (Identity, error) {
 		return Identity{}, err
 	}
 	var response struct {
-		Authenticated bool     `json:"authenticated"`
-		Identity      Identity `json:"identity"`
+		Authenticated bool      `json:"authenticated"`
+		Identity      Identity  `json:"identity"`
+		ExpiresAt     time.Time `json:"expiresAt"`
 	}
-	if err := json.Unmarshal(body, &response); err != nil || !response.Authenticated || response.Identity.Name == "" {
+	if err := json.Unmarshal(body, &response); err != nil || !response.Authenticated ||
+		response.Identity.Type != "user" || len(validation.IsDNS1123Label(response.Identity.Name)) != 0 ||
+		len(response.Identity.Scopes) != 1 || !response.ExpiresAt.After(time.Now()) {
 		return Identity{}, fmt.Errorf("Gateway returned an invalid identity response")
+	}
+	switch response.Identity.Scopes[0] {
+	case "ebs:user", "ebs:ops", "ebs:admin":
+	default:
+		return Identity{}, fmt.Errorf("Gateway returned an invalid user role")
 	}
 	return response.Identity, nil
 }
@@ -233,6 +258,9 @@ func (c *Client) newRequest(ctx context.Context, method, path, contentType strin
 		return nil, err
 	}
 	target := c.base.ResolveReference(reference)
+	if target.Scheme != c.base.Scheme || target.Host != c.base.Host || target.User != nil {
+		return nil, fmt.Errorf("request must target the configured Gateway")
+	}
 	request, err := http.NewRequestWithContext(ctx, method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -256,6 +284,9 @@ func (c *Client) logRequest(request *http.Request) {
 }
 
 func decodeAPIError(response *http.Response, data []byte, resource, name string) error {
+	if response.Request != nil && response.Request.URL.Path == "/auth/check" {
+		return &APIError{StatusCode: response.StatusCode, Message: http.StatusText(response.StatusCode), Resource: resource}
+	}
 	value := struct {
 		Code      string `json:"code"`
 		Message   string `json:"message"`
@@ -267,6 +298,13 @@ func decodeAPIError(response *http.Response, data []byte, resource, name string)
 	}
 	if value.RequestID == "" {
 		value.RequestID = response.Header.Get("X-Request-ID")
+	}
+	if response.Request != nil {
+		if token := strings.TrimPrefix(response.Request.Header.Get("Authorization"), "Bearer "); token != "" {
+			value.Code = strings.ReplaceAll(value.Code, token, "[REDACTED]")
+			value.Message = strings.ReplaceAll(value.Message, token, "[REDACTED]")
+			value.RequestID = strings.ReplaceAll(value.RequestID, token, "[REDACTED]")
+		}
 	}
 	return &APIError{StatusCode: response.StatusCode, Code: value.Code, Message: value.Message, RequestID: value.RequestID, Resource: resource, Name: name, RetryAfter: RetryAfter(response.Header)}
 }

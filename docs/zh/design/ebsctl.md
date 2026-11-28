@@ -82,7 +82,7 @@ Config 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路�
 ### 3.2 登录与 Context
 
 ```bash
-ebsctl login https://ebs.example.com --username alice
+ebsctl login https://ebs.example.com --token-stdin < /secure/path/personal-token
 
 ebsctl config get-contexts
 ebsctl config use-context production
@@ -90,9 +90,35 @@ ebsctl config set-project openeuler-mainline
 ebsctl logout
 ```
 
-`login` 默认从终端安全读取密码，不回显；也允许 `--password-stdin`，不提供 `--password` 参数，避免密码进入 shell history 和进程参数。成功后调用 `/auth/login`，保存 access token 和服务地址。context 默认名由 `--context-name` 指定，否则从 Gateway host 生成。
+`login` 只支持 `--token-stdin`，不再提供用户名、密码登录或交互密码输入，也不提供明文 `--token` 参数。
+先在前端账号设置创建个人访问凭证，再从受保护的文件或管道传入。context 默认名由 `--context-name` 指定，否则从 Gateway host 生成。
 
-`logout` 删除当前 context 的本地 Token；当前服务端没有 Token 吊销接口，因此 logout 不表示服务端 Token 立即失效。CI 可以通过环境变量 `EBS_TOKEN` 注入 Token，环境变量优先于配置文件，且不落盘。
+`logout` 只删除当前 context 的本地 Token，不撤销服务端凭证。JWT 沿用现有有效期；PAT 须在前端个人设置
+中单独撤销。CI 可以通过环境变量 `EBS_TOKEN` 注入 Token，环境变量优先于配置文件，且不落盘。
+
+#### 个人访问凭证登录
+
+用户在前端个人设置创建 PAT，每用户最多 5 个有效凭证，默认有效期 90 天；权威契约见
+[个人访问凭证](ebs-gateway.md#personal-access-credentials)。不引入 CLI OAuth 浏览器跳转、
+Token 交换、refresh token 或凭证管理命令。
+
+- `--token-stdin` 是必填开关；`--username`、`--password-stdin`、`--password` 和 `--token` 均不支持。
+  只读取有界输入（沿用 4096 字节上限），去除末尾换行并拒绝空值、内嵌换行或多条凭证；不增加明文 `--token` 参数。
+- 先携带凭证调用 `POST /auth/check`，正文为空；核验 `authenticated=true`、`identity.type=user`、合法用户名、
+  单一合法角色及未来的 RFC 3339 `expiresAt` 后，才按现有逻辑保存 context。拒绝 Runner/Service Token，不根据未验证的 Token
+  定位信息推导用户。该入口也可接受有效 User JWT，但不在本地执行 JWT 解析来判断权限。
+- 沿用 `credentials.<context>.token` 存储和 `EBS_TOKEN` 环境变量，无需改变配置文件版本。
+  使用 `/auth/check` 返回的用户名设置 context，后续请求直接发送相同 Bearer PAT，不自动换取或刷新 JWT。
+- PAT 不进入 stdout、诊断或错误信息。沿用目录 0700、文件 0600 和原子保存；失败不覆盖已有 context 或凭证。
+  PAT 经 HTTPS 传输，凭证登录不接受 HTTP 或 `--insecure-skip-tls-verify`；使用环境变量或已保存 PAT 发起业务
+  请求时同样检查，避免绕过该约束。此限制不改变现有开发环境 JWT 的行为。
+- 私有 CA 通过 `--certificate-authority` 配置，必要时通过 `--tls-server-name` 指定核验名称。HTTP 客户端不自动跟随重定向，
+  请求构造只接受当前 Gateway 的同源地址，防止凭证被带到其他地址或降级到 HTTP。`/auth/check` 错误只显示 HTTP 状态，不打印原始响应正文。
+- `/auth/check` 失败不匿名重试。业务请求仍遵循 6.1 的既有匿名重试白名单；401 时提示重新配置凭证或登录，
+  不自动删除已保存凭证、不自动派生新凭证，403 和 503 不当作过期。Watch 重连重新认证，不静默降级。
+
+测试覆盖 stdin 和已删除参数拒绝、输入上限、PAT/JWT 用户登录、机器身份拒绝、可信用户名获取、过期/撤销、TLS 限制、
+验证失败不覆盖配置、环境变量复用、logout 只清理本地、日志脱敏及现有匿名重试边界。
 
 ### 3.3 资源查询
 
@@ -282,7 +308,7 @@ YAML 转 JSON 时保留整数精度。任何输出都不得包含 IAM credential
 
 - CLI 与服务端通过 `apiVersion` 协商对象格式，不用二进制版本字符串推断兼容性；
 - 新增 JSON 字段向后兼容，删除或改变字段语义必须提升 API 版本；
-- 命令参数废弃至少保留一个次版本并输出 stderr 警告；
+- 登录入口统一使用 `--token-stdin`，不保留用户名/密码参数；
 - table 列允许新增，但已有列名和含义在同一 CLI 主版本内保持稳定；
 - 配置文件包含独立 `apiVersion`，升级时先读取旧版本并原子迁移，无法降级时保留备份。
 
@@ -309,7 +335,7 @@ YAML 转 JSON 时保留整数精度。任何输出都不得包含 IAM credential
 | 类别 | 必测内容 |
 |------|----------|
 | 配置 | context 优先级、0600 权限、原子写入、环境变量覆盖、损坏配置 |
-| 认证 | 登录成功/失败、Token 不进入诊断输出、401、logout、password-stdin |
+| 认证 | PAT/User JWT 登录、Token 不进入诊断输出、401、logout、token-stdin、已删除密码参数拒绝 |
 | 资源映射 | 所有单复数/短名、Project 路由、未知 GVK、namespace 冲突 |
 | CRUD | JSON/YAML、多文档、stdin、resourceVersion 冲突、merge patch、批量错误汇总 |
 | 输出 | table 列、JSON/YAML 合法性、name、stdout/stderr 分离 |
