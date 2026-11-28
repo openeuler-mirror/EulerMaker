@@ -362,7 +362,7 @@ PAT 失败不读写密码失败计数或锁定状态；密码临时锁定不影�
 #### 内部接口
 
 以下新增接口及 `method=credential` 分支仅允许经过内部 mTLS 认证的
-`spiffe://eulermaker/internal/ebs-gateway` 调用；未配置内部证书认证时不开放 PAT 能力。
+`spiffe://eulermaker/internal/ebs-gateway` 调用；仅显式开启 `--insecure-allow-unauthenticated-clients=true` 的隔离开发模式跳过 Gateway 身份检查；缺少证书或身份本身不会触发放行。
 Gateway 负责核验最终用户本人身份，apiserver 校验目标 User 和凭证内容，不信任客户端身份头。
 
 | 方法与路径 | 输入 | 成功响应 |
@@ -425,7 +425,7 @@ apiserver 只处理本地账号及外部身份归属，不连接社区认证服�
 `method=credential` 仅用于认证，契约见[个人访问凭证](#personal-access-credentials)，不扩展注册方式。
 各方式分别校验，复用底层账号存储。密码模式沿用前述协议；MachineAccount 接口不变。
 
-两个接口的 OAuth 分支仅允许已认证的 `spiffe://eulermaker/internal/ebs-gateway` 身份调用，从 apiserver 认证上下文取得身份，不信任请求头自报值；未配置内部证书认证时也不放宽此限制。对外 Gateway 路由不能允许调用方通过提交 method 或 externalIdentity 绕过外部认证或注册上下文校验。
+两个接口的 OAuth 分支仅允许已认证的 `spiffe://eulermaker/internal/ebs-gateway` 身份调用，从 apiserver 认证上下文取得身份，不信任请求头自报值；只有显式开启 `--insecure-allow-unauthenticated-clients=true` 的隔离开发模式跳过该身份检查，PAT 内部接口采用相同规则。对外 Gateway 路由不能允许调用方通过提交 method 或 externalIdentity 绕过外部认证或注册上下文校验。
 
 #### 外部身份校验与身份键
 

@@ -1029,7 +1029,7 @@ bash backend/ebs-gateway/hacks/update-openapi.sh --check
 
 成功绑定监听端口后才记录启动成功。收到 SIGINT/SIGTERM 后停止接收新连接，最多等待 15 秒让在途请求排空，等待结束前主流程不退出；超时则强制关闭连接并返回错误。Watch 等持续请求也受此退出期限约束。退出前释放信号订阅并关闭上游空闲连接。
 
-配置 `--apiserver-client-cert` 和 `--apiserver-client-key` 后，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；启用 `--internal-client-ca-file` 的 apiserver 根据证书 URI SAN 识别 Gateway，不依赖转发的用户身份头。IAM 的 OAuth 分支仅允许 Gateway 身份调用，其余接口尚未实施完整的按组件授权规则；部署时仍须限制 apiserver 的网络访问。
+配置 `--apiserver-client-cert` 和 `--apiserver-client-key` 后，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；启用 `--internal-client-ca-file` 的 apiserver 根据证书 URI SAN 识别 Gateway，不依赖转发的用户身份头。IAM 的 PAT 与 OAuth 内部接口在正常部署中仅允许 Gateway 身份调用；仅当 apiserver 显式开启 `--insecure-allow-unauthenticated-clients=true` 时跳过该检查。其余接口尚未实施完整的按组件授权规则；部署时仍须限制 apiserver 的网络访问。
 
 密钥文件由 Secret 以只读方式挂载，文件权限应限制为 `0600`，内容为单个 base64 字符串，例如：
 

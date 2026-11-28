@@ -31,6 +31,8 @@ type userStorage interface {
 }
 
 type Handler struct {
+	insecureAllowUnauthenticatedClients bool
+
 	credentials *credential.Store
 	users       userStorage
 	machines    userStorage
@@ -40,8 +42,14 @@ type Handler struct {
 func InstallInternalRoutes(server *genericapiserver.GenericAPIServer, credentials *credential.Store, users interface {
 	userStorage
 	oauthUserStorage
-}, machines userStorage, client *es.Client) {
-	h := &Handler{credentials: credentials, users: users, machines: machines, oauth: &oauthService{client: client, users: users}}
+}, machines userStorage, client *es.Client, insecureAllowUnauthenticatedClients bool) {
+	h := &Handler{
+		credentials:                         credentials,
+		users:                               users,
+		machines:                            machines,
+		oauth:                               &oauthService{client: client, users: users},
+		insecureAllowUnauthenticatedClients: insecureAllowUnauthenticatedClients,
+	}
 	ws := new(restful.WebService).Path("/internal/iam/v1").Consumes(restful.MIME_JSON).Produces(restful.MIME_JSON)
 	ws.Route(ws.POST("/users/register").To(h.register))
 	ws.Route(ws.POST("/users/authenticate").To(h.authenticate))
@@ -263,7 +271,11 @@ func writeError(resp *restful.Response, status int, message string) {
 	_ = resp.WriteHeaderAndEntity(status, map[string]string{"error": message})
 }
 
-func requireGateway(req *restful.Request, resp *restful.Response) bool {
+func (h *Handler) requireGateway(req *restful.Request, resp *restful.Response) bool {
+	// Only the explicit startup option may bypass component authentication.
+	if h.insecureAllowUnauthenticatedClients {
+		return true
+	}
 	principal, ok := genericapirequest.UserFrom(req.Request.Context())
 	if !ok || principal.GetName() == "system:anonymous" {
 		_ = resp.WriteHeaderAndEntity(http.StatusUnauthorized, map[string]string{"code": "Unauthorized", "error": "internal authentication required"})

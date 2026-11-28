@@ -269,7 +269,7 @@ func (opts *EulerMakerServerOptions) Run(stopCh <-chan struct{}) error {
 		return err
 	}
 
-	srv, err := CreateServerChain(config, esClient, opts.EnableIAM)
+	srv, err := CreateServerChain(config, esClient, opts.EnableIAM, opts.InsecureAllowUnauthenticatedClients)
 	if err != nil {
 		return err
 	}
@@ -278,7 +278,7 @@ func (opts *EulerMakerServerOptions) Run(stopCh <-chan struct{}) error {
 	return prepared.Run(stopCh)
 }
 
-func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.Client, enableIAM bool) (*genericapiserver.GenericAPIServer, error) {
+func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.Client, enableIAM, insecureAllowUnauthenticatedClients bool) (*genericapiserver.GenericAPIServer, error) {
 	completedConfig := config.Complete()
 
 	apiGroupInfo, buildClaims, err := CreateAPIGroupInfo(completedConfig.RESTOptionsGetter, esClient)
@@ -318,7 +318,7 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 		if err := srv.InstallAPIGroup(iamGroupInfo); err != nil {
 			return nil, err
 		}
-		iammodule.InstallInternalRoutes(srv, credentials, users, machines, esClient)
+		iammodule.InstallInternalRoutes(srv, credentials, users, machines, esClient, insecureAllowUnauthenticatedClients)
 	}
 	installProjectAliasRoutes(srv)
 	installRunnerJobAliasRoutes(srv)

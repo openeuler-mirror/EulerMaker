@@ -78,6 +78,8 @@ curl -fsS http://localhost:8080/healthz
 
 Compose 从当前工作区构建应用镜像。默认配置使用开发用 TLS 跳过校验、未启用 Elasticsearch 安全认证，并暴露多个内部服务端口，**不适合直接用于公网或生产部署**。生产环境需要独立规划证书、网络隔离、凭据管理、持久化与备份。Docker socket 访问也应限制在受信任的 Runner。
 
+显式开启 apiserver 的 `--insecure-allow-unauthenticated-clients=true` 时，PAT 和 OAuth 内部接口也可用于免认证开发环境；正常部署仍校验 Gateway 组件身份。
+
 ### 接入 Runner
 
 控制面就绪后，由 Admin 创建 `type=runner` 的 MachineAccount，将 `clientID`、`clientSecret` 保存到 `hacks/runner-machine-credential.json`，格式见 [Runner README](backend/runner/README.md)。在 Runner 节点准备可写的 `/var/lib/ebs-runner`，宿主机与容器内必须使用相同的绝对路径。

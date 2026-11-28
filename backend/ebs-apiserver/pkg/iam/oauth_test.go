@@ -114,6 +114,11 @@ type oauthFixture struct {
 
 func newOAuthFixture(t *testing.T) *oauthFixture {
 	t.Helper()
+	return newOAuthFixtureWithAuthMode(t, false)
+}
+
+func newOAuthFixtureWithAuthMode(t *testing.T, insecure bool) *oauthFixture {
+	t.Helper()
 	b := &oauthBackend{docs: map[string]oauthDocument{}}
 	srv := httptest.NewServer(b)
 	t.Cleanup(srv.Close)
@@ -122,7 +127,7 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 	creds := credential.NewStore(client)
 	routes := restful.NewContainer()
 	server := &genericapiserver.GenericAPIServer{Handler: &genericapiserver.APIServerHandler{GoRestfulContainer: routes}}
-	InstallInternalRoutes(server, creds, users, &fakeMachineStorage{}, client)
+	InstallInternalRoutes(server, creds, users, &fakeMachineStorage{}, client, insecure)
 	return &oauthFixture{b, routes, client, users, creds}
 }
 
@@ -545,6 +550,16 @@ func TestOAuthClaimRead(t *testing.T) {
 			if err == nil && (got.Claim != claim || got.Version != (es.Version{SeqNo: test.seqNo, PrimaryTerm: test.term})) {
 				t.Fatalf("claim = %+v", got)
 			}
+		})
+	}
+}
+
+func TestOAuthExplicitInsecureMode(t *testing.T) {
+	for _, principal := range []string{"", "system:anonymous"} {
+		t.Run(principal, func(t *testing.T) {
+			f := newOAuthFixtureWithAuthMode(t, true)
+			assertOAuthResponse(t, f.call("register", principal, oauthBody("alice")), 201, "")
+			assertOAuthResponse(t, f.call("authenticate", principal, oauthBody("")), 200, "")
 		})
 	}
 }

@@ -218,7 +218,7 @@ func writeOAuthError(resp *restful.Response, err error) {
 }
 
 func (h *Handler) authenticateOAuth(req *restful.Request, resp *restful.Response, body userRequest) {
-	if !requireGateway(req, resp) {
+	if !h.requireGateway(req, resp) {
 		return
 	}
 	claim, err := h.oauth.lookup(req.Request.Context(), body.Identity)
@@ -243,7 +243,7 @@ func (h *Handler) authenticateOAuth(req *restful.Request, resp *restful.Response
 }
 
 func (h *Handler) registerOAuth(req *restful.Request, resp *restful.Response, body userRequest) {
-	if !requireGateway(req, resp) {
+	if !h.requireGateway(req, resp) {
 		return
 	}
 	user, created, err := h.oauth.register(req.Request.Context(), body)
