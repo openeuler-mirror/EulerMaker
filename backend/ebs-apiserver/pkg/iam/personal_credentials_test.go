@@ -218,3 +218,25 @@ func TestPersonalCredentialPublicUserUpdatePreservesPrivateData(t *testing.T) {
 		t.Fatal("public update lost OAuth identity")
 	}
 }
+
+func TestPersonalCredentialExplicitInsecureMode(t *testing.T) {
+	for _, principal := range []string{"", "system:anonymous"} {
+		t.Run(principal, func(t *testing.T) {
+			f := newOAuthFixtureWithAuthMode(t, true)
+			assertOAuthResponse(t, f.call("register", principal, oauthBody("alice")), 201, "")
+			rec := f.personalCall("POST", "alice/credentials", principal, `{"name":"dev"}`)
+			assertOAuthResponse(t, rec, 201, "")
+			var created credential.CreatedPersonalCredential
+			if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+			assertOAuthResponse(t, f.personalCall("GET", "alice/credentials", principal, ""), 200, "")
+			assertOAuthResponse(t, f.personalCall("POST", "authenticate", principal, personalAuthBody(created.Token)), 200, "")
+			rec = f.personalCall("DELETE", "alice/credentials/"+created.ID, principal, "")
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("delete status=%d", rec.Code)
+			}
+			assertOAuthResponse(t, f.personalCall("POST", "authenticate", principal, personalAuthBody(created.Token)), 401, "InvalidCredential")
+		})
+	}
+}

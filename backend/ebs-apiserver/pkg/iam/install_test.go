@@ -292,7 +292,7 @@ func TestInternalAuthenticationRoutes(t *testing.T) {
 				Handler: &genericapiserver.APIServerHandler{GoRestfulContainer: container},
 			}
 			credentials := credential.NewStore(es.NewClientForTesting(backend.URL, backend.Client()))
-			InstallInternalRoutes(server, credentials, &fakeUserStorage{}, &fakeMachineStorage{}, es.NewClientForTesting(backend.URL, backend.Client()))
+			InstallInternalRoutes(server, credentials, &fakeUserStorage{}, &fakeMachineStorage{}, es.NewClientForTesting(backend.URL, backend.Client()), false)
 			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()

@@ -80,6 +80,8 @@ curl -fsS http://localhost:8080/healthz
 
 Compose builds application images from the current workspace. Its defaults skip TLS verification for development, disable Elasticsearch security, and expose several internal service ports. **Do not expose this configuration directly to the public internet or use it unchanged in production.** Production deployments require certificate management, network isolation, credential protection, persistent storage, and backups. Restrict Docker socket access to trusted Runners.
 
+With the explicit apiserver flag `--insecure-allow-unauthenticated-clients=true`, PAT and OAuth internal endpoints also work in unauthenticated development mode. Normal deployments still require the authenticated Gateway component identity.
+
 ### Connect a Runner
 
 Once the control plane is ready, an Admin creates a `type=runner` MachineAccount. Save its `clientID` and `clientSecret` to `hacks/runner-machine-credential.json`; see the [Runner README](backend/runner/README.md) for the format. Prepare a writable `/var/lib/ebs-runner` on each Runner node, using the same absolute path on the host and in the container.

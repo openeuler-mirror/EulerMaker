@@ -16,7 +16,7 @@ import (
 
 func (h *Handler) createPersonalCredential(req *restful.Request, resp *restful.Response) {
 	resp.AddHeader("Cache-Control", "no-store")
-	if !requireGateway(req, resp) {
+	if !h.requireGateway(req, resp) {
 		return
 	}
 	defer req.Request.Body.Close()
@@ -53,7 +53,7 @@ func (h *Handler) createPersonalCredential(req *restful.Request, resp *restful.R
 }
 
 func (h *Handler) listPersonalCredentials(req *restful.Request, resp *restful.Response) {
-	if !personalReadRequest(req, resp) {
+	if !h.personalReadRequest(req, resp) {
 		return
 	}
 	items, err := h.credentials.ListPersonal(req.Request.Context(), req.PathParameter("name"))
@@ -65,7 +65,7 @@ func (h *Handler) listPersonalCredentials(req *restful.Request, resp *restful.Re
 }
 
 func (h *Handler) deletePersonalCredential(req *restful.Request, resp *restful.Response) {
-	if !personalReadRequest(req, resp) {
+	if !h.personalReadRequest(req, resp) {
 		return
 	}
 	if err := h.credentials.DeletePersonal(req.Request.Context(), req.PathParameter("name"), req.PathParameter("id")); err != nil {
@@ -75,9 +75,9 @@ func (h *Handler) deletePersonalCredential(req *restful.Request, resp *restful.R
 	resp.WriteHeader(http.StatusNoContent)
 }
 
-func personalReadRequest(req *restful.Request, resp *restful.Response) bool {
+func (h *Handler) personalReadRequest(req *restful.Request, resp *restful.Response) bool {
 	resp.AddHeader("Cache-Control", "no-store")
-	if !requireGateway(req, resp) {
+	if !h.requireGateway(req, resp) {
 		return false
 	}
 	defer req.Request.Body.Close()
@@ -90,7 +90,7 @@ func personalReadRequest(req *restful.Request, resp *restful.Response) bool {
 }
 
 func (h *Handler) authenticatePersonalCredential(req *restful.Request, resp *restful.Response, token string) {
-	if !requireGateway(req, resp) {
+	if !h.requireGateway(req, resp) {
 		return
 	}
 	result, err := h.credentials.AuthenticatePersonal(req.Request.Context(), token)
