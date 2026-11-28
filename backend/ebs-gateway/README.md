@@ -1,6 +1,6 @@
 # ebs-gateway
 
-EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理 JWT 认证、User 状态确认、Project 权限、限流和审计；业务对象仍由 `ebs-apiserver` 持久化。完整的资源和权限契约见[设计文档](../../docs/zh/design/ebs-gateway.md)。
+EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理 JWT/PAT 认证、User 状态确认、Project 权限、限流和审计；业务对象仍由 `ebs-apiserver` 持久化。完整的资源和权限契约见[设计文档](../../docs/zh/design/ebs-gateway.md)。
 
 ## 目录
 
@@ -10,9 +10,9 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `cmd/app/server.go` | 定义 Cobra 参数、配置上游 TLS、启动 HTTP 服务 |
 | `internal/gateway` | 注册 Gin 路由，组装中间件，按资源处理和转发请求 |
 | `internal/middleware` | 身份认证、账号核验、路由身份准入、请求限流和审计 |
-| `internal/identity` | JWT 签发、验证和身份类型 |
+| `internal/identity` | JWT 签发、验证、PAT 格式解析和身份类型 |
 | `internal/iamclient` | 调用 apiserver 的 IAM 接口 |
-| `internal/auth` | 密码注册/登录、机器凭据换 Token、Token 检查及密码修改；持有认证专用限流器 |
+| `internal/auth` | 密码注册/登录、机器凭据换 Token、Token 检查、个人凭证管理及密码修改；持有认证专用限流器 |
 | `internal/oauth` | OAuth/OIDC 提供方认证、加密 Cookie、首次注册及结果确认 |
 | `internal/policy` | 工程归属、Service 授权范围及资源字段写入保护 |
 | `internal/mutation` | 严格解析 PUT/PATCH 并生成完整候选对象 |
@@ -71,6 +71,13 @@ docker build -f backend/ebs-gateway/Dockerfile -t ebs-gateway:dev .
 ```
 
 ## 路由与安全约束
+
+个人访问凭证（PAT）通过 `Authorization: Bearer <PAT>` 访问，逐请求调用 IAM 核验当前 User 和角色，不缓存、不交换 JWT。
+`POST /auth/credentials` 仅允许登录 JWT 创建本人凭证；`GET /auth/credentials` 和
+`DELETE /auth/credentials/{id}` 允许 User JWT/PAT 列举或撤销本人凭证，明文只在创建成功时返回一次。
+每个用户最多 5 个有效凭证，默认 90 天，可指定 1～90 天；PAT 不允许创建凭证、改密或 PUT/PATCH User。
+该能力要求 Gateway 到 apiserver 使用内部 mTLS 身份；外部客户端使用 HTTPS。启用 OAuth 不影响 PAT。
+前端和 ebsctl 尚未接入，完整契约见[个人访问凭证](../../docs/zh/design/ebs-gateway.md#personal-access-credentials)。
 
 OAuth 按登录和回调请求初始化 Provider，不启动后台预热任务；初始化失败后，后续请求在 30 秒重试间隔结束后可再次尝试，成功后复用缓存。配置修改通过重启加载。
 

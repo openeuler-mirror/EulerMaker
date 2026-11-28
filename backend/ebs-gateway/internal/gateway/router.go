@@ -84,7 +84,7 @@ func registerAuthRoutes(router *gin.Engine, rules map[middleware.RouteKey]middle
 			Method:         http.MethodPut,
 			Path:           "/auth/users/:name/password",
 			Authentication: middleware.AuthenticationRequired,
-			Authorization:  policy.Rule{Identities: policy.AllowUsers},
+			Authorization:  policy.Rule{Identities: policy.AllowUsers, UserJWTOnly: true},
 			Handler:        authHandler.ChangePassword,
 		},
 		{
@@ -93,6 +93,27 @@ func registerAuthRoutes(router *gin.Engine, rules map[middleware.RouteKey]middle
 			Authentication: middleware.AuthenticationRequired,
 			Authorization:  policy.Rule{Identities: policy.AllowAdmin},
 			Handler:        authHandler.RegisterMachine,
+		},
+		{
+			Method:         http.MethodPost,
+			Path:           "/auth/credentials",
+			Authentication: middleware.AuthenticationRequired,
+			Authorization:  policy.Rule{Identities: policy.AllowUsers, UserJWTOnly: true},
+			Handler:        authHandler.CreatePersonalCredential,
+		},
+		{
+			Method:         http.MethodGet,
+			Path:           "/auth/credentials",
+			Authentication: middleware.AuthenticationRequired,
+			Authorization:  policy.Rule{Identities: policy.AllowUsers},
+			Handler:        authHandler.ListPersonalCredentials,
+		},
+		{
+			Method:         http.MethodDelete,
+			Path:           "/auth/credentials/:id",
+			Authentication: middleware.AuthenticationRequired,
+			Authorization:  policy.Rule{Identities: policy.AllowUsers},
+			Handler:        authHandler.DeletePersonalCredential,
 		},
 	}
 	registerRoutes(router, rules, routes)
@@ -146,14 +167,14 @@ func registerForwardRoutes(router *gin.Engine, rules map[middleware.RouteKey]mid
 			Method:         http.MethodPut,
 			Path:           "/apis/iam.ebs/v1/users/:name",
 			Authentication: middleware.AuthenticationRequired,
-			Authorization:  policy.Rule{Identities: policy.AllowAdmin},
+			Authorization:  policy.Rule{Identities: policy.AllowAdmin, UserJWTOnly: true},
 			Middlewares:    []gin.HandlerFunc{api.prepareUserUpdate},
 		},
 		{
 			Method:         http.MethodPatch,
 			Path:           "/apis/iam.ebs/v1/users/:name",
 			Authentication: middleware.AuthenticationRequired,
-			Authorization:  policy.Rule{Identities: policy.AllowAdmin},
+			Authorization:  policy.Rule{Identities: policy.AllowAdmin, UserJWTOnly: true},
 			Middlewares:    []gin.HandlerFunc{api.prepareUserUpdate},
 		},
 		{

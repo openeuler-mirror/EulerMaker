@@ -220,6 +220,9 @@ gateway 记录结构化审计日志，建议包含：
 Authorization: Bearer <token>
 ```
 
+Bearer 支持 JWT 和 User 个人访问凭证，后者不解析为 JWT，见
+[个人访问凭证](#personal-access-credentials)。PAT 不改变密码/OAuth 登录开关，也不新增身份类型。
+
 Gateway 的用户认证按部署配置使用密码或 OAuth；OAuth 流程见第十章。MachineAccount 换取 Runner/Service Token 不受此切换影响。密码登录时，Gateway 将账号密码提交给 apiserver IAM 模块验证，认证成功后再读取 User，确认用户存在且 `spec.enabled=true`。Runner 换取 token 时，Gateway 将 MachineAccount client ID 和 client secret 提交给 apiserver IAM 模块验证，并独立校验请求中的 Runner 名称。以上检查通过后，由 gateway 使用同一 HMAC 密钥签发对应的短期 JWT。Apiserver IAM 模块只负责凭据验证，不签发、解析或刷新 JWT。后续业务请求由 gateway 验证 JWT，并根据 token 类型决定是否执行 UserResolve。
 
 普通用户 JWT claims：
@@ -292,7 +295,7 @@ JWT 在线签发包括用户密码/OAuth 认证和机器账号认证：`POST /au
 
 普通用户 JWT 不携带额外的资源归属信息，`sub` 就是唯一用户身份；Runner 使用独立的 `type=runner`。
 
-认证后的 `Principal` 统一以 `Subject` 保存 JWT `sub`，不另存 Runner 名称。`Type=runner` 时，
+认证后的 `Principal` 统一以 `Subject` 保存 JWT `sub`，PAT 使用 IAM 核验返回的用户名；不另存 Runner 名称。`Type=runner` 时，
 Runner 名称匹配、Job 归属校验和 Watch 并发限制均使用 `Subject`。
 
 认证失败返回：
@@ -419,6 +422,71 @@ User 或 MachineAccount 查询不可用时返回 503。
 响应中的 `identity.type` 为 user、runner 或 service；service 的名称为 MachineAccount 名称。
 用户权限由 `identity.scopes` 表示；Runner 和 Service 的 scopes 为空数组，不在响应中返回服务授权列表或凭据。
 
+`/auth/check` 同时支持 PAT，沿用相同响应结构，返回 `identity.type=user`、当前用户名与角色、PAT 的到期时间。
+PAT 的核验和错误契约见下节，不走 JWT 签名检查和角色快照比较。
+
+<a id="personal-access-credentials"></a>
+
+#### 4.3.3 个人访问凭证
+
+PAT 面向 ebsctl 等个人客户端，直接访问 API，不先换取短期 JWT、不增加 refresh token。
+凭证格式、5 个有效凭证上限、默认 90 天及可选 1～90 天有效期、私有存储和并发规则统一由
+[apiserver PAT 契约](ebs-apiserver.md#personal-access-credentials)定义。Gateway 已接入，前端和 ebsctl 尚未接入。
+
+**认证与授权**
+
+1. 全局 `Authenticate` 识别 `ebs_pat_` 前缀；未知 PAT 版本、格式错误直接拒绝，不回退 JWT 或匿名认证。
+   非 PAT 的 Bearer 保留现有 JWT 验证逻辑，不改动浏览器、Runner、Service Token 的格式。
+2. Gateway 通过内部 mTLS 调用 `users/authenticate`，提交 `method=credential` 和完整 PAT，不透传客户端
+   自报用户名或角色。apiserver 成功响应必须具有匹配的用户名、凭证 ID、非空 User UID、单一合法角色及未来到期时间；
+   响应缺失或不一致返回 503，不能把不完整响应当作普通用户放行。
+3. 构造 `Principal{Type:user, Subject:username, Scope:当前角色, ExpiresAt:凭证到期时间}`，另外保存
+   `AuthenticationMethod=credential` 和 `CredentialID` 供敏感操作限制和审计；这些信息不从请求头自报值取得。
+   JWT 路径标记为 `AuthenticationMethod=jwt`。PAT 已通过同一次 IAM 查询核验 User，不再额外 GET User。
+4. 继续执行统一身份准入、工程 owner/member、字段权限和限流。权限使用当前角色，不固化在凭证内；角色降级、
+   升级及工程成员关系变化均对后续请求生效。Admin PAT 也继承 Admin 权限，创建页须明确提示风险。
+5. 首版不缓存 PAT 认证成功或失败结果。撤销或到期后新的认证请求被拒绝；已通过认证的在途请求不回滚，
+   已建立 Watch 不因撤销立即断开，断线重连必须重新认证。强制中断现有 Watch 不在本期范围。
+
+路由授权规则通过 `UserJWTOnly` 声明仅允许 User 登录 JWT 的操作，注册时拒绝与非 User 准入组合；
+统一 Policy 在对象查询和业务处理之前执行此检查。创建凭证、修改密码以及 User PUT/PATCH 使用该规则。
+
+PAT 不需要密码，即使启用 OAuth、关闭本地密码登录仍可使用。它不具有 Runner/Service 身份，也不使用机器账号
+的 projects/permissions。PAT 不允许创建个人凭证、修改密码或调用 User PUT/PATCH 管理入口（避免间接改密或提权）；
+首版对后者整体返回 403，不增加字段级例外。其余业务授权不变。个人凭证不能兑换浏览器 JWT；前端会话继续使用登录 JWT。
+
+PAT 无效、过期、撤销或所属 User 不可用统一返回 401 `InvalidCredential`；当前身份无操作权限返回 403；
+IAM 不可用或异常响应返回 503 `CredentialServiceUnavailable`，禁止匿名降级。通用身份限流沿用现有 key，
+不按凭证 ID 分桶，不能靠创建 5 个凭证扩大同一用户的额度；认证失败仍沿用现有全局链行为，不新增专用失败计数或桶。
+
+**本人凭证管理接口**
+
+| 方法与路径 | 准入 | 成功响应 |
+| --- | --- | --- |
+| `POST /auth/credentials` | 有效的本地/OAuth User JWT；PAT、Runner、Service 不允许 | 201，`id/name/createdAt/expiresAt/token` |
+| `GET /auth/credentials` | User JWT 或 PAT，只读本人列表 | 200，`{"items":[...]}`，不含 token 或摘要 |
+| `DELETE /auth/credentials/{id}` | User JWT 或 PAT，只能撤销本人凭证 | 204，可重复撤销，也可撤销当前 PAT |
+
+创建正文为 `{"name":"开发机","expiresInDays":90}`，省略 expiresInDays 使用默认值；不接受用户名、角色、
+权限、密钥或时间戳。目标用户名仅取已认证 `Principal.Subject`；Ops/Admin 也不能通过这些接口管理他人凭证。
+列举、删除不接受正文，所有接口拒绝 Watch，不开放 PUT/PATCH。创建沿用认证 Handler 的 64 KiB 正文上限和
+严格字段校验；业务校验和额度最终由 apiserver 保证。GET/DELETE 继续核验当前用户，跨用户 ID 不会影响目标用户。
+
+业务错误使用 `{"code":"...","error":"..."}`，额度、冲突、存储失败等错误按 apiserver PAT 契约映射；
+调用方的认证及准入错误仍按全局中间件返回，不暴露内部组件认证失败详情。响应设置 `Cache-Control: no-store`。
+POST 超时或响应丢失不自动重试：客户端重新列表，撤销无法获取明文的记录后再显式创建；DELETE 可按同一 ID 重试。
+
+**安全、文档与验收**
+
+- PAT 只通过 HTTPS 的 Authorization 头和受保护的内部认证正文传输，不接受 URL 参数、Cookie 或 Basic PAT。
+  Gateway 不直连 ES；业务透传继续剥离调用方 Authorization，不将 PAT 转发到资源 API。
+- 创建、撤销及认证失败可记录 requestID、已核验用户名、凭证 ID 和结果；不记录 PAT、摘要、认证正文或响应正文，
+  未认证请求的定位信息不能当作已核验身份记入审计。
+- OpenAPI 将 Bearer 描述为 JWT 或 PAT，不再把所有 Bearer 都声明为 JWT；描述新增接口、认证方式限制、有效期、
+  额度、一次性明文和错误。Runner/Service 专属路径不能因此接纳 PAT。
+- 覆盖 JWT/PAT 分流、当前角色变化、OAuth-only 用户、跨用户撤销隔离、PAT 自我撤销、PAT 无法派生新凭证或改密、
+  存储不可用不降级、响应脱敏、限流复用，以及撤销后新请求/Watch 重连拒绝、已建立连接不主动中断的边界。
+
 ### 4.4 RegistrationAndPasswordLogin
 
 本节本地密码登录和注册仅在 OAuth 未启用时可用；启用 OAuth 后，`POST /auth/login` 和 `POST /auth/register` 直接返回 403，不调用 IAM。OAuth 提供方故障不会自动恢复本地入口。
@@ -515,7 +583,8 @@ POST /internal/iam/v1/users/authenticate
 
 ### 4.5 UserResolve
 
-`type=user` 的 token 在完成 4.3 节全部 JWT 校验后执行 UserResolve。`type=runner`、`type=service` 不映射为 User，也不执行 UserResolve；service 按 4.3.1 实时核验 MachineAccount。gateway 使用内部请求读取：
+`type=user` 的 JWT 在完成 4.3 节全部 JWT 校验后执行 UserResolve。PAT 由 IAM 认证同时核验当前 User，
+不重复执行本节查询或 JWT 角色比较。`type=runner`、`type=service` 不映射为 User，也不执行 UserResolve；service 按 4.3.1 实时核验 MachineAccount。gateway 使用内部请求读取：
 
 ```text
 GET /apis/iam.ebs/v1/users/{jwt.sub}
@@ -902,7 +971,9 @@ Gateway 提供对外 API 的 OpenAPI 3.0 JSON 文档，前端展示方式见 [�
 
 #### 身份与权限表达
 
-OpenAPI 的 `securitySchemes` 定义 HTTP Bearer JWT 和 MachineAccount Basic 认证。各操作单独声明认证要求：匿名接口使用空 security，允许匿名或 JWT 的操作列出两种选择，机器账号 token 换取接口使用 Basic。交换正文分别描述 runner 与 service 的输入；注册请求包含 projects/permissions，Project PUT/PATCH、Build POST、Build POST /abort 分别标注所需权限与工程范围，不将其表达为 OAuth scope。Bearer 认证不代表任意主体都可调用。
+OpenAPI 的 `securitySchemes` 定义 HTTP Bearer JWT/PAT 和 MachineAccount Basic 认证，并按
+[个人访问凭证](#personal-access-credentials)标明仅允许登录 JWT 的管理操作。
+各操作单独声明认证要求：匿名接口使用空 security，允许匿名或 Bearer 的操作列出两种选择，机器账号 token 换取接口使用 Basic。交换正文分别描述 runner 与 service 的输入；注册请求包含 projects/permissions，Project PUT/PATCH、Build POST、Build POST /abort 分别标注所需权限与工程范围，不将其表达为 OAuth scope。Bearer 认证不代表任意主体都可调用。
 
 Bearer scheme 只表达令牌格式，不能表达 owner/member、Ops/Admin 或 Runner 任务归属。各操作的 description 应明确允许的身份与对象关系，沿用 5.1 和第四章的规则。文档向所有查看者展示同一接口集合，接口可见不代表调用获授权；不读取当前用户或 Project 数据来动态裁剪文档。
 

@@ -557,8 +557,43 @@
         ],
         "type": "object"
       },
+      "CreatedPersonalCredential": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "token": {
+            "description": "One-time plaintext PAT. Store securely; never log it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "createdAt",
+          "expiresAt",
+          "token"
+        ],
+        "type": "object"
+      },
       "GatewayError": {
         "properties": {
+          "code": {
+            "description": "Stable error code when supplied, including personal credential failures.",
+            "type": "string"
+          },
           "error": {
             "type": "string"
           }
@@ -1035,6 +1070,69 @@
         "required": [
           "currentPassword",
           "newPassword"
+        ],
+        "type": "object"
+      },
+      "PersonalCredential": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "createdAt",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "PersonalCredentialList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PersonalCredential"
+            },
+            "maxItems": 5,
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "PersonalCredentialRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresInDays": {
+            "default": 90,
+            "description": "Omit to use 90 days. Explicit null is invalid.",
+            "maximum": 90,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Trimmed purpose name; no control characters.",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -3433,8 +3531,8 @@
     },
     "securitySchemes": {
       "BearerAuth": {
-        "bearerFormat": "JWT",
-        "description": "User, Runner or service token. Service resource requests require both an exact Project match and the corresponding projects:update, builds:create or builds:abort permission from the current MachineAccount. Empty grants deny resource access; use anonymous requests for public reads.",
+        "bearerFormat": "JWT or PAT",
+        "description": "User JWT or personal access credential (PAT), Runner JWT or service JWT. PATs are verified against IAM on every request using current User roles, without caching or JWT exchange. Invalid PATs return 401 InvalidCredential; IAM failures or invalid responses return 503 CredentialServiceUnavailable, never anonymous access. PATs cannot create credentials, change passwords or PUT/PATCH Users. Use HTTPS; do not send credentials in URLs or cookies. Service resource requests require a Project grant and the corresponding projects:update, builds:create or builds:abort permission from the current MachineAccount. Empty grants deny resource access.",
         "scheme": "bearer",
         "type": "http"
       },
@@ -9907,7 +10005,7 @@
         ]
       },
       "patch": {
-        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. Requires an Admin login JWT; PATs are forbidden for all User updates.",
         "operationId": "patchUser",
         "parameters": [
           {
@@ -10025,7 +10123,7 @@
         ]
       },
       "put": {
-        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Admin only. User reads include Admin accounts; updating or deleting Admin accounts and promoting users to Admin are forbidden. User updates may change permitted profile/scope fields; credentials are managed through /auth. Both runner and service MachineAccounts allow spec.tokenTTLSeconds updates (300–86400 seconds); service accounts also allow spec.projects and spec.permissions updates. Type, metadata and credentials cannot be changed. Updates require the current resourceVersion; stale writes return 409. Token lifetime changes apply only to newly issued tokens; existing token expiry is unchanged. Updated grants apply to subsequent requests, including requests using existing tokens, without cancelling operations already accepted. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata. Requires an Admin login JWT; PATs are forbidden for all User updates.",
         "operationId": "putUser",
         "parameters": [
           {
@@ -10114,7 +10212,7 @@
     },
     "/auth/check": {
       "post": {
-        "description": "Accepts user, Runner and service Bearer tokens. No request body. User tokens require a matching, enabled User with the same scope; missing, disabled or mismatched users return 403. Runner tokens require no account lookup. Service tokens require a live MachineAccount with matching name and service type. Deleted service accounts return 401; recreating a service account with the same name makes unexpired tokens valid again. IAM failures return 503. Does not grant resource permissions.",
+        "description": "Accepts user, Runner and service Bearer tokens. No request body. User tokens require a matching, enabled User with the same scope; missing, disabled or mismatched users return 403. Runner tokens require no account lookup. Service tokens require a live MachineAccount with matching name and service type. Deleted service accounts return 401; recreating a service account with the same name makes unexpired tokens valid again. IAM failures return 503. Does not grant resource permissions. User PATs are also accepted, including with OAuth-only login. Returns the current User role and PAT expiry; invalid PATs return 401 InvalidCredential and unavailable or malformed IAM responses return 503 CredentialServiceUnavailable. No JWT exchange or PAT authentication cache.",
         "operationId": "checkToken",
         "responses": {
           "200": {
@@ -10176,6 +10274,225 @@
           }
         ],
         "summary": "Check a token",
+        "tags": [
+          "Authentication"
+        ]
+      }
+    },
+    "/auth/credentials": {
+      "get": {
+        "description": "User JWT or PAT. Lists only the caller's active credentials, sorted by creation time and ID, without tokens or hashes. No request body. Watch is forbidden. Responses use Cache-Control: no-store. Business failures use {code,error}: InvalidRequest (400), UserUnavailable (403), UserNotFound (404), CredentialLimitExceeded or CredentialConflict (409), CredentialServiceUnavailable (503). Internal authentication failures are not exposed.",
+        "operationId": "listPersonalCredentials",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalCredentialList"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "404": {
+            "$ref": "#/components/responses/404"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          },
+          "410": {
+            "$ref": "#/components/responses/410"
+          },
+          "413": {
+            "$ref": "#/components/responses/413"
+          },
+          "415": {
+            "$ref": "#/components/responses/415"
+          },
+          "422": {
+            "$ref": "#/components/responses/422"
+          },
+          "429": {
+            "$ref": "#/components/responses/429"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          },
+          "502": {
+            "$ref": "#/components/responses/502"
+          },
+          "503": {
+            "$ref": "#/components/responses/503"
+          },
+          "504": {
+            "$ref": "#/components/responses/504"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "listPersonalCredentials",
+        "tags": [
+          "Authentication"
+        ]
+      },
+      "post": {
+        "description": "Requires a local or OAuth User login JWT; PAT, Runner and Service tokens are forbidden. Creates a credential for the authenticated user only. At most five active credentials; default lifetime 90 days, optionally 1–90 days. Returns the plaintext token once after a confirmed write. No automatic retry after an unknown write result: list, revoke the inaccessible credential, then explicitly create again. Watch is forbidden. Responses use Cache-Control: no-store. Business failures use {code,error}: InvalidRequest (400), UserUnavailable (403), UserNotFound (404), CredentialLimitExceeded or CredentialConflict (409), CredentialServiceUnavailable (503). Internal authentication failures are not exposed.",
+        "operationId": "createPersonalCredential",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonalCredentialRequest"
+              }
+            }
+          },
+          "description": "Strict JSON object, at most 64 KiB; unknown fields or oversized input return 400. Omit expiresInDays for the default; null is invalid.",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedPersonalCredential"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "404": {
+            "$ref": "#/components/responses/404"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          },
+          "410": {
+            "$ref": "#/components/responses/410"
+          },
+          "413": {
+            "$ref": "#/components/responses/413"
+          },
+          "415": {
+            "$ref": "#/components/responses/415"
+          },
+          "422": {
+            "$ref": "#/components/responses/422"
+          },
+          "429": {
+            "$ref": "#/components/responses/429"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          },
+          "502": {
+            "$ref": "#/components/responses/502"
+          },
+          "503": {
+            "$ref": "#/components/responses/503"
+          },
+          "504": {
+            "$ref": "#/components/responses/504"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "createPersonalCredential",
+        "tags": [
+          "Authentication"
+        ]
+      }
+    },
+    "/auth/credentials/{id}": {
+      "delete": {
+        "description": "User JWT or PAT. Revokes only the caller's credential; repeated deletion and self-revocation are supported. No request body. Subsequent requests and Watch reconnects require fresh authentication; already established Watch streams are not terminated. Watch is forbidden. Responses use Cache-Control: no-store. Business failures use {code,error}: InvalidRequest (400), UserUnavailable (403), UserNotFound (404), CredentialLimitExceeded or CredentialConflict (409), CredentialServiceUnavailable (503). Internal authentication failures are not exposed.",
+        "operationId": "deletePersonalCredential",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Credential is absent; no response body."
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "404": {
+            "$ref": "#/components/responses/404"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          },
+          "410": {
+            "$ref": "#/components/responses/410"
+          },
+          "413": {
+            "$ref": "#/components/responses/413"
+          },
+          "415": {
+            "$ref": "#/components/responses/415"
+          },
+          "422": {
+            "$ref": "#/components/responses/422"
+          },
+          "429": {
+            "$ref": "#/components/responses/429"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          },
+          "502": {
+            "$ref": "#/components/responses/502"
+          },
+          "503": {
+            "$ref": "#/components/responses/503"
+          },
+          "504": {
+            "$ref": "#/components/responses/504"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "deletePersonalCredential",
         "tags": [
           "Authentication"
         ]
@@ -11229,7 +11546,7 @@
     },
     "/auth/users/{name}/password": {
       "put": {
-        "description": "Only the user named in the path may change their password; current password is required.",
+        "description": "Requires a User login JWT, not a PAT. Only the user named in the path may change their password; current password is required.",
         "operationId": "changePassword",
         "parameters": [
           {

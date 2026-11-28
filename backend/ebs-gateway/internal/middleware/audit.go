@@ -22,6 +22,7 @@ func Audit(now func() time.Time) gin.HandlerFunc {
 		klog.InfoS("HTTP request", "method", method, "path", path, "status", c.Writer.Status(),
 			"response_bytes", c.Writer.Size(), "latency_ms", now().Sub(started).Milliseconds(),
 			"client_ip", c.ClientIP(), "user", subject, "request_id", c.Writer.Header().Get("X-Request-ID"),
+			"authentication_method", user.AuthenticationMethod, "credential_id", user.CredentialID,
 			"service_project", c.GetString("serviceProject"), "service_permission", c.GetString("servicePermission"),
 			"service_authorization", c.GetString("serviceAuthorization"))
 	}

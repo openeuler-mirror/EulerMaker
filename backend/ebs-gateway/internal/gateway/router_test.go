@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,237 @@ type testAPI struct {
 	oauthHandler *oauth.Handler
 	tokens       *identity.Tokens
 	now          func() time.Time
+}
+
+func TestPersonalCredentialRoutes(t *testing.T) {
+	var audit bytes.Buffer
+	state := klog.CaptureState()
+	t.Cleanup(state.Restore)
+	loggingFlags := flag.NewFlagSet("logging", flag.ContinueOnError)
+	klog.InitFlags(loggingFlags)
+	for name, value := range map[string]string{"logtostderr": "false", "alsologtostderr": "false", "stderrthreshold": "FATAL", "one_output": "true"} {
+		if err := loggingFlags.Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	klog.SetOutput(&audit)
+	id := strings.Repeat("a", 32)
+	pat := "ebs_pat_v1.YWxpY2U." + id + "." + base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	now := time.Unix(1790000000, 0).UTC()
+	scope, revoked, unavailable := "ebs:admin", false, false
+	lookups, operations := 0, 0
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("Authorization") != "" {
+			t.Fatal("caller token leaked upstream")
+		}
+		status, body := 200, any(map[string]any{})
+		metadata := map[string]any{"id": id, "name": "CLI", "createdAt": now, "expiresAt": now.Add(90 * 24 * time.Hour)}
+		switch r.URL.Path {
+		case "/internal/iam/v1/users/authenticate":
+			lookups++
+			var input map[string]string
+			if json.NewDecoder(r.Body).Decode(&input) != nil || input["method"] != "credential" || input["token"] != pat {
+				t.Fatal("unexpected credential authentication request")
+			}
+			body = map[string]any{"authenticated": true, "username": "alice", "uid": "alice-uid", "scopes": []string{scope}, "credentialID": id, "expiresAt": now.Add(90 * 24 * time.Hour)}
+			if revoked {
+				status, body = 401, map[string]string{"code": "InvalidCredential", "error": "PRIVATE"}
+			}
+			if unavailable {
+				status, body = 503, map[string]string{"code": "CredentialServiceUnavailable", "error": "PRIVATE"}
+			}
+		case "/apis/iam.ebs/v1/users/alice", "/apis/iam.ebs/v1/users/bob":
+			lookups++
+			name := strings.TrimPrefix(r.URL.Path, "/apis/iam.ebs/v1/users/")
+			body = map[string]any{"metadata": map[string]string{"name": name}, "spec": map[string]any{"enabled": true, "scopes": []string{scope}}}
+		case "/apis/iam.ebs/v1/machineaccounts/service":
+			body = map[string]any{"metadata": map[string]string{"name": "service"}, "spec": map[string]string{"type": "service"}}
+		case "/internal/iam/v1/users/alice/credentials":
+			operations++
+			if r.Method == "POST" {
+				status, body = 201, metadata
+				metadata["token"] = pat
+			} else {
+				metadata["secretHash"] = "PRIVATE"
+				metadata["token"] = "PRIVATE"
+				body = map[string]any{"items": []any{metadata}}
+			}
+		case "/internal/iam/v1/users/alice/credentials/" + id:
+			operations++
+			revoked, status = true, 204
+		case "/internal/iam/v1/users/bob/credentials/" + id:
+			operations++
+			status = 204 // Deleting an absent credential in Bob's scope must not revoke Alice's.
+		case "/apis/ebs/v1/projects":
+			operations++
+			body = map[string]any{"items": []any{}}
+		default:
+			t.Fatalf("unexpected upstream operation %s %s", r.Method, r.URL.Path)
+		}
+		data, _ := json.Marshal(body)
+		if status == 204 {
+			data = nil
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(data))}, nil
+	})
+	api := newTestAPIWithConfig(t, transport, 200, oauth.Config{PublicBaseURL: "https://ebs.example.com"})
+	router := api.Router()
+	jwt, _ := api.tokens.Issue("alice", identity.UserType, identity.AdminScope, time.Hour, now)
+	bobJWT, _ := api.tokens.Issue("bob", identity.UserType, identity.AdminScope, time.Hour, now)
+	runner, _ := api.tokens.Issue("runner", identity.RunnerType, "", time.Hour, now)
+	service, _ := api.tokens.Issue("service", identity.ServiceType, "", time.Hour, now)
+	call := func(method, path, token, body string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != want || strings.Contains(rec.Body.String(), "PRIVATE") {
+			t.Fatalf("%s %s: status=%d want=%d", method, path, rec.Code, want)
+		}
+		return rec
+	}
+	created := call("POST", "/auth/credentials", jwt, `{"name":"CLI"}`, 201)
+	if !strings.Contains(created.Body.String(), pat) || created.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("missing one-time token or no-store header")
+	}
+	before := lookups
+	listed := call("GET", "/auth/credentials", pat, "", 200)
+	if lookups != before+1 || strings.Contains(listed.Body.String(), "token") || strings.Contains(listed.Body.String(), "secretHash") {
+		t.Fatal("PAT queried User twice or list exposed secret fields")
+	}
+	for _, currentScope := range []string{"ebs:admin", "ebs:user", "ebs:ops"} {
+		scope = currentScope
+		checked := call("POST", "/auth/check", pat, "", 200)
+		if !strings.Contains(checked.Body.String(), currentScope) || !strings.Contains(checked.Body.String(), now.Add(90*24*time.Hour).Format(time.RFC3339)) {
+			t.Fatal("check did not use current IAM role and PAT expiry")
+		}
+	}
+	scope = "ebs:admin"
+	before = operations
+	for _, tc := range []struct {
+		method, path, token, body string
+		status                    int
+	}{
+		{"POST", "/auth/credentials", pat, `{"name":"derived"}`, 403},
+		{"PUT", "/auth/users/alice/password", pat, `{}`, 403},
+		{"PUT", "/apis/iam.ebs/v1/users/bob", pat, `{}`, 403},
+		{"PATCH", "/apis/iam.ebs/v1/users/bob", pat, `{}`, 403},
+		{"POST", "/auth/credentials", runner, `{}`, 403},
+		{"GET", "/auth/credentials", service, "", 403},
+		{"DELETE", "/auth/credentials/" + id, runner, "", 403},
+		{"GET", "/auth/credentials", "", "", 401},
+		{"GET", "/auth/credentials?watch=true", pat, "", 403},
+		{"PUT", "/auth/credentials", jwt, `{}`, 404},
+		{"PATCH", "/auth/credentials/" + id, jwt, `{}`, 404},
+		{"GET", "/auth/credentials", pat, `{}`, 400},
+		{"DELETE", "/auth/credentials/" + id, pat, `{}`, 400},
+		{"DELETE", "/auth/credentials/invalid", pat, "", 400},
+		{"POST", "/auth/credentials", jwt, `{"name":"CLI","username":"bob"}`, 400},
+		{"POST", "/auth/credentials", jwt, `{"name":"CLI","scopes":["ebs:admin"]}`, 400},
+		{"POST", "/auth/credentials", jwt, `{}` + strings.Repeat(" ", 64<<10), 400},
+		{"GET", "/apis/ebs/v1/service-endpoints", pat, "", 403},
+	} {
+		call(tc.method, tc.path, tc.token, tc.body, tc.status)
+	}
+	if operations != before {
+		t.Fatal("denied request reached a business operation")
+	}
+	call("DELETE", "/auth/credentials/"+id, bobJWT, "", 204)
+	call("POST", "/auth/check", pat, "", 200)
+	call("GET", "/apis/ebs/v1/projects", pat, "", 200)
+	call("DELETE", "/auth/credentials/"+id, pat, "", 204)
+	call("POST", "/auth/check", pat, "", 401)
+	call("GET", "/apis/ebs/v1/projects", pat, "", 401)
+	call("GET", "/apis/ebs/v1/projects/demo/jobs?watch=true", pat, "", 401)
+	call("DELETE", "/auth/credentials/"+id, jwt, "", 204)
+	unavailable = true
+	call("GET", "/apis/ebs/v1/projects", pat, "", 503)
+	before = lookups
+	call("GET", "/apis/ebs/v1/projects", "ebs_pat_v2.bad", "", 401)
+	if before != lookups {
+		t.Fatal("invalid PAT format reached IAM")
+	}
+	klog.Flush()
+	if strings.Contains(audit.String(), pat) || strings.Contains(audit.String(), "PRIVATE") || !strings.Contains(audit.String(), `authentication_method="credential"`) {
+		t.Fatal("audit leaked credentials or omitted authentication method")
+	}
+}
+
+func TestPersonalCredentialWatchRevocation(t *testing.T) {
+	var revoked atomic.Bool
+	id := strings.Repeat("c", 32)
+	pat := "ebs_pat_v1.YWxpY2U." + id + "." + base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	now := time.Unix(1790000000, 0)
+	readEnd, writeEnd := io.Pipe()
+	defer readEnd.Close()
+	defer writeEnd.Close()
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		status, body := 200, ""
+		switch r.URL.Path {
+		case "/internal/iam/v1/users/authenticate":
+			if revoked.Load() {
+				status, body = 401, `{"code":"InvalidCredential"}`
+			} else {
+				data, _ := json.Marshal(map[string]any{"authenticated": true, "username": "alice", "uid": "uid", "scopes": []string{"ebs:user"}, "credentialID": id, "expiresAt": now.Add(90 * 24 * time.Hour)})
+				body = string(data)
+			}
+		case "/apis/ebs/v1/projects/demo":
+			body = `{"metadata":{"name":"demo","labels":{"ebs.io/owner-user":"alice"}}}`
+		case "/apis/ebs/v1/projects/demo/jobs":
+			if r.URL.Query().Get("watch") != "true" || r.Header.Get("Authorization") != "" {
+				t.Error("invalid forwarded Watch")
+			}
+			go func() {
+				defer writeEnd.Close()
+				_, _ = io.WriteString(writeEnd, "{\"type\":\"ADDED\"}\n")
+				revoked.Store(true)
+				_, _ = io.WriteString(writeEnd, "{\"type\":\"MODIFIED\"}\n")
+			}()
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: readEnd}, nil
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	router := api.Router()
+	for _, want := range []int{200, 401} {
+		req := httptest.NewRequest("GET", "/apis/ebs/v1/projects/demo/jobs?watch=true", nil)
+		req.Header.Set("Authorization", "Bearer "+pat)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != want || (want == 200 && !strings.Contains(rec.Body.String(), "MODIFIED")) {
+			t.Fatalf("Watch status=%d want=%d", rec.Code, want)
+		}
+	}
+}
+
+func TestPersonalCredentialSharesUserRateLimit(t *testing.T) {
+	now := time.Unix(1790000000, 0)
+	id := strings.Repeat("b", 32)
+	pat := "ebs_pat_v1.YWxpY2U." + id + "." + base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	api := newTestAPIWithConfig(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
+		if r.URL.Path == "/internal/iam/v1/users/authenticate" {
+			data, _ := json.Marshal(map[string]any{"authenticated": true, "username": "alice", "uid": "uid", "scopes": []string{"ebs:user"}, "credentialID": id, "expiresAt": now.Add(90 * 24 * time.Hour)})
+			body = string(data)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}), 1, oauth.Config{})
+	jwt, _ := api.tokens.Issue("alice", identity.UserType, identity.UserScope, time.Hour, now)
+	router := api.Router()
+	for i, token := range []string{jwt, pat} {
+		req := httptest.NewRequest("POST", "/auth/check", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if (i == 0 && rec.Code != 200) || (i == 1 && rec.Code != 429) {
+			t.Fatalf("request %d status=%d", i, rec.Code)
+		}
+	}
 }
 
 func TestAuthenticationMode(t *testing.T) {

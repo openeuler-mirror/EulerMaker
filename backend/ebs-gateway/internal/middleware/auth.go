@@ -65,6 +65,21 @@ func (a *Auth) verifyToken(header string) (identity.Principal, bool) {
 }
 
 func (a *Auth) verifyAccess(c *gin.Context) bool {
+	parts := strings.Fields(c.GetHeader("Authorization"))
+	if len(parts) == 2 && parts[0] == "Bearer" && strings.HasPrefix(parts[1], "ebs_pat_") {
+		c.Header("Cache-Control", "no-store")
+		who, err := a.iam.AuthenticateUserCredential(c.Request.Context(), parts[1], a.now())
+		if err != nil {
+			failure, ok := err.(*iamclient.CredentialError)
+			if !ok {
+				failure = iamclient.CredentialUnavailable()
+			}
+			c.AbortWithStatusJSON(failure.Status, gin.H{"code": failure.Code, "error": failure.Code})
+			return false
+		}
+		c.Set(principalKey, who)
+		return true
+	}
 	who, ok := a.verifyToken(c.GetHeader("Authorization"))
 	if !ok {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
