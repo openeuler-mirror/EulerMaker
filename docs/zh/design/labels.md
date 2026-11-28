@@ -43,6 +43,9 @@ metadata:
 
 Project 创建后，Gateway 不允许任何身份修改、删除或清空 owner 标签；所有权转移不通过 Gateway 提供。
 
+apiserver 校验 owner 存在及不可变，并按 owner 统计当前工程数量；它不执行用户访问授权。新注册用户配额
+显式设为 20，缺失配额不限制；Gateway 的 Admin 配额管理待实现，见[用户工程数量配额](ebs-apiserver.md#user-project-quota)。
+
 ### 3.2 成员
 
 ```yaml

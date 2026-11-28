@@ -64,7 +64,7 @@ User 由 `ebs-apiserver` 的用户管理插件提供，建议使用独立 API gr
 /apis/iam.ebs/v1/users/{name}
 ```
 
-`ebs-apiserver` 将 `ebs.io/owner-user` 和 `ebs.io/member-user.*` 视为普通 labels，只负责存储、查询和 label selector，不解释用户权限语义，也不执行 Project 用户权限校验。权限 label 的格式校验、注入、修改保护和访问控制全部由 gateway 完成。
+`ebs-apiserver` 不解释 owner/member 的用户授权语义，也不执行 Project 用户访问权限校验。权限 label 的注入和访问控制由 Gateway 完成；工程配额由 apiserver 按 owner 执行，并校验 owner 存在及不可变，见[用户工程数量配额](ebs-apiserver.md#user-project-quota)。
 
 最小 User 模型：
 
@@ -90,6 +90,20 @@ spec:
 - apiserver IAM 模块验证用户密码或 MachineAccount client secret，gateway 签发 JWT；IAM资源保存gateway鉴权需要的主体状态和token TTL。
 - 普通用户通过公开注册接口创建自己的 User 和初始密码。
 - gateway 每次 UserResolve 都读取 User API，不缓存用户状态。
+
+#### 用户工程配额（待实现）
+
+`User.spec.quota.projects` 定义用户拥有的工程数量上限，新注册用户显式设为 20，缺失时不限制；首版不包含构建资源或存储配额。
+Gateway 创建工程时仍注入当前用户为 owner，apiserver 按 owner 查询数量并校验软配额，允许并发创建超额；Gateway 不通过
+预先 List/count 决定是否放行，也不将额度写进 JWT/PAT 或缓存为授权结果。
+
+仅 Admin 可通过现有 User PUT/PATCH 修改 `spec.quota`，Ops、普通用户、Runner 和 Service 不可修改。
+管理员 User 的更新保护增加一个窄例外：允许 Admin 仅修改 `spec.quota`，其余字段保持原值；删除管理员、
+修改其角色或禁用状态仍被拒绝。非管理员 User 的现有允许字段增加 `spec.quota`。
+完整候选对象比较适用于 PUT、Merge Patch 和 JSON Patch，不能通过父路径替换或混合更新绕过限制。
+
+密码/OAuth 注册不接收自定义配额；错误响应原样透传 apiserver 的额度拒绝、校验和冲突信息。
+工程删除仅受理时仍计入数量，实际删除且 ES 查询可见后才不再计入。
 
 ### 3.2 业务资源归属
 
@@ -673,7 +687,7 @@ Build DELETE 仅允许所属 Project 的 owner 调用，按 Token subject 与 Pr
 
 Build 删除的状态资格统一由 [apiserver 删除入口](ebs-apiserver.md#build-删除-finalizer) 校验，Gateway 原样转发 `409 Conflict`；具备删除权限不代表当前状态允许删除。
 
-矩阵中的权限还受 4.9 节完整对象比较和字段约束。User 只能通过 `/auth/register` 创建；Admin 可以读取但不能修改或删除 `spec.scopes=["ebs:admin"]` 的 User，也不能设置或重置其他用户的密码。Runner 对 Job `/status` 的更新不得改变 `status.runner`。
+矩阵中的权限还受 4.9 节完整对象比较和字段约束。User 通过专用注册入口创建；Admin 可以读取但不能修改或删除 `spec.scopes=["ebs:admin"]` 的 User，也不能设置或重置其他用户的密码。待实现的工程配额增加仅修改管理员 User `spec.quota` 的例外，不放宽其他字段保护。Runner 对 Job `/status` 的更新不得改变 `status.runner`。
 
 Ops 和 Admin 可通过现有 `PATCH /apis/ebs/v1/runners/{name}/status` 将 Runner 标记为 `Evicted`，无需独立驱逐接口。普通用户不允许该操作（403），匿名请求返回 401。Gateway 原样转发 apiserver 的响应，包括 404 和 resourceVersion 冲突的 409。
 
@@ -794,7 +808,8 @@ metadata.ownerReferences
 | Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch` | 路径名称必须等于 token 的 `sub`；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
 | Runner 更新自身 `/status` | Gateway 原样转发 PUT/PATCH，由 apiserver 校验 Runner 状态 | 路径名称必须等于 token 的 `sub`；apiserver 保留旧 spec 和受保护 metadata，保留请求的 resourceVersion 用于版本冲突校验 |
 | Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.result`、`status.startTime`、`status.endTime`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `sub`；Runner 不得修改 `status.runner`；脚本结果及 missingDeps 的使用范围由 apiserver 校验 |
-| Admin 更新非管理员 User | `metadata.labels`、`metadata.annotations`、`spec.enabled`、`spec.scopes`、`spec.displayName`、`spec.email` | 旧对象和候选对象的 `spec.scopes` 均不得为 `["ebs:admin"]`；候选 scopes 仍由 apiserver 校验为单一合法 User scope |
+| Admin 更新非管理员 User | `metadata.labels`、`metadata.annotations`、`spec.enabled`、`spec.scopes`、`spec.displayName`、`spec.email`；配额方案增加 `spec.quota`（待实现） | 旧对象和候选对象的 `spec.scopes` 均不得为 `["ebs:admin"]`；候选 scopes 仍由 apiserver 校验为单一合法 User scope |
+| Admin 更新管理员 User 配额（待实现） | 仅 `spec.quota` | 其他字段不变，不允许删除管理员 User |
 
 表中的允许字段是上限；状态值、不可变 spec 字段和资源自身校验规则仍由 apiserver 执行。Runner 的 `instanceID` 不可变、type/arch labels 一致性和 `resourceVersion` 冲突也只由 apiserver 判定，gateway 不重复实现。没有列入允许集合的任何差异都返回 403。gateway 应在审计日志中记录请求方法、原始 patch 类型、旧/新 `resourceVersion`、被拒绝的 JSON Pointer 路径和拒绝原因，但不得记录密码、完整对象或完整 patch。
 
@@ -929,7 +944,7 @@ Service Token 的资源权限仅按 4.3.1，不继承下表中的公开读取或
 | `/apis/ebs/v1/configs[/{name}]` | 仅 Ops/Admin 可读 | 仅 Ops/Admin 可写；内置 `build-target`、`build-resource`、`services` 不可删除 |
 | `/apis/ebs/v1/service-endpoints` | 仅 Runner Token 可读取各实例的 Runner 地址投影 | 无 |
 | `/apis/ebs/v1/scripts[/{name}]` | 已认证 User（含 Ops/Admin）和 Runner 可读取、列表；Service 禁止 | 仅 Ops/Admin 可创建、修改、删除 |
-| `/apis/iam.ebs/v1/users[/{name}]`、`/machineaccounts[/{name}]` | 仅 Admin；User 包含管理员对象 | 仅 Admin 可修改/删除非管理员 User、删除 MachineAccount、更新机器账号 Token 有效期及 service 账号的工程范围和权限；创建分别使用 `/auth/register`、`/auth/machineaccounts` |
+| `/apis/iam.ebs/v1/users[/{name}]`、`/machineaccounts[/{name}]` | 仅 Admin；User 包含管理员对象 | 仅 Admin 可修改/删除非管理员 User、删除 MachineAccount、更新机器账号 Token 有效期及 service 账号的工程范围和权限；配额方案额外允许仅修改管理员 User 的 `spec.quota`（待实现）；创建使用专用注册入口 |
 
 未列出的资源、子资源和 `/api/*` 别名不对外开放；匿名不能 watch 或写入。Project 范围资源的原生全局路径也不开放。完整的角色差异、Runner 字段限制和 Job 中止特例以第 4.8 节为准。
 
@@ -1132,7 +1147,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | MachineAccount提升权限 | 按已认证账号类型签发 Runner/Service Token；调用方不能在换 Token 时声明权限、主体或 TTL，service 逐请求核验账号、工程范围和显式操作权限 |
 | 已删除或禁用的用户访问 | UserResolve 返回 403，不进入业务鉴权 |
 | User API 不可用 | 返回 503，不默认放行 |
-| Admin 越权修改/删除管理员 User | User GET/list 允许读取管理员；DELETE 先校验旧对象，PUT/PATCH 校验旧对象及候选对象，保护管理员角色 |
+| Admin 越权修改/删除管理员 User | User GET/list 允许读取管理员；DELETE 保护管理员；PUT/PATCH 比较完整候选对象，配额方案仅允许修改 `spec.quota`（待实现），混合修改仍拒绝 |
 | 客户端伪造 Project owner | 普通用户、Ops 和 Admin 创建 Project 时统一将 `metadata.labels["ebs.io/owner-user"]` 设置为 JWT `sub` |
 | 客户端越权修改 Project members | 仅 owner user 可以修改 member user labels，新增成员必须是已启用 User |
 | 用户写入未授权 Project | gateway 查询 Project owner/member labels，不匹配则返回 403；公开 `GET` 不受该写权限限制 |
@@ -1162,7 +1177,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | ProjectAuthz | 普通用户和 Ops 按 owner/member 关系操作 Project 与子资源；公开读取不按 owner/member 过滤；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入 |
 | ServiceAuthz | 工程范围与 projects:update/builds:create/builds:abort 独立授权、空授权及跨工程拒绝、匿名读不继承、owner及元数据保护、门禁标签保护、JSON Patch版本冲突、Build中止复用原协议、账号删除及同名重建后按当前授权处理、IAM异常拒绝、不查询同名User |
 | Admin | 普通 user、ops、runner 和 service 均不能管理 MachineAccount；Gateway 覆盖 Admin 准入、原始方法/正文/Content-Type/查询参数透传、无预读和上游错误透传；apiserver 覆盖有效期范围、字段保护、版本冲突及凭据不变 |
-| AdminUser | Admin 可 get/list 所有 User，仅能 update/patch/delete 非管理员 User；禁止 create、把用户提升为 `ebs:admin`、修改/删除管理员 User 和重置他人密码 |
+| AdminUser | Admin 可 get/list 所有 User，update/patch/delete 非管理员 User；配额方案允许仅修改管理员 User 的 `spec.quota`（待实现）；禁止 create、提升管理员、修改管理员其他字段、删除管理员和重置他人密码 |
 | Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许集群级 Config 写操作及 Runner 管理（不含创建和 Runner 范围 Job list/watch，包含普通对象更新、`/status`，不开放 Runner 对象 Watch） |
 | ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |
 | AccessLabels | 普通用户、Ops 和 Admin 创建 Project 时统一写入当前 Token 的 owner user label；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |

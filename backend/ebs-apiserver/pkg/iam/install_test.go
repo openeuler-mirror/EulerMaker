@@ -90,6 +90,9 @@ func TestRegisterCreatesEnabledUserAndCredential(t *testing.T) {
 	if len(users.credential) == 0 {
 		t.Fatal("credential was not created")
 	}
+	if q := users.user.Spec.Quota; q == nil || q.Projects == nil || *q.Projects != 20 {
+		t.Fatalf("registration quota = %+v", q)
+	}
 }
 
 func TestRegisterAdminReceivesAdminScope(t *testing.T) {
@@ -107,6 +110,21 @@ func TestRegisterAdminReceivesAdminScope(t *testing.T) {
 	}
 	if users.user == nil || len(users.user.Spec.Scopes) != 1 || users.user.Spec.Scopes[0] != "ebs:admin" {
 		t.Fatalf("admin registration has wrong scope: %#v", users.user)
+	}
+}
+
+func TestRegisterRejectsCallerQuota(t *testing.T) {
+	users := &fakeUserStorage{}
+	h := &Handler{users: users}
+	req := httptest.NewRequest(http.MethodPost, "/internal/iam/v1/users/register", strings.NewReader(
+		`{"username":"alice","password":"correct password","quota":{"projects":1000}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	response := restful.NewResponse(rec)
+	response.SetRequestAccepts(restful.MIME_JSON)
+	h.register(restful.NewRequest(req), response)
+	if rec.Code != http.StatusBadRequest || users.user != nil {
+		t.Fatalf("caller quota registration: status=%d userCreated=%t", rec.Code, users.user != nil)
 	}
 }
 

@@ -271,10 +271,23 @@ Ops 和 Admin 均可进入运维页面查看 Runner，并编辑标签和污点�
 
 Admin 用户管理页支持：
 
-- 列出和读取非 Admin User。
-- 修改 `enabled`、单一 scope、`displayName` 和 `email`。
+- 列出和读取 User，包括 Admin User。
+- 修改非 Admin User 的 `enabled`、单一 scope、`displayName` 和 `email`。
 - 删除非 Admin User。
 - 修改自己的密码。
+
+**工程数量配额管理（待实现）**
+
+- Admin 用户管理页增加“工程数量上限”，对应 `User.spec.quota.projects`；新注册用户为 20，未配置显示“未限制”。
+  仅接受非负整数，0 显示为“禁止新建工程”；恢复默认值显式写入 20，不通过删除字段恢复。
+- 普通账号沿用编辑入口；管理员账号提供独立的“编辑配额”入口，只提交 `spec.quota`，原有资料编辑和
+  删除操作仍禁用。Ops 和普通用户不展示配额管理能力，后端授权不依赖按钮显隐。
+- 保存前读取最新 User，使用 UID/resourceVersion 确认对象并提交；409 时保留输入，提示刷新，不自动覆盖。
+  提示下调不会删除已有工程，仅限制后续创建。
+- 工程创建表单和 YAML 导入统一显示 apiserver 返回的 `ProjectQuotaExceeded` 提示，说明达到 owner 的
+  工程数量上限，可删除不再需要的工程或联系 Admin 调整额度；不自动重试，不依赖前端列表数量判断是否超额。
+- 首版展示配置上限，不新增实时用量 API，也不把分页工程列表的条数当成准确用量。字段和计数契约见
+  [用户工程数量配额](ebs-apiserver.md#user-project-quota)。测试覆盖默认值、0、编辑权限、管理员窄例外、冲突及创建失败提示。
 
 User 只能通过 `/auth/register` 创建。前端不提供“管理员创建 User 并代设初始密码”的流程，因为 Gateway 的 User API 不接受 POST，Admin 也不能重置其他用户的密码。
 

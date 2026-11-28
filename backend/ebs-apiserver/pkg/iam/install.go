@@ -159,10 +159,24 @@ func (h *Handler) register(req *restful.Request, resp *restful.Response) {
 	if body.Username == "admin" {
 		scope = "ebs:admin"
 	}
+	projectQuota := iamv1.DefaultProjectQuota
 	user := &iamv1.User{
-		TypeMeta:   metav1.TypeMeta{APIVersion: iamv1.SchemeGroupVersion.String(), Kind: "User"},
-		ObjectMeta: metav1.ObjectMeta{Name: body.Username},
-		Spec:       iamv1.UserSpec{Enabled: &enabled, Scopes: []string{scope}, DisplayName: body.DisplayName, Email: body.Email},
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: iamv1.SchemeGroupVersion.String(),
+			Kind:       "User",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: body.Username,
+		},
+		Spec: iamv1.UserSpec{
+			Enabled:     &enabled,
+			Scopes:      []string{scope},
+			DisplayName: body.DisplayName,
+			Email:       body.Email,
+			Quota: &iamv1.UserQuota{
+				Projects: &projectQuota,
+			},
+		},
 	}
 	credentialData, err := credential.NewPasswordCredential(body.Password)
 	if err != nil {

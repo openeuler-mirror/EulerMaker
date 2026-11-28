@@ -193,6 +193,9 @@ func TestOAuthRegistrationAndAuthentication(t *testing.T) {
 	doc := f.userDocument(t, "admin")
 	var account iamv1.User
 	_ = json.Unmarshal(doc.Data, &account)
+	if q := account.Spec.Quota; q == nil || q.Projects == nil || *q.Projects != 20 {
+		t.Fatalf("OAuth registration quota = %+v", q)
+	}
 	service := oauthService{client: f.client}
 	claim, err := service.getClaim(context.Background(), identityKey(oauthIdentity{"https://provider.example.com", "123"}))
 	if err != nil {
@@ -227,6 +230,7 @@ func TestOAuthRegistrationAndAuthentication(t *testing.T) {
 func TestOAuthValidatesBeforeStorage(t *testing.T) {
 	for _, body := range []string{
 		`{"method":"unknown"}`, `{"method":null}`, `{"method":"oauth","externalIdentity":null}`,
+		strings.TrimSuffix(oauthBody("alice"), "}") + `,"quota":{"projects":1000}}`,
 		strings.Replace(oauthBody("alice"), `"alice"`, `"INVALID"`, 1),
 		strings.Replace(oauthBody("alice"), `"123"`, `"bad\nsubject"`, 1),
 		strings.Replace(oauthBody("alice"), `"123"`, `"\ud800"`, 1),

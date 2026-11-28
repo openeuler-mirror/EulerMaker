@@ -61,6 +61,47 @@ func TestExists(t *testing.T) {
 	}
 }
 
+func TestCount(t *testing.T) {
+	query := map[string]interface{}{"match_all": map[string]interface{}{}}
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      string
+		count     int64
+		wantError bool
+	}{
+		{"empty", 200, `{"count":0,"_shards":{"failed":0}}`, 0, false},
+		{"matching", 200, `{"count":20,"_shards":{"failed":0}}`, 20, false},
+		{"unavailable", 503, `{"error":"unavailable"}`, 0, true},
+		{"partial", 200, `{"count":19,"_shards":{"failed":1}}`, 0, true},
+		{"missing count", 200, `{"_shards":{"failed":0}}`, 0, true},
+		{"missing shard status", 200, `{"count":19}`, 0, true},
+		{"negative count", 200, `{"count":-1,"_shards":{"failed":0}}`, 0, true},
+		{"malformed", 200, `{`, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewClientForTesting("http://elasticsearch", &http.Client{Transport: roundTripFunc(
+				func(req *http.Request) (*http.Response, error) {
+					if req.Method != http.MethodPost || req.URL.Path != "/ebs-projects/_count" {
+						t.Fatalf("unexpected request: %s %s", req.Method, req.URL)
+					}
+					var body map[string]interface{}
+					if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(body, map[string]interface{}{"query": query}) {
+						t.Fatalf("unexpected count body: %#v", body)
+					}
+					return response(tc.status, tc.body), nil
+				})})
+			count, err := client.Count(context.Background(), "project", query)
+			if count != tc.count || (err != nil) != tc.wantError {
+				t.Fatalf("Count = %d, %v; want %d, error=%v", count, err, tc.count, tc.wantError)
+			}
+		})
+	}
+}
+
 func TestCreateUsesCreateOnlyAndRefresh(t *testing.T) {
 	var requestPath string
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

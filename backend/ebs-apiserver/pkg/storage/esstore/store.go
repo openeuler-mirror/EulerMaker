@@ -502,6 +502,22 @@ func (s *Store) Exists(ctx context.Context, options *internalversion.ListOptions
 	return exists, nil
 }
 
+// Count applies the resource selectors without pagination or object decoding.
+func (s *Store) Count(ctx context.Context, options *internalversion.ListOptions) (int64, error) {
+	if options == nil {
+		options = &internalversion.ListOptions{}
+	}
+	query, err := selectorQuery(s.resourceName, s.requestNamespace(ctx), options)
+	if err != nil {
+		return 0, apierrors.NewBadRequest(err.Error())
+	}
+	count, err := s.client.Count(ctx, s.resourceName, query)
+	if err != nil {
+		return 0, s.apiError(err, "")
+	}
+	return count, nil
+}
+
 func (s *Store) List(ctx context.Context, options *internalversion.ListOptions) (runtime.Object, error) {
 	if options == nil {
 		options = &internalversion.ListOptions{}

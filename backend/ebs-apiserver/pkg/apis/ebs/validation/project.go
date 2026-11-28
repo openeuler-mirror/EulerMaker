@@ -100,6 +100,9 @@ func ValidateProjectBuildTargets(project *ebsv1.Project, content *ebsv1.BuildTar
 
 func ValidateProjectUpdate(newObj, oldObj *ebsv1.Project) field.ErrorList {
 	errs := ValidateProject(newObj)
+	if newObj.Labels[ebsv1.ProjectOwnerUserLabel] != oldObj.Labels[ebsv1.ProjectOwnerUserLabel] {
+		errs = append(errs, field.Forbidden(field.NewPath("metadata", "labels").Key(ebsv1.ProjectOwnerUserLabel), "owner is immutable"))
+	}
 	if newObj.Spec.Distro != oldObj.Spec.Distro {
 		errs = append(errs, field.Invalid(field.NewPath("spec", "distro"), newObj.Spec.Distro, "field is immutable"))
 	}

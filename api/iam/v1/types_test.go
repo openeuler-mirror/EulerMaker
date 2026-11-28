@@ -10,6 +10,7 @@ import (
 
 func TestUserRoundTripAndDeepCopy(t *testing.T) {
 	enabled := true
+	projects := int32(20)
 	original := &UserList{Items: []User{{
 		ObjectMeta: metav1.ObjectMeta{Name: "alice", Labels: map[string]string{"team": "build"}},
 		Spec: UserSpec{
@@ -17,6 +18,7 @@ func TestUserRoundTripAndDeepCopy(t *testing.T) {
 			Scopes:      []string{"ebs:user"},
 			DisplayName: "Alice",
 			Email:       "alice@example.com",
+			Quota:       &UserQuota{Projects: &projects},
 		},
 	}}}
 	data, err := json.Marshal(original)
@@ -33,6 +35,7 @@ func TestUserRoundTripAndDeepCopy(t *testing.T) {
 	copied := original.DeepCopy()
 	*copied.Items[0].Spec.Enabled = false
 	copied.Items[0].Spec.Scopes[0] = "ebs:ops"
+	*copied.Items[0].Spec.Quota.Projects = 0
 	copied.Items[0].Labels["team"] = "other"
 	if !reflect.DeepEqual(original, &decoded) {
 		t.Fatal("copy modified original user")

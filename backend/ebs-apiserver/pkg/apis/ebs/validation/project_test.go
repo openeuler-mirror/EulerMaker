@@ -305,6 +305,23 @@ func TestValidateProjectUpdate(t *testing.T) {
 	})
 }
 
+func TestProjectOwnerIsImmutable(t *testing.T) {
+	old := validProject()
+	old.Labels = map[string]string{ebsv1.ProjectOwnerUserLabel: "alice"}
+	for _, owner := range []string{"alice", "bob", ""} {
+		updated := old.DeepCopy()
+		if owner == "" {
+			delete(updated.Labels, ebsv1.ProjectOwnerUserLabel)
+		} else {
+			updated.Labels[ebsv1.ProjectOwnerUserLabel] = owner
+		}
+		errs := ValidateProjectUpdate(updated, old)
+		if (len(errs) == 0) != (owner == "alice") {
+			t.Fatalf("owner=%q errors=%v", owner, errs)
+		}
+	}
+}
+
 func TestProjectDistroIsImmutable(t *testing.T) {
 	old := validProject()
 	updated := old.DeepCopy()

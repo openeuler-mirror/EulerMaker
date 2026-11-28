@@ -127,7 +127,9 @@ const userIndexMapping = `{
         "value":{"type":"keyword"}
       }}
     }},
-    "data":{"type":"object","dynamic":false},
+    "data":{"type":"object","dynamic":false,"properties":{
+      "spec":{"properties":{"quota":{"properties":{"projects":{"type":"integer"}}}}}
+    }},
     "credential":{"type":"object","enabled":false},
     "externalIdentity":{"type":"object","enabled":false}
   }}

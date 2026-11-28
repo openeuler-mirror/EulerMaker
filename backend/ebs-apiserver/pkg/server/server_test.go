@@ -134,7 +134,8 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		"ebs-api/ebs/v1.SnapshotSpec":            {"packageRepos"},
 		"ebs-api/ebs/v1.SnapshotStatus":          {"phase", "conditions", "packageRepoStatuses"},
 		"ebs-api/ebs/v1.RunnerStatus":            {"phase", "capacity", "heartbeat"},
-		"ebs-api/iam/v1.UserSpec":                {"enabled", "scopes", "email"},
+		"ebs-api/iam/v1.UserSpec":                {"enabled", "scopes", "email", "quota"},
+		"ebs-api/iam/v1.UserQuota":               {"projects"},
 		"ebs-api/iam/v1.MachineAccount":          {"apiVersion", "kind", "metadata", "spec"},
 	}
 	for name, fields := range tests {

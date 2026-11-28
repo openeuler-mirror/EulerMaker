@@ -139,7 +139,7 @@ GET    /apis/iam.ebs/v1/machineaccounts/{name}
 DELETE /apis/iam.ebs/v1/machineaccounts/{name}
 ```
 
-User 对象保存账号资料和状态：
+User 对象保存账号资料、状态及工程数量配额：
 
 ```yaml
 apiVersion: iam.ebs/v1
@@ -152,7 +152,72 @@ spec:
     - ebs:ops
   displayName: Alice
   email: alice@example.com
+  quota:
+    projects: 20
 ```
+
+<a id="user-project-quota"></a>
+
+#### 用户工程数量配额
+
+首版仅限制用户拥有的 Project 数量，配额存放在 `User.spec.quota`，不新增公共配额对象。
+不限制 Build/Job 数量、CPU、内存、构建时长或制品容量，也不调整 Scheduler。
+
+| 字段 | 类型 | 注册初始值 | 语义 |
+|------|------|--------|------|
+| `spec.quota.projects` | 可选 int32 | `20` | 用户同时拥有的工程数量上限；未设置不限制，`0` 禁止新增工程，负数和非整数非法 |
+
+- 密码和 OAuth 注册显式写入 `projects: 20`，均不接受调用方自定义配额。普通 User 创建、读取、更新不会
+  补齐缺失配额；`quota` 或 `projects` 缺失即不限制，不为存量数据提供默认值或自动迁移。
+- apiserver 已支持通过现有 User PUT/PATCH 更新配额；删除配置时解除限制，恢复 20 必须显式写入 20，
+  PATCH 未涉及配额字段则保持原配置。计划中的 Admin 管理入口、管理员 User 的配额编辑例外和前端尚未实现。
+  Gateway 负责调用方授权；apiserver 负责数值和版本校验。认证、改密、凭证管理及普通资料更新不得意外重置配额。
+- 下调至当前拥有量以下可以成功，不删除已有工程；在数量降至新上限以下之前，拒绝新建工程。
+  已有工程的更新、构建和删除不受数量超限影响。Admin、Ops 和普通 User 使用相同计数规则，Admin 身份不隐含无限配额。
+
+**计数与归属**
+
+- 以 Project 的 `metadata.labels["ebs.io/owner-user"]` 归属 User，跨全部工程累计；personal、community、
+  gating 工程均计入，member 关系不计入成员额度。统计的是当前拥有量，而非累计创建次数。
+- 创建 Project 必须指定已存在的 owner；Gateway 仍将 owner 设置为当前用户。apiserver 校验 owner 存在，
+  并在更新时禁止改变、删除或清空 owner，防止绕过计数。它不据此执行用户访问授权，也不引入用户身份头。
+- 删除中的 Project 仍计入，直到实际删除且 ES 查询可见。更新、修改显示名称或成员不新增工程数量；
+  同名创建由现有 create-only 写入保证唯一性。用户账号重建后，同一 owner 名称的已有工程仍参与统计。
+
+**创建校验**
+
+1. 完成 Project 输入和配置校验后，按 owner 读取 User，仅投影名称、UID、删除标记和配额。
+   owner 不存在或 User 正在删除时拒绝创建；配额未设置时跳过数量查询。
+2. 配额存在时使用 ES `_count`，以同一 nested label 的 owner key/value 过滤，不加载工程正文、
+   软件包列表或分页列表。已有数量大于或等于上限则拒绝，否则走原有 Project 创建流程。
+3. 该检查不预留名额，不写入 User，也不保存用量缓存；dry-run 执行同样校验但不创建工程。
+   User 读取失败、计数查询失败或返回不完整结果时拒绝创建，不按无限制放行。
+
+这是软配额：接受多副本并发创建、ES 查询可见性延迟及配额并发调整导致的超额。
+例如两个请求同时查到已有 19 个工程、上限为 20 时，两个请求都可能成功，最终达到 21 个。
+超额工程不会自动删除；后续查询看到数量达到上限后拒绝新建，直到删除工程或提高配额。
+删除后不需要释放名额或后台恢复，下一次创建直接重新计数。
+
+初始 Mapping 增加 User 的 `data.spec.quota.projects` 整数类型。已部署环境的 Mapping、
+User 配额和缺失 owner 由运维刷新；已有工程自然参与计数，无需额外初始化占用数据。
+直接操作 ES 不属于受支持的日常配额写入路径。
+
+**接口与错误**
+
+不新增配额管理接口；复用 `PUT/PATCH /apis/iam.ebs/v1/users/{name}`，保留 resourceVersion 冲突检查。
+Project POST 达到上限返回 Kubernetes Status：HTTP `403 Forbidden`、reason=`Forbidden`，
+message 使用稳定前缀 `ProjectQuotaExceeded`，包含 owner、limit 和 used。
+这属于资源额度拒绝，不使用请求限流的 `429`。非法配额数值返回 `422 Invalid`，
+JSON 类型或解码错误返回 400，版本冲突返回 `409 Conflict`；
+User 或计数查询暂不可用返回 `503 ServiceUnavailable`，不提交新工程。
+
+**验收范围**
+
+- 注册初始 20、缺失配额不补齐、显式 0、配额上调/下调/删除及非法值；两种注册方式不能自设额度。
+- owner/member 区分、全部工程类型累计、删除中工程计入、owner 存在且不可变。
+- 已有 19 个时允许创建、达到或超过上限时拒绝；同一查询视图下并发创建允许超额。
+- 查询仅取必要字段，查询失败不放行；dry-run 不写入，也不修改 User。
+- 后续 Gateway 验收：仅 Admin 可管理额度，管理员对象仅修改配额的例外不能扩大到 scopes、enabled 或其他字段。
 
 MachineAccount 保存账号用途、Token 有效期及 service 账号的最小授权配置。
 认证响应返回账号名称、类型及有效期；apiserver 校验、存储授权字段，Gateway 每次请求读取账号并执行工程范围和权限检查，统一交换入口及授权规则见
