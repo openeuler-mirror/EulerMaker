@@ -306,7 +306,7 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 
 apiserver 已实现 User 个人访问凭证（PAT）的内部管理与认证，主要供后续 ebsctl 接入使用。
 不新增公共资源类型、MachineAccount 或 ES 索引，也不将凭证加入 `User.spec`。
-Gateway 验证 Bearer PAT 后使用 User 身份授权，不交换 JWT；前端和 ebsctl 尚未接入。
+Gateway 验证 Bearer PAT 后使用 User 身份授权，不交换 JWT；前端账号设置已接入凭证管理，ebsctl 尚未接入。
 
 #### 私有存储与生命周期
 

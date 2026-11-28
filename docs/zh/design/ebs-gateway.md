@@ -431,7 +431,7 @@ PAT 的核验和错误契约见下节，不走 JWT 签名检查和角色快照�
 
 PAT 面向 ebsctl 等个人客户端，直接访问 API，不先换取短期 JWT、不增加 refresh token。
 凭证格式、5 个有效凭证上限、默认 90 天及可选 1～90 天有效期、私有存储和并发规则统一由
-[apiserver PAT 契约](ebs-apiserver.md#personal-access-credentials)定义。Gateway 已接入，前端和 ebsctl 尚未接入。
+[apiserver PAT 契约](ebs-apiserver.md#personal-access-credentials)定义。Gateway 和前端账号设置已接入，ebsctl 尚未接入。
 
 **认证与授权**
 
