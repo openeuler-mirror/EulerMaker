@@ -120,8 +120,12 @@ func schemas() object {
 		"tokenTTLSeconds": object{"type": "integer", "description": "0 or omitted: 3600; otherwise 300–86400 seconds."},
 		"projects": object{
 			"type": "array", "uniqueItems": true,
-			"items":       object{"type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
-			"description": "Exact Project names for a service account, without wildcards. Omitted or empty: no resource access. Permissions apply to every listed Project.",
+			"items": object{"type": "string", "minLength": 1, "maxLength": 63, "pattern": "^(\\*|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$"},
+			"oneOf": []object{
+				{"maxItems": 1, "minItems": 1, "items": object{"type": "string", "enum": []string{"*"}}},
+				{"items": object{"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}},
+			},
+			"description": "Exact Project names or * for all current and future Projects. The wildcard must be used alone and does not bypass operation permissions. Omitted or empty: no resource access. Only service accounts may specify this field.",
 		},
 		"permissions": object{
 			"type": "array", "uniqueItems": true,

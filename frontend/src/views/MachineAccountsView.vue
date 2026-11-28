@@ -136,7 +136,11 @@ function openDelete(account: MachineAccount): void { deleting.value = account; c
 function closeDelete(): void { if (!saving.value) deleting.value = null; }
 function serviceGrants(): { projects: string[]; permissions: MachineAccountPermission[] } | null {
   const projects = projectNames.value.split(/[\s,，]+/).filter(Boolean);
-  if (projects.some(project => !/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(project)) || new Set(projects).size !== projects.length) {
+  if (projects.includes("*") && projects.length > 1) {
+    dialogError.value = "admin.serviceProjectsWildcardExclusive";
+    return null;
+  }
+  if (projects.some(project => project !== "*" && !/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(project)) || new Set(projects).size !== projects.length) {
     dialogError.value = "admin.invalidServiceProjects";
     return null;
   }

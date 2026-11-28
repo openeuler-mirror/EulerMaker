@@ -2890,7 +2890,7 @@ func schema_ebs_api_iam_v1_MachineAccountSpec(ref common.ReferenceCallback) comm
 					},
 					"projects": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Projects and Permissions apply only to service accounts; either empty list grants no resource access.",
+							Description: "Projects accepts exact names or a standalone * for all current and future projects. Only service accounts may specify it.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -2904,7 +2904,8 @@ func schema_ebs_api_iam_v1_MachineAccountSpec(ref common.ReferenceCallback) comm
 					},
 					"permissions": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
+							Description: "Permissions applies to every authorized project; either empty list grants no resource access.",
+							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{

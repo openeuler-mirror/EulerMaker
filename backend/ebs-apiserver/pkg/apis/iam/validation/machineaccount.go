@@ -31,13 +31,16 @@ func ValidateMachineAccount(account *iamv1.MachineAccount) field.ErrorList {
 	}
 	seenProjects := make(map[string]bool, len(account.Spec.Projects))
 	for i, name := range account.Spec.Projects {
-		if messages := utilvalidation.IsDNS1123Label(name); len(messages) > 0 {
+		if messages := utilvalidation.IsDNS1123Label(name); name != iamv1.MachineAccountAllProjects && len(messages) > 0 {
 			errs = append(errs, field.Invalid(projects.Index(i), name, messages[0]))
 		}
 		if seenProjects[name] {
 			errs = append(errs, field.Duplicate(projects.Index(i), name))
 		}
 		seenProjects[name] = true
+	}
+	if seenProjects[iamv1.MachineAccountAllProjects] && len(seenProjects) > 1 {
+		errs = append(errs, field.Invalid(projects, account.Spec.Projects, "* must be used alone"))
 	}
 	seenPermissions := make(map[iamv1.MachineAccountPermission]bool, len(account.Spec.Permissions))
 	for i, permission := range account.Spec.Permissions {

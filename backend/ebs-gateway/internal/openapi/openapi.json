@@ -695,13 +695,31 @@
             "uniqueItems": true
           },
           "projects": {
-            "description": "Exact Project names for a service account, without wildcards. Omitted or empty: no resource access. Permissions apply to every listed Project.",
+            "description": "Exact Project names or * for all current and future Projects. The wildcard must be used alone and does not bypass operation permissions. Omitted or empty: no resource access. Only service accounts may specify this field.",
             "items": {
               "maxLength": 63,
               "minLength": 1,
-              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "pattern": "^(\\*|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$",
               "type": "string"
             },
+            "oneOf": [
+              {
+                "items": {
+                  "enum": [
+                    "*"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 1,
+                "minItems": 1
+              },
+              {
+                "items": {
+                  "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                  "type": "string"
+                }
+              }
+            ],
             "type": "array",
             "uniqueItems": true
           },
@@ -3024,6 +3042,7 @@
       "ebs-api.iam.v1.MachineAccountSpec": {
         "properties": {
           "permissions": {
+            "description": "Permissions applies to every authorized project; either empty list grants no resource access.",
             "items": {
               "enum": [
                 "builds:abort",
@@ -3035,7 +3054,7 @@
             "type": "array"
           },
           "projects": {
-            "description": "Projects and Permissions apply only to service accounts; either empty list grants no resource access.",
+            "description": "Projects accepts exact names or a standalone * for all current and future projects. Only service accounts may specify it.",
             "items": {
               "type": "string"
             },

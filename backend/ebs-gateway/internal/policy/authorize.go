@@ -189,7 +189,8 @@ func authorizeService(who identity.Principal, project string, rule Rule) error {
 		return deny("service operation is not allowed")
 	}
 	grants := who.ServiceGrants
-	if project == "" || grants == nil || !slices.Contains(grants.Projects, project) ||
+	if project == "" || grants == nil ||
+		(!slices.Contains(grants.Projects, project) && !slices.Contains(grants.Projects, iamv1.MachineAccountAllProjects)) ||
 		!slices.Contains(grants.Permissions, rule.ServicePermission) {
 		return deny("service account lacks project or operation permission")
 	}
