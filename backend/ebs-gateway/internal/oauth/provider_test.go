@@ -111,8 +111,15 @@ func TestOAuthUserInfoSubAdapter(t *testing.T) {
 	if err := cfg.validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, username := range []string{"community-example", ""} {
-		t.Run("community username="+username, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, username string
+		nullProfile    bool
+	}{
+		{name: "username present", username: "community-example"},
+		{name: "username absent"},
+		{name: "community response with null profile", username: "community-example", nullProfile: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			p := newProvider(cfg, time.Now, transportFunc(func(r *http.Request) (*http.Response, error) {
 				calls++
@@ -130,9 +137,15 @@ func TestOAuthUserInfoSubAdapter(t *testing.T) {
 					user := map[string]any{
 						"sub": "immutable-id", "name": "Example", "preferred_username": "another-name",
 						"email": "unverified@example.com", "email_verified": false,
+						"openeuler_username": "legacy-field-not-used",
 					}
-					if username != "" {
-						user["openeuler_username"] = username
+					if tc.username != "" {
+						user["username"] = tc.username
+					}
+					if tc.nullProfile {
+						user["name"], user["email"], user["preferred_username"] = nil, nil, nil
+						user["code"], user["msg"] = 200, "OK"
+						user["data"] = map[string]any{"sub": "immutable-id", "username": tc.username, "name": nil, "email": nil}
 					}
 					data, _ := json.Marshal(user)
 					body = string(data)
@@ -140,8 +153,11 @@ func TestOAuthUserInfoSubAdapter(t *testing.T) {
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
 			external, profile, err := p.exchange(context.Background(), "code", browserContext{Verifier: "verifier"}, "")
-			if err != nil || external.Subject != "immutable-id" || profile.Username != username || profile.Email != "" || calls != 2 {
+			if err != nil || external.Subject != "immutable-id" || profile.Username != tc.username || profile.Email != "" || calls != 2 {
 				t.Fatalf("identity=%+v profile=%+v err=%v", external, profile, err)
+			}
+			if tc.nullProfile && profile.DisplayName != "" {
+				t.Fatal("null display name should remain empty")
 			}
 		})
 	}

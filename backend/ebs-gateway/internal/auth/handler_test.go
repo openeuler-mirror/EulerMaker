@@ -43,8 +43,8 @@ func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 	}
 	now := func() time.Time { return time.Unix(1790000000, 0) }
 	accounts := iamclient.New(client)
-	handler, err := New(Dependencies{
-		IAM: accounts, Tokens: tokens, Now: now, BodyLimit: 1 << 20, LocalAuthEnabled: true,
+	handler, err := New(Options{
+		IAM: accounts, Tokens: tokens, Now: now, LocalAuthEnabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -69,32 +69,57 @@ func (a *testAPI) Router() *gin.Engine {
 	return router
 }
 
-func TestLoginIPLimitAcrossUsernames(t *testing.T) {
-	calls := 0
-	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
-		calls++
-		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("{}"))}, nil
-	}))
-	router := api.Router()
-	for i := 0; i < 21; i++ {
-		request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(fmt.Sprintf(`{"username":"user-%d","password":"wrong"}`, i)))
-		request.Header.Set("Content-Type", "application/json")
-		request.RemoteAddr = "192.0.2.1:1234"
-		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, request)
-		want := http.StatusUnauthorized
-		if i == 20 {
-			want = http.StatusTooManyRequests
-		}
-		if recorder.Code != want {
-			t.Fatalf("request %d: status=%d body=%s", i, recorder.Code, recorder.Body)
-		}
-		if i == 20 && recorder.Header().Get("Retry-After") == "" {
-			t.Fatal("missing Retry-After")
-		}
-	}
-	if calls != 20 {
-		t.Fatalf("throttled login reached IAM: calls=%d", calls)
+func TestAuthenticationAccountLimits(t *testing.T) {
+	for _, tc := range []struct {
+		path           string
+		capacity, want int
+	}{
+		{"/auth/login", 5, http.StatusUnauthorized},
+		{"/auth/machine-token", 10, http.StatusUnauthorized},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			calls := 0
+			api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: tc.want, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+			}))
+			router := api.Router()
+			send := func(username, address string, want int) {
+				t.Helper()
+				body := fmt.Sprintf(`{"username":%q,"password":"valid-password"}`, username)
+				if tc.path == "/auth/machine-token" {
+					body = `{}`
+				}
+				request := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(body))
+				if tc.path == "/auth/machine-token" {
+					request.SetBasicAuth(username, "secret")
+				}
+				request.Header.Set("Content-Type", "application/json")
+				request.RemoteAddr = address
+				recorder := httptest.NewRecorder()
+				router.ServeHTTP(recorder, request)
+				if recorder.Code != want {
+					t.Fatalf("user=%s status=%d want=%d body=%s", username, recorder.Code, want, recorder.Body)
+				}
+				if want == http.StatusTooManyRequests && recorder.Header().Get("Retry-After") != "60" {
+					t.Fatal("missing account-limit retry delay")
+				}
+			}
+			// Different accounts behind the same proxy do not share a dedicated IP bucket.
+			for i := 0; i < 21; i++ {
+				send(fmt.Sprintf("user-%d", i), "192.0.2.1:1234", tc.want)
+			}
+			for i := 0; i < tc.capacity; i++ {
+				send("alice", "192.0.2.1:1234", tc.want)
+			}
+			before := calls
+			send("alice", "192.0.2.1:1234", http.StatusTooManyRequests)
+			send("alice", "192.0.2.2:1234", http.StatusTooManyRequests)
+			if calls != before {
+				t.Fatal("throttled request reached IAM")
+			}
+			send("bob", "192.0.2.1:1234", tc.want)
+		})
 	}
 }
 
@@ -415,6 +440,33 @@ func TestRegisterRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestRegisterRequestBodyLimit(t *testing.T) {
+	for _, size := range []int{(64 << 10) - 1, 64 << 10, (64 << 10) + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			calls := 0
+			api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: http.StatusCreated, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+			}))
+			body := `{"username":"alice","password":"valid-password"}`
+			body += strings.Repeat(" ", size-len(body))
+			request := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			// Enforce the streaming limit even when Content-Length is unknown.
+			request.ContentLength = -1
+			response := httptest.NewRecorder()
+			api.Router().ServeHTTP(response, request)
+			wantStatus, wantCalls := http.StatusCreated, 1
+			if size > 64<<10 {
+				wantStatus, wantCalls = http.StatusBadRequest, 0
+			}
+			if response.Code != wantStatus || calls != wantCalls {
+				t.Fatalf("status=%d IAM calls=%d, want %d/%d: %s", response.Code, calls, wantStatus, wantCalls, response.Body)
+			}
+		})
+	}
+}
+
 func TestNew(t *testing.T) {
 	client, err := upstream.New("https://api.example", nil)
 	if err != nil {
@@ -424,20 +476,18 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := Dependencies{IAM: iamclient.New(client), Tokens: tokens, BodyLimit: 1 << 20, LocalAuthEnabled: true}
-	handler, err := New(deps)
+	opts := Options{IAM: iamclient.New(client), Tokens: tokens, LocalAuthEnabled: true}
+	handler, err := New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if handler.iam != deps.IAM || handler.tokens != tokens || handler.now == nil || !handler.localAuthEnabled ||
-		handler.registerIP == nil || handler.registrationUserLimit == nil || handler.loginIP == nil ||
-		handler.loginLimit == nil || handler.machineLimit == nil {
+	if handler.iam != opts.IAM || handler.tokens != tokens || handler.now == nil || !handler.localAuthEnabled ||
+		handler.userLoginLimit == nil || handler.machineTokenLimit == nil {
 		t.Fatal("authentication dependencies were not initialized")
 	}
-	for _, invalid := range []Dependencies{
-		{Tokens: tokens, BodyLimit: 1},
-		{IAM: deps.IAM, BodyLimit: 1},
-		{IAM: deps.IAM, Tokens: tokens},
+	for _, invalid := range []Options{
+		{Tokens: tokens},
+		{IAM: opts.IAM},
 	} {
 		if _, err := New(invalid); err == nil {
 			t.Fatal("invalid dependencies accepted")

@@ -19,6 +19,13 @@ import (
 	"ebs-gateway/internal/mutation"
 )
 
+type Options struct {
+	Config Config
+	IAM    *iamclient.Client
+	Tokens *identity.Tokens
+	Now    func() time.Time
+}
+
 type Handler struct {
 	config   Config
 	accounts *iamclient.Client
@@ -28,18 +35,21 @@ type Handler struct {
 	limits   rateLimits
 }
 
-func New(config Config, accounts *iamclient.Client, tokens *identity.Tokens, now func() time.Time) *Handler {
-	if now == nil {
-		now = time.Now
+func New(opts Options) (*Handler, error) {
+	if opts.Config.PublicBaseURL != "" && (opts.IAM == nil || opts.Tokens == nil) {
+		return nil, errors.New("OAuth IAM client and tokens are required when OAuth is enabled")
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
 	}
 	return &Handler{
-		config:   config,
-		accounts: accounts,
-		tokens:   tokens,
-		now:      now,
-		provider: newProvider(config, now, nil),
+		config:   opts.Config,
+		accounts: opts.IAM,
+		tokens:   opts.Tokens,
+		now:      opts.Now,
+		provider: newProvider(opts.Config, opts.Now, nil),
 		limits:   rateLimits{entries: make(map[string]rateEntry)},
-	}
+	}, nil
 }
 
 // LocalAuthenticationEnabled reports whether local login and registration are enabled.

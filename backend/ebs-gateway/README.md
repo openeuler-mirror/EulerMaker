@@ -30,7 +30,13 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 
 业务链为审计 → Recovery → 查询检查 → 认证 → 身份限流 → 授权 → 业务处理。公开 GET 可匿名，但带 Token 时必须验证，失败不得降级；未知路径匿名返回 401、认证后返回 404。健康检查在业务链之前注册，不审计、认证或限流；`/auth/check` 仅做认证、身份准入和限流，不要求 Service 工程授权。
 
-`PrepareQuery` 仅允许工程 Job 列表和 Runner 任务列表 Watch，其他已匹配路由的 Watch 在认证前返回 403。非 Watch 请求仅对配置 `ListLimit` 的 GET 列表规范化分页，公开工程及其子资源列表上限为 100。通用限流按身份类型/名称/IP 或匿名 IP 隔离；登录、注册、机器换 Token、OAuth 和 Watch 并发限制另行保留。
+`PrepareQuery` 仅允许工程 Job 列表和 Runner 任务列表 Watch，其他已匹配路由的 Watch 在认证前返回 403。非 Watch 请求仅对配置 `ListLimit` 的 GET 列表规范化分页，公开工程及其子资源列表上限为 100。通用限流按身份类型/名称/IP 或匿名 IP 隔离；登录、机器换 Token、OAuth 和 Watch 并发限制另行保留。
+
+本地注册只使用全局匿名限流。密码登录的专用限流仅按用户名计数，每分钟补充 5 次额度，桶容量为 5；机器换 Token 仅按 clientID 计数，每分钟补充 10 次额度，桶容量为 10。两个专用桶均不按 IP 区分。全局匿名 IP 限流及 OAuth IP 限流仍然生效；代理后的请求可能共享这些额度，各 Gateway 副本独立计数。
+
+通用及密码登录、机器换 Token 的令牌桶各自最多保存 4096 个 key。容量满时先回收额度已恢复的桶，否则淘汰最久未访问的桶，为新 key 腾出位置；被淘汰的账号再次访问会获得完整额度。OAuth 的独立限流实现不受此策略影响。
+
+`internal/auth` 读取的 JSON 请求正文固定限制为 64 KiB，覆盖本地注册、密码登录、机器换 Token、密码修改和机器账号注册。超过上限返回 400，不调用 IAM；不受业务资源参数 `--max-request-body-bytes` 影响。
 
 Project 用户更新在授权时读取完整对象并供正文校验复用；Job 状态更新同样复用 `AssignedJob` 已读取的对象。仅校验归属的 Project/Job 请求和 IAM 身份查询使用字段投影。Runner 路径名称统一由 `RunnerSelf` 校验，路由内保留注册正文、普通对象字段、查询参数及 Watch 并发检查。普通公开读取和无需正文改写的写入直接转发，具体处理链见[设计文档第五章](../../docs/zh/design/ebs-gateway.md#五路由设计)。
 

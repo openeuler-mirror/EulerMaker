@@ -197,7 +197,7 @@ func TestRunnerResourceQueryAndWatchLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			authHandler, err := auth.New(auth.Dependencies{IAM: iamclient.New(client), Tokens: tokens, BodyLimit: 1 << 20})
+			authHandler, err := auth.New(auth.Options{IAM: iamclient.New(client), Tokens: tokens})
 			if err != nil {
 				t.Fatal(err)
 			}

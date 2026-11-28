@@ -128,16 +128,23 @@ func run(opts options) error {
 	if err != nil {
 		return fmt.Errorf("load --oauth-config-file: %w", err)
 	}
-	oauthHandler := oauth.New(oauthConfig, accounts, tokens, time.Now)
-	authHandler, err := auth.New(auth.Dependencies{
+	oauthHandler, err := oauth.New(oauth.Options{
+		Config: oauthConfig,
+		IAM:    accounts,
+		Tokens: tokens,
+		Now:    time.Now,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize OAuth handler: %w", err)
+	}
+	authHandler, err := auth.New(auth.Options{
 		LocalAuthEnabled: opts.oauthConfigFile == "",
 		IAM:              accounts,
 		Tokens:           tokens,
 		Now:              time.Now,
-		BodyLimit:        opts.maxBody,
 	})
 	if err != nil {
-		return fmt.Errorf("initialize authentication handlers: %w", err)
+		return fmt.Errorf("initialize authentication handler: %w", err)
 	}
 	api, err := gateway.NewHandler(gateway.Dependencies{
 		Upstream:  client,

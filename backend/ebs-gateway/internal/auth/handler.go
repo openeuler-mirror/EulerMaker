@@ -21,49 +21,39 @@ import (
 	"ebs-gateway/internal/mutation"
 )
 
-type Dependencies struct {
+const maxRequestBodySize = 64 << 10 // 64 KiB
+
+type Options struct {
 	IAM              *iamclient.Client
 	Tokens           *identity.Tokens
 	Now              func() time.Time
-	BodyLimit        int64
 	LocalAuthEnabled bool
 }
 
 // Handler serves account registration, credential exchange and token checks.
 type Handler struct {
-	iam                   *iamclient.Client
-	tokens                *identity.Tokens
-	now                   func() time.Time
-	bodyLimit             int64
-	localAuthEnabled      bool
-	registerIP            *limit.Buckets
-	registrationUserLimit *limit.Buckets
-	loginLimit            *limit.Buckets
-	loginIP               *limit.Buckets
-	machineLimit          *limit.Buckets
+	iam               *iamclient.Client
+	tokens            *identity.Tokens
+	now               func() time.Time
+	localAuthEnabled  bool
+	userLoginLimit    *limit.Buckets
+	machineTokenLimit *limit.Buckets
 }
 
-func New(deps Dependencies) (*Handler, error) {
-	if deps.IAM == nil || deps.Tokens == nil {
+func New(opts Options) (*Handler, error) {
+	if opts.IAM == nil || opts.Tokens == nil {
 		return nil, fmt.Errorf("authentication dependencies are required")
 	}
-	if deps.BodyLimit <= 0 {
-		return nil, fmt.Errorf("request body limit must be positive")
-	}
-	if deps.Now == nil {
-		deps.Now = time.Now
+	if opts.Now == nil {
+		opts.Now = time.Now
 	}
 	return &Handler{
-		iam:                   deps.IAM,
-		tokens:                deps.Tokens,
-		now:                   deps.Now,
-		bodyLimit:             deps.BodyLimit,
-		localAuthEnabled:      deps.LocalAuthEnabled,
-		registerIP:            limit.New(5.0/60.0, 5, deps.Now),
-		registrationUserLimit: limit.New(3.0/60.0, 3, deps.Now),
-		loginLimit:            limit.New(5.0/60.0, 5, deps.Now),
-		loginIP:               limit.New(20.0/60.0, 20, deps.Now),
-		machineLimit:          limit.New(5.0/60.0, 5, deps.Now),
+		iam:               opts.IAM,
+		tokens:            opts.Tokens,
+		now:               opts.Now,
+		localAuthEnabled:  opts.LocalAuthEnabled,
+		userLoginLimit:    limit.New(5.0/60.0, 5, opts.Now),
+		machineTokenLimit: limit.New(10.0/60.0, 10, opts.Now),
 	}, nil
 }
 
@@ -74,11 +64,11 @@ func (a *Handler) readJSON(c *gin.Context, result any) error {
 		return fmt.Errorf("Content-Type must be application/json")
 	}
 	defer c.Request.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(c.Request.Body, a.bodyLimit+1))
+	data, err := io.ReadAll(io.LimitReader(c.Request.Body, maxRequestBodySize+1))
 	if err != nil {
 		return err
 	}
-	if int64(len(data)) > a.bodyLimit {
+	if len(data) > maxRequestBodySize {
 		return fmt.Errorf("request body too large")
 	}
 	if _, err := mutation.ParseObject(data); err != nil {
@@ -122,11 +112,6 @@ func (a *Handler) RegisterUser(c *gin.Context) {
 			return
 		}
 	}
-	ip := c.ClientIP()
-	if !a.registerIP.Allow(ip) || !a.registrationUserLimit.Allow(input.Username+"/"+ip) {
-		middleware.AbortRateLimited(c, 60, "too many requests")
-		return
-	}
 	status, err := a.iam.RegisterUser(c.Request.Context(), input)
 	if err != nil || status >= 500 {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "registration unavailable"})
@@ -145,10 +130,6 @@ func (a *Handler) Login(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "password login disabled"})
 		return
 	}
-	if !a.loginIP.Allow(c.ClientIP()) {
-		middleware.AbortRateLimited(c, 60, "too many requests")
-		return
-	}
 	var input struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -157,7 +138,7 @@ func (a *Handler) Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid login request"})
 		return
 	}
-	if !a.loginLimit.Allow(input.Username + "/" + c.ClientIP()) {
+	if !a.userLoginLimit.Allow(input.Username) {
 		middleware.AbortRateLimited(c, 60, "too many requests")
 		return
 	}
@@ -207,7 +188,7 @@ func (a *Handler) MachineToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid token request"})
 		return
 	}
-	if !a.machineLimit.Allow(clientID + "/" + c.ClientIP()) {
+	if !a.machineTokenLimit.Allow(clientID) {
 		middleware.AbortRateLimited(c, 60, "too many requests")
 		return
 	}

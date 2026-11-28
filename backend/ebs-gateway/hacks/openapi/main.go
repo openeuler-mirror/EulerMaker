@@ -25,7 +25,7 @@ func main() {
 			"description": "Public Gateway contract. Visibility in this document does not grant access. " +
 				"GET /healthz directly returns a fixed plain-text response without middleware; business requests retain recovery and audit. " +
 				"Authentication is required by default. Public resource reads allow anonymous requests but validate any supplied token; invalid tokens never fall back to anonymous access. " +
-				"Except for GET /healthz, requests are IP-rate-limited before authentication, then limited by authenticated identity/IP or anonymous IP. Rate limits return 429 with Retry-After. Login, registration, OAuth and watch connection limits also apply. " +
+				"Except for GET /healthz, requests that pass authentication are rate-limited by authenticated identity/IP or anonymous IP. Rate limits return 429 with Retry-After. Local registration uses only the global anonymous limit. Dedicated local login limits are keyed only by username, refilling at 5 requests per minute with a capacity of 5. Machine-token limits are keyed only by clientID, refilling at 10 requests per minute with a capacity of 10. OAuth and watch connection limits also apply. " +
 				"Watch is allowed only on GET /apis/ebs/v1/projects/{project}/jobs and GET /apis/ebs/v1/runners/{runner}/jobs; " +
 				"other matched routes reject Watch with 403 before authentication. Allowed Watch requests still require authentication and authorization. " +
 				"Resource permissions are checked on every request. Field-selected responses may omit properties. " +

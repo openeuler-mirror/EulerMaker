@@ -229,11 +229,15 @@ func newTestAPIWithConfig(t *testing.T, transport http.RoundTripper, burst int, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	authHandler, err := auth.New(auth.Dependencies{IAM: accounts, Tokens: tokens, Now: now, BodyLimit: 1 << 20, LocalAuthEnabled: cfg.PublicBaseURL == ""})
+	authHandler, err := auth.New(auth.Options{IAM: accounts, Tokens: tokens, Now: now, LocalAuthEnabled: cfg.PublicBaseURL == ""})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &testAPI{Handler: api, authHandler: authHandler, oauthHandler: oauth.New(cfg, accounts, tokens, now), tokens: tokens, now: now}
+	oauthHandler, err := oauth.New(oauth.Options{Config: cfg, IAM: accounts, Tokens: tokens, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testAPI{Handler: api, authHandler: authHandler, oauthHandler: oauthHandler, tokens: tokens, now: now}
 }
 
 func TestServiceTokenChecksCurrentAccount(t *testing.T) {
@@ -1090,6 +1094,38 @@ func TestGlobalIdentityAndAnonymousLimits(t *testing.T) {
 		if tc.want == 429 && res.Header().Get("Retry-After") != "1" {
 			t.Fatal("missing retry delay")
 		}
+	}
+}
+
+func TestRegistrationUsesGlobalLimit(t *testing.T) {
+	calls := 0
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || r.URL.Path != "/internal/iam/v1/users/register" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+		}
+		calls++
+		return &http.Response{StatusCode: http.StatusConflict, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+	}))
+	api.limits = limit.New(1, 4, api.now)
+	router := api.Router()
+	for i := 0; i < 5; i++ {
+		request := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"username":"alice","password":"valid-password"}`))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		want := http.StatusConflict
+		if i == 4 {
+			want = http.StatusTooManyRequests
+			if response.Header().Get("Retry-After") != "1" {
+				t.Fatal("missing global-limit retry delay")
+			}
+		}
+		if response.Code != want {
+			t.Fatalf("request %d: status=%d want=%d body=%s", i, response.Code, want, response.Body)
+		}
+	}
+	if calls != 4 {
+		t.Fatalf("IAM calls=%d, want 4", calls)
 	}
 }
 
