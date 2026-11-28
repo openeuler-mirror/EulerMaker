@@ -2,7 +2,9 @@ package auth
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -289,6 +291,72 @@ func (a *Handler) ChangePassword(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+func (a *Handler) CreatePersonalCredential(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	var input struct {
+		Name          string          `json:"name"`
+		ExpiresInDays json.RawMessage `json:"expiresInDays,omitempty"`
+	}
+	if err := a.readJSON(c, &input); err != nil {
+		writeCredentialError(c, &iamclient.CredentialError{Status: 400, Code: "InvalidRequest"})
+		return
+	}
+	result, err := a.iam.CreatePersonalCredential(c.Request.Context(), middleware.Principal(c).Subject, input)
+	if err != nil {
+		writeCredentialError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, result)
+}
+
+func (a *Handler) ListPersonalCredentials(c *gin.Context) {
+	if !emptyCredentialBody(c) {
+		return
+	}
+	items, err := a.iam.ListPersonalCredentials(c.Request.Context(), middleware.Principal(c).Subject)
+	if err != nil {
+		writeCredentialError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (a *Handler) DeletePersonalCredential(c *gin.Context) {
+	if !emptyCredentialBody(c) {
+		return
+	}
+	id := c.Param("id")
+	decoded, err := hex.DecodeString(id)
+	if err != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != id {
+		writeCredentialError(c, &iamclient.CredentialError{Status: 400, Code: "InvalidRequest"})
+		return
+	}
+	if err := a.iam.DeletePersonalCredential(c.Request.Context(), middleware.Principal(c).Subject, id); err != nil {
+		writeCredentialError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func emptyCredentialBody(c *gin.Context) bool {
+	c.Header("Cache-Control", "no-store")
+	defer c.Request.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(c.Request.Body, 1))
+	if err != nil || len(data) != 0 {
+		writeCredentialError(c, &iamclient.CredentialError{Status: 400, Code: "InvalidRequest"})
+		return false
+	}
+	return true
+}
+
+func writeCredentialError(c *gin.Context, err error) {
+	var failure *iamclient.CredentialError
+	if !errors.As(err, &failure) {
+		failure = iamclient.CredentialUnavailable()
+	}
+	c.JSON(failure.Status, gin.H{"code": failure.Code, "error": failure.Code})
 }
 
 // RegisterMachine registers a machine account after global Admin admission.
