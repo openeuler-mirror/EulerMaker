@@ -7,6 +7,7 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     readonly translationKey: string,
+    readonly code?: string,
   ) {
     super(translationKey);
   }
@@ -33,7 +34,8 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     const body: unknown = await response.json().catch(() => null);
     const reason = body && typeof body === "object" && "reason" in body ? body.reason : undefined;
     const key = reason === "FullBuildRequired" ? "project.fullBuildRequired" : errorKeyForStatus(response.status);
-    throw new ApiError(response.status, key);
+    const code = body && typeof body === "object" && "code" in body && typeof body.code === "string" ? body.code : undefined;
+    throw new ApiError(response.status, key, code);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
