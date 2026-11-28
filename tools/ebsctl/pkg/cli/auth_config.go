@@ -1,28 +1,25 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
 	"ebsctl/pkg/client"
 	configpkg "ebsctl/pkg/config"
 )
 
 func (a *App) loginCommand() *cobra.Command {
-	var username, contextName, caFile, serverName string
-	var passwordStdin bool
+	var contextName, caFile, serverName string
+	var tokenStdin bool
 	command := &cobra.Command{
-		Use:   "login GATEWAY --username USER",
-		Short: "Log in and save an access token",
+		Use:   "login GATEWAY --token-stdin",
+		Short: "Verify and save a personal access credential from stdin",
 		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 1 || username == "" {
-				return UsageError("usage: ebsctl login GATEWAY --username USER")
+			if len(args) != 1 || !tokenStdin {
+				return UsageError("usage: ebsctl login GATEWAY --token-stdin")
 			}
 			return nil
 		},
@@ -31,40 +28,31 @@ func (a *App) loginCommand() *cobra.Command {
 			if err := configpkg.ValidateGateway(gateway); err != nil {
 				return UsageError("%v", err)
 			}
-			var password []byte
-			var err error
-			if passwordStdin {
-				password, err = configpkg.ReadAll(a.streams.In, 4096)
-				password = []byte(strings.TrimSuffix(strings.TrimSuffix(string(password), "\n"), "\r"))
-			} else {
-				file := stdinFile()
-				if !term.IsTerminal(int(file.Fd())) {
-					return UsageError("stdin is not a terminal; use --password-stdin")
-				}
-				fmt.Fprint(a.streams.ErrOut, "Password: ")
-				password, err = term.ReadPassword(int(file.Fd()))
-				fmt.Fprintln(a.streams.ErrOut)
+			if !strings.HasPrefix(gateway, "https://") || a.insecure {
+				return UsageError("credential login requires HTTPS with certificate verification")
 			}
+			if a.streams.In == nil {
+				return UsageError("token stdin is required")
+			}
+			input, err := configpkg.ReadAll(a.streams.In, 4096)
 			if err != nil {
-				return UsageError("read password: %v", err)
+				return UsageError("cannot read token: expected at most 4096 bytes from stdin")
 			}
-			api, err := client.New(client.Options{Gateway: gateway, CAFile: caFile, ServerName: serverName, InsecureSkipVerify: a.insecure, Timeout: a.timeout, Verbose: a.verbose, Diagnostic: a.streams.ErrOut})
+			token := strings.TrimSuffix(strings.TrimSuffix(string(input), "\n"), "\r")
+			clear(input)
+			if token == "" {
+				return UsageError("token stdin must contain one nonempty credential")
+			}
+			api, err := client.New(client.Options{
+				Gateway: gateway, Token: token, CAFile: caFile, ServerName: serverName,
+				Timeout: a.timeout, Verbose: a.verbose, Diagnostic: a.streams.ErrOut,
+			})
 			if err != nil {
 				return UsageError("%v", err)
 			}
-			payload, _ := json.Marshal(map[string]string{"username": username, "password": string(password)})
-			for index := range password {
-				password[index] = 0
-			}
-			body, _, err := api.Do(cmd.Context(), http.MethodPost, "/auth/login", "application/json", payload, "user", username)
+			identity, err := api.CheckIdentity(cmd.Context())
 			if err != nil {
 				return err
-			}
-			var response struct {
-				Token string `json:"token"`
-			}
-			if err := json.Unmarshal(body, &response); err != nil || response.Token == "" {
-				return fmt.Errorf("Gateway returned an invalid login response")
 			}
 			configuration, err := configpkg.Load(a.configPath)
 			if err != nil {
@@ -74,23 +62,22 @@ func (a *App) loginCommand() *cobra.Command {
 				contextName = configpkg.ContextName(gateway)
 			}
 			current := configuration.Contexts[contextName]
-			current.Gateway, current.User = gateway, username
+			current.Gateway, current.User = gateway, identity.Name
 			current.TLS = configpkg.TLSConfig{CAFile: caFile, ServerName: serverName}
 			configuration.Contexts[contextName] = current
-			configuration.Credentials[contextName] = configpkg.Credential{Token: response.Token}
+			configuration.Credentials[contextName] = configpkg.Credential{Token: token}
 			configuration.CurrentContext = contextName
 			if err := configpkg.Save(a.configPath, configuration); err != nil {
 				return UsageError("save config: %v", err)
 			}
-			fmt.Fprintf(a.streams.Out, "Logged in to %s as %s (context %s)\n", gateway, username, contextName)
+			fmt.Fprintf(a.streams.Out, "Logged in to %s as %s (context %s)\n", gateway, identity.Name, contextName)
 			return nil
 		},
 	}
-	command.Flags().StringVar(&username, "username", "", "username")
 	command.Flags().StringVar(&contextName, "context-name", "", "saved context name")
 	command.Flags().StringVar(&caFile, "certificate-authority", "", "Gateway CA certificate file")
 	command.Flags().StringVar(&serverName, "tls-server-name", "", "Gateway TLS server name")
-	command.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read password from stdin")
+	command.Flags().BoolVar(&tokenStdin, "token-stdin", false, "read a personal access credential (or User JWT) from stdin")
 	return command
 }
 

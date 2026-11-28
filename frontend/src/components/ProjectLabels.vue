@@ -18,8 +18,8 @@
         <button class="primary-button" type="submit" :disabled="saving">{{ t(saving ? 'common.saving' : 'common.save') }}</button>
       </div>
     </form>
-    <dl v-else-if="entries.length" class="label-list">
-      <div v-for="[key, value] in entries" :key="key" class="label-line"><dt>{{ key }}</dt><dd>{{ value || t('common.emptyValue') }}</dd></div>
+    <dl v-else-if="visibleEntries.length" class="label-list">
+      <div v-for="[key, value] in visibleEntries" :key="key" class="label-line"><dt>{{ key }}</dt><dd>{{ value || t('common.emptyValue') }}</dd></div>
     </dl>
     <p v-else class="form-hint">{{ t('project.noLabels') }}</p>
   </section>
@@ -44,6 +44,8 @@ const canEdit = computed(() => {
     metadata?.labels?.[PROJECT_OWNER_LABEL] === name && !!metadata.uid && !!metadata.resourceVersion && !metadata.deletionTimestamp;
 });
 const entries = computed(() => Object.entries(props.project.metadata?.labels || {}).sort(([a], [b]) => a.localeCompare(b)));
+const visibleEntries = computed(() => entries.value.filter(([key]) =>
+  key !== PROJECT_OWNER_LABEL && !key.startsWith("ebs.io/member-user.")));
 const editing = ref(false);
 const saving = ref(false);
 const errorKey = ref("");

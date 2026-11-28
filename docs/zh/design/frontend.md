@@ -339,7 +339,7 @@ Nginx 仅为 `/api-docs-viewer.html` 设置 CSP `frame-ancestors 'self'`，允�
 
 在现有 `/settings` 个人设置页增加“个人访问凭证”区域，供用户创建用于 ebsctl 的 PAT，不放入管理员账号列表，
 也不创建 MachineAccount。密码和 OAuth 登录用户均可使用，不能因关闭本地密码登录而隐藏此区域。
-前端已接入 Gateway；完整接口及权限规则见 [Gateway 个人凭证](ebs-gateway.md#personal-access-credentials)。ebsctl 接入仍待实现。
+前端已接入 Gateway；完整接口及权限规则见 [Gateway 个人凭证](ebs-gateway.md#personal-access-credentials)，命令行用法见 [ebsctl 登录](ebsctl.md#32-登录与-context)。
 
 - 进入设置页时按需调用 `GET /auth/credentials`，仅展示本人有效凭证的名称、创建时间、到期时间和撤销操作。
   显示有效数量 `n/5`；不展示摘要、完整 Token、虚构的最后使用时间或已失效历史记录。
@@ -348,7 +348,7 @@ Nginx 仅为 `/api-docs-viewer.html` 设置 CSP `frame-ancestors 'self'`，允�
   `409 CredentialLimitExceeded`，刷新列表并保留草稿。
 - 明确说明凭证继承用户当前权限，不配置工程范围或细粒度权限；Ops/Admin 创建时额外提示其权限范围。
   自动化服务推荐使用具备最小工程范围和操作权限的 Service 账号。
-- 创建成功弹窗仅展示一次完整 PAT，提供复制按钮及 `ebsctl login <gateway> --token-stdin` 使用提示，并注明需要支持该选项的 CLI 版本（尚待实现）。
+- 创建成功弹窗仅展示一次完整 PAT，提供复制按钮及 `ebsctl login <gateway> --token-stdin` 使用提示。
   明文只保存在该弹窗的内存状态中，关闭、离开页面或退出登录后立即清除；不写入 localStorage/sessionStorage、
   URL、日志或前端错误监控，也不替换当前浏览器 JWT。复制失败时允许用户手动复制，不自动反复写剪贴板。
 - 创建进行中禁止重复提交。超时、网络中断或不确定的错误响应不自动重试，重新读取列表，提示用户撤销未取得明文的

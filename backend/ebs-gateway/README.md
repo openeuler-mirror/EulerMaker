@@ -77,7 +77,7 @@ docker build -f backend/ebs-gateway/Dockerfile -t ebs-gateway:dev .
 `DELETE /auth/credentials/{id}` 允许 User JWT/PAT 列举或撤销本人凭证，明文只在创建成功时返回一次。
 每个用户最多 5 个有效凭证，默认 90 天，可指定 1～90 天；PAT 不允许创建凭证、改密或 PUT/PATCH User。
 该能力要求 Gateway 到 apiserver 使用内部 mTLS 身份；外部客户端使用 HTTPS。启用 OAuth 不影响 PAT。
-前端账号设置已支持凭证管理，ebsctl 尚未接入，完整契约见[个人访问凭证](../../docs/zh/design/ebs-gateway.md#personal-access-credentials)。
+前端账号设置支持凭证管理，ebsctl 通过 `login --token-stdin` 接入，完整契约见[个人访问凭证](../../docs/zh/design/ebs-gateway.md#personal-access-credentials)。
 
 OAuth 按登录和回调请求初始化 Provider，不启动后台预热任务；初始化失败后，后续请求在 30 秒重试间隔结束后可再次尝试，成功后复用缓存。配置修改通过重启加载。
 

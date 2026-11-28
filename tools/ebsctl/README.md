@@ -12,13 +12,19 @@ CGO_ENABLED=0 go build -o ebsctl ./cmd/ebsctl
 ## Quick start
 
 ```bash
-ebsctl login https://ebs.example.com --username alice
+ebsctl login https://ebs.example.com --token-stdin < /secure/path/personal-token
 ebsctl config set-project openeuler-mainline
 ebsctl get projects --mine
 ebsctl get jobs
 ebsctl get job build-kernel -o yaml
 ebsctl get cfg build-target -o yaml
 ```
+
+Create a personal access credential in the Web console's account settings first. Login reads a single credential from stdin (at most 4096 bytes), verifies it using `POST /auth/check`, then saves the verified username and the same token. A valid User JWT is also accepted. Username/password login and literal `--token` arguments are not supported. Do not paste secrets into shell commands or history.
+
+Login requires HTTPS with certificate verification. For private CAs, use `--certificate-authority /path/to/ca.pem`; `--tls-server-name` can select the verified server name. Saved PATs and PATs supplied through `EBS_TOKEN` also require verified HTTPS. The client does not follow redirects or send credentials to a different origin. Failed verification leaves existing configuration unchanged.
+
+`ebsctl logout` removes only the current context's local token. Revoke the credential separately in account settings. There is no token exchange or automatic refresh.
 
 Job creation and deletion are not exposed through Gateway and are rejected locally by ebsctl. Create a Build to dispatch Jobs, and delete the owning Build to trigger Controller-managed cleanup.
 
