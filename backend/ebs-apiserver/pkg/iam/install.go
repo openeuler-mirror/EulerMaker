@@ -46,6 +46,9 @@ func InstallInternalRoutes(server *genericapiserver.GenericAPIServer, credential
 	ws.Route(ws.POST("/users/register").To(h.register))
 	ws.Route(ws.POST("/users/authenticate").To(h.authenticate))
 	ws.Route(ws.PUT("/users/{name}/password").To(h.setPassword))
+	ws.Route(ws.POST("/users/{name}/credentials").To(h.createPersonalCredential))
+	ws.Route(ws.GET("/users/{name}/credentials").To(h.listPersonalCredentials))
+	ws.Route(ws.DELETE("/users/{name}/credentials/{id}").To(h.deletePersonalCredential))
 	ws.Route(ws.POST("/machineaccounts/register").To(h.registerMachine))
 	ws.Route(ws.POST("/machineaccounts/authenticate").To(h.authenticateMachine))
 	server.Handler.GoRestfulContainer.Add(ws)
@@ -189,6 +192,7 @@ func validRegistration(username, password, email string) bool {
 }
 
 func (h *Handler) authenticate(req *restful.Request, resp *restful.Response) {
+	resp.AddHeader("Cache-Control", "no-store")
 	body, err := decodeUserRequest(req.Request, false)
 	if err != nil {
 		writeOAuthError(resp, invalidRequest())
@@ -196,6 +200,10 @@ func (h *Handler) authenticate(req *restful.Request, resp *restful.Response) {
 	}
 	if body.Method == "oauth" {
 		h.authenticateOAuth(req, resp, body)
+		return
+	}
+	if body.Method == "credential" {
+		h.authenticatePersonalCredential(req, resp, body.Token)
 		return
 	}
 	if body.Username == "" || body.Password == "" {
@@ -253,4 +261,17 @@ func decode(req *http.Request, out interface{}) error {
 
 func writeError(resp *restful.Response, status int, message string) {
 	_ = resp.WriteHeaderAndEntity(status, map[string]string{"error": message})
+}
+
+func requireGateway(req *restful.Request, resp *restful.Response) bool {
+	principal, ok := genericapirequest.UserFrom(req.Request.Context())
+	if !ok || principal.GetName() == "system:anonymous" {
+		_ = resp.WriteHeaderAndEntity(http.StatusUnauthorized, map[string]string{"code": "Unauthorized", "error": "internal authentication required"})
+		return false
+	}
+	if principal.GetName() != "spiffe://eulermaker/internal/ebs-gateway" {
+		_ = resp.WriteHeaderAndEntity(http.StatusForbidden, map[string]string{"code": "Forbidden", "error": "Gateway identity required"})
+		return false
+	}
+	return true
 }
